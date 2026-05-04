@@ -1,0 +1,53 @@
+import { invoke } from '@tauri-apps/api/core';
+import type { ImageFile, ImageMetadata } from '../types/image';
+import type { AppSettings } from '../types/settings';
+import { settingsFromRust, settingsToRust } from '../types/settings';
+
+/** Check if a path is a directory */
+export async function isDirectory(path: string): Promise<boolean> {
+  return invoke<boolean>('is_dir', { path });
+}
+
+/** Scan a folder for supported image files, returned in natural sort order */
+export async function scanFolder(folderPath: string): Promise<ImageFile[]> {
+  return invoke<ImageFile[]>('scan_folder', { folderPath });
+}
+
+/** Get metadata (dimensions, format, file size) for an image */
+export async function getImageMetadata(filePath: string): Promise<ImageMetadata> {
+  return invoke<ImageMetadata>('get_image_metadata', { filePath });
+}
+
+/** Read persisted application settings */
+export async function readSettings(): Promise<AppSettings> {
+  const raw = await invoke<Record<string, unknown>>('read_settings');
+  return settingsFromRust(raw);
+}
+
+/** Write application settings to disk */
+export async function writeSettings(settings: AppSettings): Promise<void> {
+  return invoke('write_settings', { settings: settingsToRust(settings) });
+}
+
+import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';
+
+/** Convert a local file path to a Tauri asset protocol URL */
+export async function convertFileSrc(path: string): Promise<string> {
+  return tauriConvertFileSrc(path);
+}
+
+/** Extract the parent directory from a file path */
+export function getParentFolder(filePath: string): string {
+  // Handle both forward and backslash separators
+  const normalized = filePath.replace(/\\/g, '/');
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash === -1) return '.';
+  return filePath.substring(0, lastSlash);
+}
+
+/** Get just the filename from a full path */
+export function getFileName(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const lastSlash = normalized.lastIndexOf('/');
+  return lastSlash === -1 ? filePath : filePath.substring(lastSlash + 1);
+}
