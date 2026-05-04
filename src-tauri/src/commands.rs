@@ -185,7 +185,7 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
-    let file_metadata = fs::metadata(&path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    let file_metadata = fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
     let file_size_bytes = file_metadata.len();
 
     let extension = path
@@ -195,7 +195,7 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
         .unwrap_or_default();
 
     // Try to read image dimensions
-    let (width, height) = match image::image_dimensions(&path) {
+    let (width, height) = match image::image_dimensions(path) {
         Ok((w, h)) => (Some(w), Some(h)),
         Err(_) => (None, None),
     };
