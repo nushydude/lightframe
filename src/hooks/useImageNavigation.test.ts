@@ -47,8 +47,8 @@ describe('useImageNavigation', () => {
 
   it('should open an image and scan the folder', async () => {
     const mockImages = [
-      { path: 'c:/test/img1.jpg', name: 'img1.jpg', size_bytes: 100, modified_at: '1000' },
-      { path: 'c:/test/img2.jpg', name: 'img2.jpg', size_bytes: 200, modified_at: '2000' },
+      { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/img2.jpg', file_name: 'img2.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
     ];
     (getParentFolder as any).mockReturnValue('c:/test');
     (scanFolder as any).mockResolvedValue(mockImages);
@@ -68,8 +68,8 @@ describe('useImageNavigation', () => {
 
   it('should navigate next and previous', async () => {
     const mockImages = [
-      { path: 'c:/test/img1.jpg', name: 'img1.jpg', size_bytes: 100, modified_at: '1000' },
-      { path: 'c:/test/img2.jpg', name: 'img2.jpg', size_bytes: 200, modified_at: '2000' },
+      { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/img2.jpg', file_name: 'img2.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
     ];
 
     act(() => {
@@ -92,8 +92,8 @@ describe('useImageNavigation', () => {
 
   it('should play beep when reaching boundary', async () => {
     const mockImages = [
-      { path: 'c:/test/img1.jpg', name: 'img1.jpg', size_bytes: 100, modified_at: '1000' },
-      { path: 'c:/test/img2.jpg', name: 'img2.jpg', size_bytes: 200, modified_at: '2000' },
+      { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/img2.jpg', file_name: 'img2.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
     ];
 
     act(() => {
@@ -113,8 +113,8 @@ describe('useImageNavigation', () => {
 
   it('should sort images when sort order changes', async () => {
     const mockImages = [
-      { path: 'img1.jpg', name: 'img1.jpg', size_bytes: 100, modified_at: '1000' },
-      { path: 'img2.jpg', name: 'img2.jpg', size_bytes: 200, modified_at: '2000' },
+      { path: 'img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'img2.jpg', file_name: 'img2.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
     ];
 
     act(() => {
@@ -122,7 +122,7 @@ describe('useImageNavigation', () => {
       useViewerStore.getState().setCurrentIndex(0);
     });
 
-    const { result } = renderHook(() => useImageNavigation());
+    renderHook(() => useImageNavigation());
 
     act(() => {
       useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, sortOrder: 'size' } });
@@ -130,7 +130,7 @@ describe('useImageNavigation', () => {
 
     // Wait for useEffect to run
     await waitFor(() => {
-      expect(useViewerStore.getState().images[0].name).toBe('img2.jpg'); // Largest first
+      expect(useViewerStore.getState().images[0].file_name).toBe('img2.jpg'); // Largest first
     });
   });
 });

@@ -20,9 +20,9 @@ describe('viewerStore', () => {
   it('should navigate next correctly', () => {
     useViewerStore.setState({
       images: [
-        { path: '1.jpg', name: '1', size_bytes: 0, modified_at: null },
-        { path: '2.jpg', name: '2', size_bytes: 0, modified_at: null },
-        { path: '3.jpg', name: '3', size_bytes: 0, modified_at: null },
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
       ],
       currentIndex: 0,
     });
