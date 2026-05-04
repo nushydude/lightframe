@@ -4,10 +4,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 /// Supported image extensions for the viewer
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif",
-    "heic", "heif", "avif", "svg",
-];
+const SUPPORTED_EXTENSIONS: &[&str] =
+    &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif", "svg"];
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ImageFile {
@@ -140,23 +138,14 @@ pub async fn scan_folder(folder_path: String) -> Result<Vec<ImageFile>, String> 
             continue;
         }
 
-        let file_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+        let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
 
         let metadata = entry.metadata().ok();
         let size_bytes = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-        let modified_at = metadata
-            .as_ref()
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                let duration = t
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                format!("{}", duration.as_secs())
-            });
+        let modified_at = metadata.as_ref().and_then(|m| m.modified().ok()).map(|t| {
+            let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            format!("{}", duration.as_secs())
+        });
 
         images.push(ImageFile {
             path: file_path.to_string_lossy().to_string(),
@@ -185,14 +174,12 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
-    let file_metadata = fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    let file_metadata =
+        fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
     let file_size_bytes = file_metadata.len();
 
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
+    let extension =
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
 
     // Try to read image dimensions
     let (width, height) = match image::image_dimensions(path) {
@@ -213,20 +200,13 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
         other => other.to_uppercase(),
     };
 
-    Ok(ImageMetadata {
-        width,
-        height,
-        file_size_bytes,
-        format,
-    })
+    Ok(ImageMetadata { width, height, file_size_bytes, format })
 }
 
 /// Get the settings file path
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let config_dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("Failed to get config dir: {}", e))?;
+    let config_dir =
+        app.path().app_config_dir().map_err(|e| format!("Failed to get config dir: {}", e))?;
     fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
     Ok(config_dir.join("settings.json"))
 }
@@ -239,7 +219,8 @@ pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
         return Ok(AppSettings::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))
 }
 
@@ -280,17 +261,16 @@ mod tests {
     async fn test_scan_folder() {
         let dir = tempdir().unwrap();
         let path = dir.path();
-        
+
         File::create(path.join("img1.jpg")).unwrap();
         File::create(path.join("img2.png")).unwrap();
         File::create(path.join("not_an_image.txt")).unwrap();
         fs::create_dir(path.join("subdir")).unwrap();
 
         let results = scan_folder(path.to_string_lossy().to_string()).await.unwrap();
-        
+
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|img| img.file_name == "img1.jpg"));
         assert!(results.iter().any(|img| img.file_name == "img2.png"));
     }
 }
-
