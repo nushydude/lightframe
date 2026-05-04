@@ -4,8 +4,6 @@ import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { scanFolder, getParentFolder } from '../services/tauriCommands';
-import { open } from '@tauri-apps/plugin-dialog';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 // Mock the services and Tauri APIs
 vi.mock('../services/tauriCommands', () => ({

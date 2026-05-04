@@ -11,6 +11,15 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 - **Micro-Animations & Clean UI**: A disappearing Chrome interface, dark/light themes, and buttery smooth transitions.
 - **Zoom & Pan**: Fluid mouse-drag panning and shortcut-driven zoom controls.
 
+## Roadmap (Coming Soon)
+
+- **Image Management**: Delete images safely or copy them to the clipboard.
+- **EXIF Metadata Panel**: View camera settings, location, and date taken.
+- **Quick OS Integrations**: "Open containing folder" and set as default Windows Viewer.
+- **Advanced Formats**: Native HEIC and AVIF support.
+- **Enhanced Viewing**: Contact sheet (thumbnail strip) and multi-monitor support.
+- **Image Manipulation**: Temporary and permanent rotation saving.
+
 ## Installation
 
 You can download the latest pre-compiled installers for Windows, macOS, and Linux from the [Releases page](../../releases).
