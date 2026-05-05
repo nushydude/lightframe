@@ -29,6 +29,16 @@ export async function writeSettings(settings: AppSettings): Promise<void> {
   return invoke('write_settings', { settings: settingsToRust(settings) });
 }
 
+/** Move a file to the OS trash / recycle bin */
+export async function moveToTrash(filePath: string): Promise<void> {
+  return invoke('move_to_trash', { filePath });
+}
+
+/** Copy an image file to the OS clipboard */
+export async function copyImageToClipboard(filePath: string): Promise<void> {
+  return invoke('copy_image_to_clipboard', { filePath });
+}
+
 import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';
 
 /** Convert a local file path to a Tauri asset protocol URL */

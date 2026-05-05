@@ -37,6 +37,7 @@ interface ViewerState {
   navigatePrev: (loop?: boolean) => boolean;
   navigateFirst: () => void;
   navigateLast: () => void;
+  removeImage: (index: number) => void;
 
   setFullscreen: (fs: boolean) => void;
   setZoomMode: (mode: ZoomMode) => void;
@@ -146,6 +147,30 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const { images } = get();
     if (images.length > 0) {
       get().setCurrentIndex(images.length - 1);
+    }
+  },
+
+  removeImage: (index) => {
+    const { images, currentIndex } = get();
+    if (index < 0 || index >= images.length) return;
+    
+    const newImages = [...images];
+    newImages.splice(index, 1);
+    
+    if (newImages.length === 0) {
+      get().reset();
+    } else {
+      set({ images: newImages });
+      // If we deleted the current or a previous image, update the current index
+      if (currentIndex >= newImages.length) {
+        get().setCurrentIndex(newImages.length - 1);
+      } else if (index === currentIndex) {
+        // Just trigger the same index to refresh currentImagePath
+        get().setCurrentIndex(currentIndex);
+      } else if (index < currentIndex) {
+        // Adjust index down since a previous item was removed
+        get().setCurrentIndex(currentIndex - 1);
+      }
     }
   },
 
