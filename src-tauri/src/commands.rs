@@ -305,10 +305,8 @@ pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
             exif::Tag::Make => data.make = Some(value.trim_matches('"').to_string()),
             exif::Tag::Model => data.model = Some(value.trim_matches('"').to_string()),
             exif::Tag::Software => data.software = Some(value.trim_matches('"').to_string()),
-            exif::Tag::DateTimeOriginal | exif::Tag::DateTime => {
-                if data.date_time.is_none() {
-                    data.date_time = Some(value);
-                }
+            exif::Tag::DateTimeOriginal | exif::Tag::DateTime if data.date_time.is_none() => {
+                data.date_time = Some(value);
             }
             exif::Tag::FNumber => {
                 if let exif::Value::Rational(ref r) = f.value {
