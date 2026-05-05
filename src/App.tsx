@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getMatches } from '@tauri-apps/plugin-cli';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -62,13 +63,39 @@ function App() {
     }
   }, [settings.theme]);
 
-  // Listen for file open events from CLI/file association
+  // Handle CLI arguments (default file association) and unhide window
   useEffect(() => {
-    const unlisten = listen<string>('open-file', (event) => {
+    let unlisten: () => void;
+    
+    async function init() {
+      try {
+        const matches = await getMatches();
+        const fileArg = matches.args.file;
+        if (fileArg && typeof fileArg.value === 'string' && fileArg.value.trim() !== '') {
+          // Fire and forget openImage (it synchronously sets the image but asynchronously scans the folder)
+          openImage(fileArg.value);
+          // Wait just long enough for React to commit the first render with the image path
+          setTimeout(() => {
+            getCurrentWindow().show();
+          }, 50);
+        } else {
+          await getCurrentWindow().show();
+        }
+      } catch (err) {
+        console.error('Failed to parse CLI args on startup:', err);
+        await getCurrentWindow().show();
+      }
+    }
+    
+    init();
+
+    // Still listen in case another instance sends a message (future single-instance support)
+    listen<string>('open-file', (event) => {
       openImage(event.payload);
-    });
+    }).then((fn) => { unlisten = fn; });
+
     return () => {
-      unlisten.then((fn) => fn());
+      if (unlisten) unlisten();
     };
   }, [openImage]);
 
