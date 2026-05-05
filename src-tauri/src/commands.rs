@@ -233,6 +233,28 @@ pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(),
     fs::write(&path, content).map_err(|e| format!("Failed to write settings: {}", e))
 }
 
+/// Move a file to the OS trash / recycle bin
+#[tauri::command]
+pub async fn move_to_trash(file_path: String) -> Result<(), String> {
+    trash::delete(&file_path).map_err(|e| format!("Failed to move file to trash: {}", e))
+}
+
+/// Copy an image file to the OS clipboard
+#[tauri::command]
+pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
+    let img = image::open(&file_path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let rgba = img.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    let image_data = arboard::ImageData {
+        width: width as usize,
+        height: height as usize,
+        bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+    };
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
+    clipboard.set_image(image_data).map_err(|e| format!("Failed to copy image to clipboard: {}", e))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

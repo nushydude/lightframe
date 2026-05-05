@@ -14,8 +14,9 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 ## Roadmap (Coming Soon)
 
 - **Image Management**: Delete images safely or copy them to the clipboard.
+- **Set as Default Viewer**: Allow users to easily register LightFrame as their default Windows Image Viewer.
 - **EXIF Metadata Panel**: View camera settings, location, and date taken.
-- **Quick OS Integrations**: "Open containing folder" and set as default Windows Viewer.
+- **Quick OS Integrations**: "Open containing folder" integration.
 - **Advanced Formats**: Native HEIC and AVIF support.
 - **Enhanced Viewing**: Contact sheet (thumbnail strip) and multi-monitor support.
 - **Image Manipulation**: Temporary and permanent rotation saving.

@@ -1,5 +1,7 @@
 import { useViewerStore } from '../state/viewerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { confirm, message } from '@tauri-apps/plugin-dialog';
+import { moveToTrash, copyImageToClipboard } from '../services/tauriCommands';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -34,6 +36,7 @@ export function ViewerChrome({
     setZoomMode,
     zoomIn,
     zoomOut,
+    removeImage,
   } = useViewerStore();
 
   const fileName = currentImagePath
@@ -48,6 +51,34 @@ export function ViewerChrome({
       setFullscreen(newFs);
     } catch (err) {
       console.error('Failed to toggle fullscreen:', err);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!currentImagePath) return;
+    try {
+      const confirmed = await confirm(`Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`, { 
+        title: 'Delete Image', 
+        kind: 'warning' 
+      });
+      if (confirmed) {
+        await moveToTrash(currentImagePath);
+        removeImage(currentIndex);
+      }
+    } catch (err) {
+      console.error('Failed to move to trash:', err);
+      await message(`Failed to delete: ${err}`, { title: 'Error', kind: 'error' });
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!currentImagePath) return;
+    try {
+      await copyImageToClipboard(currentImagePath);
+      await message('Image copied to clipboard!', { title: 'Success', kind: 'info' });
+    } catch (err) {
+      console.error('Failed to copy image:', err);
+      await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
     }
   };
 
@@ -74,6 +105,24 @@ export function ViewerChrome({
           )}
         </div>
         <div className="top-bar-right">
+          <button
+            className="top-bar-btn"
+            onClick={handleCopy}
+            title="Copy to Clipboard"
+            aria-label="Copy to Clipboard"
+            id="btn-copy"
+          >
+            📋
+          </button>
+          <button
+            className="top-bar-btn"
+            onClick={handleDelete}
+            title="Move to Recycle Bin"
+            aria-label="Delete image"
+            id="btn-delete"
+          >
+            🗑
+          </button>
           <button
             className="top-bar-btn"
             onClick={onOpenFile}
