@@ -36,4 +36,5 @@ LightFrame uses GitHub Actions to automatically build and publish Windows instal
    git tag v0.2.0
    git push origin v0.2.0
    ```
-4. **Download**: The GitHub Action will automatically spin up, read the version from `tauri.conf.json`, compile the `.msi` installer, and publish it to the GitHub Releases page.
+4. **Publish the Draft**: The GitHub Action will automatically spin up, read the version from `tauri.conf.json`, and compile the `.msi` and `.exe` installers. **Note:** It will attach these installers to a **Draft** release on GitHub to give you time to write release notes. You must navigate to the GitHub Releases page and click "Publish release" to make the installer visible to the public. 
+   - *Alternatively, publish via CLI:* `gh release edit app-v0.2.0 --draft=false`
