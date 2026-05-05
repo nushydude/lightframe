@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getMatches } from '@tauri-apps/plugin-cli';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
+import { ThumbnailStrip } from './components/ThumbnailStrip';
 import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -177,10 +178,13 @@ function App() {
     toggleSlideshowPause,
   });
 
+  const { showControls } = useViewerStore();
+
   const containerClasses = [
     'app-container',
     isFullscreen ? 'fullscreen' : '',
-    useViewerStore.getState().showControls ? 'controls-visible' : '',
+    showControls ? 'controls-visible' : '',
+    settings.showThumbnails && currentImagePath ? 'with-thumbnails' : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -200,6 +204,7 @@ function App() {
             onStartSlideshow={startSlideshow}
             onTogglePause={toggleSlideshowPause}
           />
+          {settings.showThumbnails && <ThumbnailStrip />}
         </>
       ) : (
         <EmptyState onOpenFile={openFilePicker} onOpenFolder={openFolderPicker} />

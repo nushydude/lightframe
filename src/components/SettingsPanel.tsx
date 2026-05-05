@@ -2,6 +2,7 @@ import React from 'react';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings } from '../types/settings';
+import { openSettings, openUrlExternal } from '../services/tauriCommands';
 
 /** Settings panel overlay */
 export function SettingsPanel() {
@@ -64,6 +65,19 @@ export function SettingsPanel() {
                 <option value="fill">Fill screen</option>
                 <option value="actual">Actual size</option>
               </select>
+            </div>
+
+            <div className="setting-row">
+              <span className="setting-label">Show thumbnail strip</span>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={settings.showThumbnails}
+                  onChange={(e) => handleChange('showThumbnails', e.target.checked)}
+                  id="setting-show-thumbnails"
+                />
+                <span className="toggle-slider" />
+              </label>
             </div>
           </div>
 
@@ -170,6 +184,46 @@ export function SettingsPanel() {
                 />
                 <span className="toggle-slider" />
               </label>
+            </div>
+          </div>
+
+          {/* System */}
+          <div className="settings-group">
+            <div className="settings-group-title">System</div>
+            <div className="setting-row">
+              <span className="setting-label">Default image viewer</span>
+              <button
+                className="setting-button-primary"
+                onClick={openSettings}
+                id="btn-set-default"
+              >
+                Open Default Apps Settings
+              </button>
+            </div>
+            <p className="setting-help">
+              To make LightFrame your default viewer, click the button above, find "LightFrame" in the list, and select it for your image formats.
+            </p>
+          </div>
+
+          {/* Format Support */}
+          <div className="settings-group">
+            <div className="settings-group-title">Format Support</div>
+            <p className="setting-help" style={{ marginBottom: '12px' }}>
+              LightFrame uses your system's codecs to render HEIC and HEIF images. If these images don't load, you may need to install the free extensions from the Microsoft Store:
+            </p>
+            <div className="setting-row">
+              <button
+                className="setting-button-secondary"
+                onClick={() => openUrlExternal('ms-windows-store://pdp/?ProductId=9PMMSR1CGPWG')}
+              >
+                Get HEIF Extensions
+              </button>
+              <button
+                className="setting-button-secondary"
+                onClick={() => openUrlExternal('ms-windows-store://pdp/?ProductId=9NMZLZ57R3T7')}
+              >
+                Get HEVC Extensions
+              </button>
             </div>
           </div>
         </div>

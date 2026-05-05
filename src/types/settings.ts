@@ -8,6 +8,7 @@ export interface AppSettings {
   defaultFitMode: 'fit' | 'fill' | 'actual';
   rememberWindowBounds: boolean;
   sortOrder: 'name' | 'date' | 'size' | 'random';
+  showThumbnails: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultFitMode: 'fit',
   rememberWindowBounds: true,
   sortOrder: 'name',
+  showThumbnails: true,
 };
 
 /** Convert frontend camelCase settings to Rust snake_case format */
@@ -34,6 +36,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     default_fit_mode: settings.defaultFitMode,
     remember_window_bounds: settings.rememberWindowBounds,
     sort_order: settings.sortOrder,
+    show_thumbnails: settings.showThumbnails,
   };
 }
 
@@ -56,5 +59,6 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       (raw.remember_window_bounds as boolean) ?? DEFAULT_SETTINGS.rememberWindowBounds,
     sortOrder:
       (raw.sort_order as AppSettings['sortOrder']) || DEFAULT_SETTINGS.sortOrder,
+    showThumbnails: (raw.show_thumbnails as boolean) ?? DEFAULT_SETTINGS.showThumbnails,
   };
 }

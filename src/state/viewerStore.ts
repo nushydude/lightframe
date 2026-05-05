@@ -10,6 +10,7 @@ interface ViewerState {
   images: ImageFile[];
   currentIndex: number;
   isFolderScanning: boolean;
+  cacheBuster: number;
 
   // Display state
   isFullscreen: boolean;
@@ -57,6 +58,7 @@ interface ViewerState {
   setShowControls: (show: boolean) => void;
   setShowSettings: (show: boolean) => void;
   setError: (msg: string | null) => void;
+  saveRotation: () => Promise<void>;
   reset: () => void;
 }
 
@@ -77,6 +79,7 @@ const initialState = {
   showControls: true,
   showSettings: false,
   errorMessage: null,
+  cacheBuster: 0,
 };
 
 export const useViewerStore = create<ViewerState>((set, get) => ({
@@ -86,6 +89,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     set({
       currentImagePath: path,
       currentIndex: index,
+      cacheBuster: Date.now(),
       zoomMode: 'fit',
       zoomLevel: 1,
       panX: 0,
@@ -100,20 +104,20 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setFolderScanning: (scanning) => set({ isFolderScanning: scanning }),
 
-  setCurrentIndex: (index) => {
+  setCurrentIndex: (index: number) => {
     const { images } = get();
-    if (index >= 0 && index < images.length) {
-      set({
-        currentIndex: index,
-        currentImagePath: images[index].path,
-        zoomMode: 'fit',
-        zoomLevel: 1,
-        panX: 0,
-        panY: 0,
-        rotation: 0,
-        errorMessage: null,
-      });
-    }
+    if (index < 0 || index >= images.length) return;
+    set({
+      currentIndex: index,
+      currentImagePath: images[index].path,
+      cacheBuster: Date.now(),
+      zoomMode: 'fit',
+      zoomLevel: 1,
+      panX: 0,
+      panY: 0,
+      rotation: 0,
+      errorMessage: null,
+    });
   },
 
   navigateNext: (loop = false) => {
@@ -235,6 +239,19 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setShowControls: (show) => set({ showControls: show }),
   setShowSettings: (show) => set({ showSettings: show }),
   setError: (msg) => set({ errorMessage: msg }),
+  
+  saveRotation: async () => {
+    const { currentImagePath, rotation } = get();
+    if (!currentImagePath || rotation === 0) return;
+    
+    try {
+      const { saveRotatedImage } = await import('../services/tauriCommands');
+      await saveRotatedImage(currentImagePath, rotation);
+      set({ rotation: 0, cacheBuster: Date.now() });
+    } catch (err) {
+      set({ errorMessage: `Failed to save rotation: ${err}` });
+    }
+  },
 
   reset: () => set(initialState),
 }));

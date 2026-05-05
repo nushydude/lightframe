@@ -35,6 +35,12 @@ pub struct AppSettings {
     pub default_fit_mode: String,
     pub remember_window_bounds: bool,
     pub sort_order: String,
+    #[serde(default = "default_show_thumbnails")]
+    pub show_thumbnails: bool,
+}
+
+fn default_show_thumbnails() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -49,6 +55,7 @@ impl Default for AppSettings {
             default_fit_mode: "fit".to_string(),
             remember_window_bounds: true,
             sort_order: "name".to_string(),
+            show_thumbnails: default_show_thumbnails(),
         }
     }
 }
@@ -256,6 +263,61 @@ pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
         .set_image(image_data)
         .map_err(|e| format!("Failed to copy image to clipboard: {}", e))?;
     Ok(())
+}
+
+/// Rotate an image file on disk and save it
+#[tauri::command]
+pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Result<(), String> {
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let extension =
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+
+    if !matches!(extension.as_str(), "bmp") {
+        return Err(format!(
+            "Saving rotation is only supported for BMP files because rewriting {} could remove metadata or animation frames",
+            extension.to_uppercase()
+        ));
+    }
+
+    // Load the image
+    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
+
+    // Rotate based on degrees
+    let rotated = match rotation_degrees % 360 {
+        90 | -270 => img.rotate90(),
+        180 | -180 => img.rotate180(),
+        270 | -90 => img.rotate270(),
+        _ => return Ok(()), // No rotation needed
+    };
+
+    rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+
+    Ok(())
+}
+
+/// Generate a small base64 thumbnail for high-performance navigation
+#[tauri::command]
+pub async fn get_thumbnail(file_path: String) -> Result<String, String> {
+    let path = Path::new(&file_path);
+
+    // Load image and downscale to 160px max (standard thumbnail size)
+    // We use thumbnail_exact for speed and specific sizing
+    let img = image::open(path).map_err(|e| format!("Failed to open for thumbnail: {}", e))?;
+    let thumb = img.thumbnail(160, 160);
+
+    // Write to buffer as JPEG for small transfer size
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    thumb
+        .write_to(&mut buffer, image::ImageFormat::Jpeg)
+        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+
+    let base64_str =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buffer.into_inner());
+    Ok(format!("data:image/jpeg;base64,{}", base64_str))
 }
 
 #[derive(serde::Serialize)]

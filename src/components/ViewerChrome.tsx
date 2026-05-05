@@ -39,6 +39,8 @@ export function ViewerChrome({
     zoomIn,
     zoomOut,
     removeImage,
+    rotation,
+    saveRotation,
   } = useViewerStore();
 
   const [showExif, setShowExif] = useState(false);
@@ -53,6 +55,8 @@ export function ViewerChrome({
   const fileName = currentImagePath
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
+  const currentExtension = fileName.split('.').pop()?.toLowerCase() || '';
+  const canSaveRotation = currentExtension === 'bmp';
 
   const toggleFullscreen = async () => {
     try {
@@ -323,6 +327,18 @@ export function ViewerChrome({
         >
           ↻
         </button>
+
+        {rotation !== 0 && canSaveRotation && (
+          <button
+            className="control-btn active"
+            onClick={saveRotation}
+            title="Save rotation to file"
+            aria-label="Save rotation"
+            id="btn-save-rotation"
+          >
+            💾
+          </button>
+        )}
 
         <div className="control-divider" />
 

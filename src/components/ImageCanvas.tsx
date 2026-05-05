@@ -7,7 +7,7 @@ import { useZoomPan } from '../hooks/useZoomPan';
 export function ImageCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const { currentImagePath, zoomMode, currentIndex, rotation } = useViewerStore();
+  const { currentImagePath, zoomMode, currentIndex, rotation, cacheBuster } = useViewerStore();
   const {
     zoomLevel,
     panX,
@@ -38,7 +38,9 @@ export function ImageCanvas() {
       try {
         // Check cache first
         const cached = preloadCache.current.get(currentImagePath);
-        if (cached) {
+        if (cached && !cached.includes(`v=${cacheBuster}`)) {
+          // If cached but buster changed, ignore cache
+        } else if (cached) {
           if (!cancelled) {
             setImageSrc(cached);
             setIsLoading(false);
@@ -48,9 +50,11 @@ export function ImageCanvas() {
 
         setIsLoading(true);
         const url = await convertFileSrc(currentImagePath);
+        const bustedUrl = `${url}${url.includes('?') ? '&' : '?'}v=${cacheBuster}`;
+        
         if (!cancelled) {
-          setImageSrc(url);
-          preloadCache.current.set(currentImagePath, url);
+          setImageSrc(bustedUrl);
+          preloadCache.current.set(currentImagePath, bustedUrl);
         }
       } catch (err) {
         console.error('Failed to load image:', err);
@@ -65,7 +69,7 @@ export function ImageCanvas() {
     return () => { 
       cancelled = true;
     };
-  }, [currentImagePath]);
+  }, [currentImagePath, cacheBuster]);
 
   // Preload adjacent images
   useEffect(() => {
