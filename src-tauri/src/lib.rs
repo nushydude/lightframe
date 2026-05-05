@@ -15,6 +15,7 @@ pub fn run() {
             commands::write_settings,
             commands::move_to_trash,
             commands::copy_image_to_clipboard,
+            commands::get_exif_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

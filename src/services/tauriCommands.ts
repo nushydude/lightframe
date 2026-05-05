@@ -3,6 +3,18 @@ import type { ImageFile, ImageMetadata } from '../types/image';
 import type { AppSettings } from '../types/settings';
 import { settingsFromRust, settingsToRust } from '../types/settings';
 
+export interface ExifData {
+  make?: string;
+  model?: string;
+  software?: string;
+  date_time?: string;
+  f_number?: number;
+  exposure_time?: string;
+  iso?: number;
+  focal_length?: string;
+  raw: Record<string, string>;
+}
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });
@@ -37,6 +49,11 @@ export async function moveToTrash(filePath: string): Promise<void> {
 /** Copy an image file to the OS clipboard */
 export async function copyImageToClipboard(filePath: string): Promise<void> {
   return invoke('copy_image_to_clipboard', { filePath });
+}
+
+/** Extract EXIF metadata from an image file */
+export async function getExifMetadata(filePath: string): Promise<ExifData> {
+  return invoke<ExifData>('get_exif_metadata', { filePath });
 }
 
 import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';

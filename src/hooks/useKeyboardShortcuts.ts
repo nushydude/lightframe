@@ -171,6 +171,13 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         zoomOut();
         return;
       }
+
+      // I: Toggle image info / EXIF panel
+      if (e.key === 'i' || e.key === 'I') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('toggle-exif'));
+        return;
+      }
     },
     [
       handlers,
