@@ -2,6 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { revealInExplorer } from '../services/tauriCommands';
 
 interface KeyboardHandlers {
   openFilePicker: () => void;
@@ -20,6 +21,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     isFullscreen,
     isSlideshowActive,
     showSettings,
+    currentImagePath,
     setFullscreen,
     setShowSettings,
     zoomIn,
@@ -44,6 +46,15 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.ctrlKey && e.key === 'o') {
         e.preventDefault();
         handlers.openFilePicker();
+        return;
+      }
+
+      // Ctrl + Shift + O: Show in folder
+      if (e.ctrlKey && e.shiftKey && e.key === 'O') {
+        e.preventDefault();
+        if (currentImagePath) {
+          revealInExplorer(currentImagePath).catch(err => console.error('Failed to reveal file:', err));
+        }
         return;
       }
 
@@ -178,12 +189,27 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         window.dispatchEvent(new CustomEvent('toggle-exif'));
         return;
       }
+
+      // L: Rotate counter-clockwise
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        useViewerStore.getState().rotateCounterClockwise();
+        return;
+      }
+
+      // R: Rotate clockwise
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        useViewerStore.getState().rotateClockwise();
+        return;
+      }
     },
     [
       handlers,
       isFullscreen,
       isSlideshowActive,
       showSettings,
+      currentImagePath,
       settings.loopSlideshow,
       setFullscreen,
       setShowSettings,

@@ -7,7 +7,7 @@ import { useZoomPan } from '../hooks/useZoomPan';
 export function ImageCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const { currentImagePath, zoomMode, currentIndex } = useViewerStore();
+  const { currentImagePath, zoomMode, currentIndex, rotation } = useViewerStore();
   const {
     zoomLevel,
     panX,
@@ -117,24 +117,34 @@ export function ImageCanvas() {
   // Compute image transform
   const getImageStyle = useCallback((): CSSProperties => {
     const style: CSSProperties = {};
+    const rotationStr = rotation !== 0 ? `rotate(${rotation}deg)` : '';
 
     if (zoomMode === 'actual') {
-      style.transform = `translate(${panX}px, ${panY}px)`;
+      style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
       style.maxWidth = 'none';
       style.maxHeight = 'none';
     } else if (zoomMode === 'custom') {
-      style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+      style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
       style.maxWidth = 'none';
       style.maxHeight = 'none';
     } else if (zoomMode === 'fill') {
       style.width = '100%';
       style.height = '100%';
       style.objectFit = 'cover';
+      style.transform = rotationStr;
+    } else {
+      // 'fit' mode
+      style.transform = rotationStr;
+      
+      // If rotated 90 or 270, we need to make sure it still fits
+      if (rotation === 90 || rotation === 270) {
+        style.maxWidth = '100vh';
+        style.maxHeight = '100vw';
+      }
     }
-    // 'fit' mode uses default CSS
 
     return style;
-  }, [zoomMode, zoomLevel, panX, panY]);
+  }, [zoomMode, zoomLevel, panX, panY, rotation]);
 
   const containerClasses = [
     'image-canvas',
