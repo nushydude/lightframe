@@ -72,13 +72,17 @@ function App() {
         const matches = await getMatches();
         const fileArg = matches.args.file;
         if (fileArg && typeof fileArg.value === 'string' && fileArg.value.trim() !== '') {
-          // Await the image load so the UI is fully populated before revealing the window
-          await openImage(fileArg.value);
+          // Fire and forget openImage (it synchronously sets the image but asynchronously scans the folder)
+          openImage(fileArg.value);
+          // Wait just long enough for React to commit the first render with the image path
+          setTimeout(() => {
+            getCurrentWindow().show();
+          }, 50);
+        } else {
+          await getCurrentWindow().show();
         }
       } catch (err) {
         console.error('Failed to parse CLI args on startup:', err);
-      } finally {
-        // Always show the window at the end, whether an image loaded or we need the empty state
         await getCurrentWindow().show();
       }
     }
