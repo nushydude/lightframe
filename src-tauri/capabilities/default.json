@@ -15,7 +15,7 @@
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-title",
     "updater:default",
-    "process:allow-relaunch",
+    "process:allow-restart",
     {
       "identifier": "fs:scope",
       "allow": [
