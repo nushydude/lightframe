@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, message } from '@tauri-apps/plugin-dialog';
-import { moveToTrash, copyImageToClipboard } from '../services/tauriCommands';
+import { moveToTrash, copyImageToClipboard, revealInExplorer } from '../services/tauriCommands';
 import { ExifPanel } from './ExifPanel';
 
 interface ViewerChromeProps {
@@ -92,6 +92,15 @@ export function ViewerChrome({
       await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
     }
   };
+  
+  const handleReveal = async () => {
+    if (!currentImagePath) return;
+    try {
+      await revealInExplorer(currentImagePath);
+    } catch (err) {
+      console.error('Failed to reveal file:', err);
+    }
+  };
 
   const getZoomDisplay = () => {
     if (zoomMode === 'fit') return 'Fit';
@@ -142,6 +151,15 @@ export function ViewerChrome({
             id="btn-open-file"
           >
             📄
+          </button>
+          <button
+            className="top-bar-btn"
+            onClick={handleReveal}
+            title="Show in folder (Ctrl+Shift+O)"
+            aria-label="Show in folder"
+            id="btn-reveal"
+          >
+            📂
           </button>
           <button
             className="top-bar-btn"
@@ -282,6 +300,28 @@ export function ViewerChrome({
           id="btn-zoom-in"
         >
           +
+        </button>
+
+        <div className="control-divider" />
+
+        <button
+          className="control-btn"
+          onClick={() => useViewerStore.getState().rotateCounterClockwise()}
+          title="Rotate counter-clockwise (L)"
+          aria-label="Rotate counter-clockwise"
+          id="btn-rotate-l"
+        >
+          ↺
+        </button>
+        
+        <button
+          className="control-btn"
+          onClick={() => useViewerStore.getState().rotateClockwise()}
+          title="Rotate clockwise (R)"
+          aria-label="Rotate clockwise"
+          id="btn-rotate-r"
+        >
+          ↻
         </button>
 
         <div className="control-divider" />

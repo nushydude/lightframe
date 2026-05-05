@@ -56,6 +56,13 @@ export async function getExifMetadata(filePath: string): Promise<ExifData> {
   return invoke<ExifData>('get_exif_metadata', { filePath });
 }
 
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
+
+/** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
+export async function revealInExplorer(filePath: string): Promise<void> {
+  return revealItemInDir(filePath);
+}
+
 import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';
 
 /** Convert a local file path to a Tauri asset protocol URL */

@@ -17,6 +17,7 @@ interface ViewerState {
   zoomLevel: number;
   panX: number;
   panY: number;
+  rotation: number; // In degrees
 
   // Slideshow state
   isSlideshowActive: boolean;
@@ -46,6 +47,8 @@ interface ViewerState {
   resetZoom: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  rotateClockwise: () => void;
+  rotateCounterClockwise: () => void;
 
   startSlideshow: () => void;
   stopSlideshow: () => void;
@@ -68,6 +71,7 @@ const initialState = {
   zoomLevel: 1,
   panX: 0,
   panY: 0,
+  rotation: 0,
   isSlideshowActive: false,
   isSlideshowPaused: false,
   showControls: true,
@@ -86,6 +90,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       zoomLevel: 1,
       panX: 0,
       panY: 0,
+      rotation: 0,
       errorMessage: null,
     }),
 
@@ -105,6 +110,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         zoomLevel: 1,
         panX: 0,
         panY: 0,
+        rotation: 0,
         errorMessage: null,
       });
     }
@@ -203,6 +209,16 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const { zoomLevel } = get();
     const newLevel = Math.max(0.1, zoomLevel / 1.25);
     set({ zoomLevel: newLevel, zoomMode: 'custom' });
+  },
+  
+  rotateClockwise: () => {
+    const { rotation } = get();
+    set({ rotation: (rotation + 90) % 360 });
+  },
+  
+  rotateCounterClockwise: () => {
+    const { rotation } = get();
+    set({ rotation: (rotation - 90 + 360) % 360 });
   },
 
   startSlideshow: () =>
