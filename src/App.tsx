@@ -6,6 +6,7 @@ import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
 import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
+import { UpdateNotification } from './components/UpdateNotification';
 import { useImageNavigation } from './hooks/useImageNavigation';
 import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -205,6 +206,7 @@ function App() {
       )}
 
       {showSettings && <SettingsPanel />}
+      <UpdateNotification />
 
       {/* Error Banner */}
       {errorMessage && (
