@@ -7,6 +7,14 @@
     "core:default",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "ms-settings:*" },
+        { "url": "ms-windows-store:*" },
+        { "url": "https://www.microsoft.com/store/*" }
+      ]
+    },
     "dialog:default",
     "fs:default",
     "fs:allow-read-file",

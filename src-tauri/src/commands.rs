@@ -258,6 +258,52 @@ pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Rotate an image file on disk and save it
+#[tauri::command]
+pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Result<(), String> {
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    // Load the image
+    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
+
+    // Rotate based on degrees
+    let rotated = match rotation_degrees % 360 {
+        90 | -270 => img.rotate90(),
+        180 | -180 => img.rotate180(),
+        270 | -90 => img.rotate270(),
+        _ => return Ok(()), // No rotation needed
+    };
+
+    // Save back to the same path
+    // Note: This will re-encode the image. For JPEGs, this is technically lossy, 
+    // but standard for most simple viewers.
+    rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+
+    Ok(())
+}
+
+/// Generate a small base64 thumbnail for high-performance navigation
+#[tauri::command]
+pub async fn get_thumbnail(file_path: String) -> Result<String, String> {
+    let path = Path::new(&file_path);
+    
+    // Load image and downscale to 160px max (standard thumbnail size)
+    // We use thumbnail_exact for speed and specific sizing
+    let img = image::open(path).map_err(|e| format!("Failed to open for thumbnail: {}", e))?;
+    let thumb = img.thumbnail(160, 160);
+    
+    // Write to buffer as JPEG for small transfer size
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)
+        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+        
+    let base64_str = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buffer.into_inner());
+    Ok(format!("data:image/jpeg;base64,{}", base64_str))
+}
+
 #[derive(serde::Serialize)]
 pub struct ExifData {
     pub make: Option<String>,

@@ -25,6 +25,9 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 
 You can download the latest pre-compiled installers for Windows, macOS, and Linux from the [Releases page](../../releases).
 
+> [!NOTE]
+> **Windows Users**: Because LightFrame is new and open-source, you may see a "Windows protected your PC" warning. To install, click **More info** and then **Run anyway**. This warning will disappear as the app gains more users.
+
 ## Development
 
 To run LightFrame locally, you'll need [Node.js](https://nodejs.org/), [pnpm](https://pnpm.io/), and [Rust](https://www.rust-lang.org/tools/install) installed.

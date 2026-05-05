@@ -56,11 +56,32 @@ export async function getExifMetadata(filePath: string): Promise<ExifData> {
   return invoke<ExifData>('get_exif_metadata', { filePath });
 }
 
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
+/** Rotate an image file on disk and save it */
+export async function saveRotatedImage(filePath: string, rotationDegrees: number): Promise<void> {
+  return invoke('save_rotated_image', { filePath, rotationDegrees });
+}
+
+/** Get a small base64 thumbnail for an image */
+export async function getThumbnail(filePath: string): Promise<string> {
+  return invoke<string>('get_thumbnail', { filePath });
+}
+
+import { revealItemInDir, openUrl } from '@tauri-apps/plugin-opener';
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
 export async function revealInExplorer(filePath: string): Promise<void> {
   return revealItemInDir(filePath);
+}
+
+/** Open Windows Default Apps settings */
+export async function openSettings(): Promise<void> {
+  // On Windows, ms-settings:defaultapps is the most reliable way to let users change defaults
+  return openUrl('ms-settings:defaultapps');
+}
+
+/** Open a URL in the system's default browser */
+export async function openUrlExternal(url: string): Promise<void> {
+  return openUrl(url);
 }
 
 import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';
