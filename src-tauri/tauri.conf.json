@@ -47,7 +47,8 @@
         "mimeType": "image/*",
         "name": "Image File"
       }
-    ]
+    ],
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "cli": {
@@ -57,6 +58,12 @@
           "index": 1,
           "takesValue": true
         }
+      ]
+    },
+    "updater": {
+      "pubkey": "CONTENT_FROM_PUBLICKEY_PEM",
+      "endpoints": [
+        "https://github.com/CDAND/lightframe/releases/latest/download/latest.json"
       ]
     }
   }
