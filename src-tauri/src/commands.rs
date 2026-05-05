@@ -258,6 +258,80 @@ pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct ExifData {
+    pub make: Option<String>,
+    pub model: Option<String>,
+    pub software: Option<String>,
+    pub date_time: Option<String>,
+    pub f_number: Option<f64>,
+    pub exposure_time: Option<String>,
+    pub iso: Option<u32>,
+    pub focal_length: Option<String>,
+    pub raw: std::collections::HashMap<String, String>,
+}
+
+/// Extract EXIF metadata from an image
+#[tauri::command]
+pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
+    let file =
+        std::fs::File::open(&file_path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut reader = std::io::BufReader::new(file);
+    let exifreader = exif::Reader::new();
+    let exif = match exifreader.read_from_container(&mut reader) {
+        Ok(e) => e,
+        Err(_) => return Err("No EXIF data found".to_string()),
+    };
+
+    let mut raw = std::collections::HashMap::new();
+    let mut data = ExifData {
+        make: None,
+        model: None,
+        software: None,
+        date_time: None,
+        f_number: None,
+        exposure_time: None,
+        iso: None,
+        focal_length: None,
+        raw: std::collections::HashMap::new(),
+    };
+
+    for f in exif.fields() {
+        let tag = format!("{}", f.tag);
+        let value = f.display_value().with_unit(&exif).to_string();
+        raw.insert(tag.clone(), value.clone());
+
+        match f.tag {
+            exif::Tag::Make => data.make = Some(value.trim_matches('"').to_string()),
+            exif::Tag::Model => data.model = Some(value.trim_matches('"').to_string()),
+            exif::Tag::Software => data.software = Some(value.trim_matches('"').to_string()),
+            exif::Tag::DateTimeOriginal | exif::Tag::DateTime if data.date_time.is_none() => {
+                data.date_time = Some(value);
+            }
+            exif::Tag::FNumber => {
+                if let exif::Value::Rational(ref r) = f.value {
+                    if !r.is_empty() {
+                        data.f_number = Some(r[0].to_f64());
+                    }
+                }
+            }
+            exif::Tag::ExposureTime => data.exposure_time = Some(value),
+            exif::Tag::PhotographicSensitivity | exif::Tag::ISOSpeed => {
+                if let exif::Value::Short(ref s) = f.value {
+                    if !s.is_empty() {
+                        data.iso = Some(s[0] as u32);
+                    }
+                }
+            }
+            exif::Tag::FocalLength => data.focal_length = Some(value),
+            _ => {}
+        }
+    }
+
+    data.raw = raw;
+    Ok(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

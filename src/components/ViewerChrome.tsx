@@ -1,7 +1,9 @@
+import { useState, useEffect } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, message } from '@tauri-apps/plugin-dialog';
 import { moveToTrash, copyImageToClipboard } from '../services/tauriCommands';
+import { ExifPanel } from './ExifPanel';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -38,6 +40,15 @@ export function ViewerChrome({
     zoomOut,
     removeImage,
   } = useViewerStore();
+
+  const [showExif, setShowExif] = useState(false);
+
+  // Listen for keyboard shortcut 'I'
+  useEffect(() => {
+    const handler = () => setShowExif((v) => !v);
+    window.addEventListener('toggle-exif', handler);
+    return () => window.removeEventListener('toggle-exif', handler);
+  }, []);
 
   const fileName = currentImagePath
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
@@ -151,6 +162,15 @@ export function ViewerChrome({
             {isFullscreen ? '⊡' : '⊞'}
           </button>
           <button
+            className={`top-bar-btn ${showExif ? 'active' : ''}`}
+            onClick={() => setShowExif((v) => !v)}
+            title="Image info (I)"
+            aria-label="Toggle image info panel"
+            id="btn-info"
+          >
+            ℹ
+          </button>
+          <button
             className="top-bar-btn"
             onClick={() => setShowSettings(true)}
             title="Settings (Ctrl+,)"
@@ -161,6 +181,11 @@ export function ViewerChrome({
           </button>
         </div>
       </div>
+
+      {/* EXIF Info Panel */}
+      {showExif && currentImagePath && (
+        <ExifPanel filePath={currentImagePath} onClose={() => setShowExif(false)} />
+      )}
 
       {/* Navigation Arrows */}
       {images.length > 1 && (
