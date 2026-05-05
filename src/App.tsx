@@ -178,10 +178,12 @@ function App() {
     toggleSlideshowPause,
   });
 
+  const { showControls } = useViewerStore();
+
   const containerClasses = [
     'app-container',
     isFullscreen ? 'fullscreen' : '',
-    useViewerStore.getState().showControls ? 'controls-visible' : '',
+    showControls ? 'controls-visible' : '',
     settings.showThumbnails && currentImagePath ? 'with-thumbnails' : '',
   ].filter(Boolean).join(' ');
 

@@ -55,6 +55,8 @@ export function ViewerChrome({
   const fileName = currentImagePath
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
+  const currentExtension = fileName.split('.').pop()?.toLowerCase() || '';
+  const canSaveRotation = currentExtension === 'bmp';
 
   const toggleFullscreen = async () => {
     try {
@@ -326,7 +328,7 @@ export function ViewerChrome({
           ↻
         </button>
 
-        {rotation !== 0 && (
+        {rotation !== 0 && canSaveRotation && (
           <button
             className="control-btn active"
             onClick={saveRotation}

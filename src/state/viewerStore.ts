@@ -104,21 +104,20 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setFolderScanning: (scanning) => set({ isFolderScanning: scanning }),
 
-  setCurrentIndex: (index) => {
+  setCurrentIndex: (index: number) => {
     const { images } = get();
-    if (index >= 0 && index < images.length) {
-      set({
-        currentIndex: index,
-        currentImagePath: images[index].path,
-        cacheBuster: Date.now(),
-        zoomMode: 'fit',
-        zoomLevel: 1,
-        panX: 0,
-        panY: 0,
-        rotation: 0,
-        errorMessage: null,
-      });
-    }
+    if (index < 0 || index >= images.length) return;
+    set({
+      currentIndex: index,
+      currentImagePath: images[index].path,
+      cacheBuster: Date.now(),
+      zoomMode: 'fit',
+      zoomLevel: 1,
+      panX: 0,
+      panY: 0,
+      rotation: 0,
+      errorMessage: null,
+    });
   },
 
   navigateNext: (loop = false) => {

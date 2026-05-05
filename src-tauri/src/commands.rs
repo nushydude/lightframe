@@ -35,6 +35,12 @@ pub struct AppSettings {
     pub default_fit_mode: String,
     pub remember_window_bounds: bool,
     pub sort_order: String,
+    #[serde(default = "default_show_thumbnails")]
+    pub show_thumbnails: bool,
+}
+
+fn default_show_thumbnails() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -49,6 +55,7 @@ impl Default for AppSettings {
             default_fit_mode: "fit".to_string(),
             remember_window_bounds: true,
             sort_order: "name".to_string(),
+            show_thumbnails: default_show_thumbnails(),
         }
     }
 }
@@ -266,6 +273,16 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
+    let extension =
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+
+    if !matches!(extension.as_str(), "bmp") {
+        return Err(format!(
+            "Saving rotation is only supported for BMP files because rewriting {} could remove metadata or animation frames",
+            extension.to_uppercase()
+        ));
+    }
+
     // Load the image
     let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
 
@@ -277,9 +294,6 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
         _ => return Ok(()), // No rotation needed
     };
 
-    // Save back to the same path
-    // Note: This will re-encode the image. For JPEGs, this is technically lossy, 
-    // but standard for most simple viewers.
     rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
 
     Ok(())
@@ -289,18 +303,20 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
 #[tauri::command]
 pub async fn get_thumbnail(file_path: String) -> Result<String, String> {
     let path = Path::new(&file_path);
-    
+
     // Load image and downscale to 160px max (standard thumbnail size)
     // We use thumbnail_exact for speed and specific sizing
     let img = image::open(path).map_err(|e| format!("Failed to open for thumbnail: {}", e))?;
     let thumb = img.thumbnail(160, 160);
-    
+
     // Write to buffer as JPEG for small transfer size
     let mut buffer = std::io::Cursor::new(Vec::new());
-    thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)
+    thumb
+        .write_to(&mut buffer, image::ImageFormat::Jpeg)
         .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
-        
-    let base64_str = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buffer.into_inner());
+
+    let base64_str =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buffer.into_inner());
     Ok(format!("data:image/jpeg;base64,{}", base64_str))
 }
 
