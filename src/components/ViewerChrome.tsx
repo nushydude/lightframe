@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, message } from '@tauri-apps/plugin-dialog';
-import { moveToTrash, copyImageToClipboard, revealInExplorer } from '../services/tauriCommands';
+import { moveToTrash, copyImageToClipboard, revealInExplorer, openSecondaryWindow } from '../services/tauriCommands';
 import { ExifPanel } from './ExifPanel';
 
 interface ViewerChromeProps {
@@ -41,6 +41,8 @@ export function ViewerChrome({
     removeImage,
     rotation,
     saveRotation,
+    viewMode,
+    setViewMode,
   } = useViewerStore();
 
   const [showExif, setShowExif] = useState(false);
@@ -49,14 +51,17 @@ export function ViewerChrome({
   useEffect(() => {
     const handler = () => setShowExif((v) => !v);
     window.addEventListener('toggle-exif', handler);
-    return () => window.removeEventListener('toggle-exif', handler);
+
+    return () => {
+      window.removeEventListener('toggle-exif', handler);
+    };
   }, []);
 
   const fileName = currentImagePath
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
   const currentExtension = fileName.split('.').pop()?.toLowerCase() || '';
-  const canSaveRotation = currentExtension === 'bmp';
+  const canSaveRotation = ['bmp', 'jpg', 'jpeg', 'png', 'webp'].includes(currentExtension);
 
   const toggleFullscreen = async () => {
     try {
@@ -182,6 +187,24 @@ export function ViewerChrome({
             id="btn-fullscreen"
           >
             {isFullscreen ? '⊡' : '⊞'}
+          </button>
+          <button
+            className={`top-bar-btn ${viewMode === 'grid' ? 'active' : ''}`}
+            onClick={() => setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer')}
+            title="Grid view (G)"
+            aria-label="Toggle grid view"
+            id="btn-grid"
+          >
+            ⊞
+          </button>
+          <button
+            className="top-bar-btn"
+            onClick={openSecondaryWindow}
+            title="Open Projector Mode (Secondary Window)"
+            aria-label="Open projector mode"
+            id="btn-projector"
+          >
+            📽
           </button>
           <button
             className={`top-bar-btn ${showExif ? 'active' : ''}`}
