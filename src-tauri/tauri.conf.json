@@ -27,7 +27,9 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost http://tauri.localhost https://tauri.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "**"
+        ]
       }
     }
   },
@@ -43,7 +45,16 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"],
+        "ext": [
+          "jpg",
+          "jpeg",
+          "png",
+          "webp",
+          "gif",
+          "bmp",
+          "tiff",
+          "tif"
+        ],
         "mimeType": "image/*",
         "name": "Image File"
       }
@@ -61,7 +72,7 @@
       ]
     },
     "updater": {
-      "pubkey": "CONTENT_FROM_PUBLICKEY_PEM",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUwMUEwMzRDQjEyQkE3ODMKUldTRHB5dXhUQU1hVUNobGRKcWcrQStRd05teWtBSFVVRVdDRXhQWkpuVkthV1l2d3YwUFZMUWIK",
       "endpoints": [
         "https://github.com/CDAND/lightframe/releases/latest/download/latest.json"
       ]
