@@ -250,8 +250,11 @@ pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
         height: height as usize,
         bytes: std::borrow::Cow::Owned(rgba.into_raw()),
     };
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
-    clipboard.set_image(image_data).map_err(|e| format!("Failed to copy image to clipboard: {}", e))?;
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
+    clipboard
+        .set_image(image_data)
+        .map_err(|e| format!("Failed to copy image to clipboard: {}", e))?;
     Ok(())
 }
 
