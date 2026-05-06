@@ -1,3 +1,5 @@
+use little_exif::exif_tag::ExifTag;
+use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -276,9 +278,9 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
 
-    if !matches!(extension.as_str(), "bmp") {
+    if !matches!(extension.as_str(), "bmp" | "jpg" | "jpeg" | "png" | "webp") {
         return Err(format!(
-            "Saving rotation is only supported for BMP files because rewriting {} could remove metadata or animation frames",
+            "Saving rotation is not supported for {} files",
             extension.to_uppercase()
         ));
     }
@@ -294,7 +296,26 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
         _ => return Ok(()), // No rotation needed
     };
 
-    rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+    // For JPEG, PNG, and WebP, try to preserve metadata
+    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        // Read metadata before overwriting
+        let metadata = Metadata::new_from_path(path).ok();
+
+        // Save rotated pixels
+        rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+
+        // Write metadata back if it was successfully read
+        if let Some(mut m) = metadata {
+            // We physically rotated the pixels, so we must reset orientation tag to 1 (Normal)
+            // otherwise software will rotate it a second time.
+            m.set_tag(ExifTag::Orientation(vec![1]));
+            m.write_to_file(path)
+                .map_err(|e| format!("Failed to write image metadata after rotation: {}", e))?;
+        }
+    } else {
+        // For formats like BMP (no metadata), just save
+        rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+    }
 
     Ok(())
 }

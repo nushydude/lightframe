@@ -28,6 +28,7 @@ interface ViewerState {
   showControls: boolean;
   showSettings: boolean;
   errorMessage: string | null;
+  viewMode: 'viewer' | 'grid';
 
   // Actions
   setCurrentImage: (path: string, index: number) => void;
@@ -59,6 +60,7 @@ interface ViewerState {
   setShowSettings: (show: boolean) => void;
   setError: (msg: string | null) => void;
   saveRotation: () => Promise<void>;
+  setViewMode: (mode: 'viewer' | 'grid') => void;
   reset: () => void;
 }
 
@@ -80,6 +82,7 @@ const initialState = {
   showSettings: false,
   errorMessage: null,
   cacheBuster: 0,
+  viewMode: 'viewer' as const,
 };
 
 export const useViewerStore = create<ViewerState>((set, get) => ({
@@ -252,6 +255,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       set({ errorMessage: `Failed to save rotation: ${err}` });
     }
   },
+
+  setViewMode: (mode) => set({ viewMode: mode }),
 
   reset: () => set(initialState),
 }));

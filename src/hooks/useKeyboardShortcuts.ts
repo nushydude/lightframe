@@ -22,8 +22,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     isSlideshowActive,
     showSettings,
     currentImagePath,
+    viewMode,
     setFullscreen,
     setShowSettings,
+    setViewMode,
     zoomIn,
     zoomOut,
     resetZoom,
@@ -113,6 +115,17 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         if (!isSlideshowActive) {
           handlers.startSlideshow();
         }
+        return;
+      }
+
+      // G: Toggle grid view
+      if ((e.key === 'g' || e.key === 'G') && currentImagePath) {
+        e.preventDefault();
+        setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer');
+        return;
+      }
+
+      if (viewMode === 'grid') {
         return;
       }
 
@@ -210,9 +223,11 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       isSlideshowActive,
       showSettings,
       currentImagePath,
+      viewMode,
       settings.loopSlideshow,
       setFullscreen,
       setShowSettings,
+      setViewMode,
       zoomMode,
       setZoomMode,
       zoomIn,

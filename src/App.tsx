@@ -5,6 +5,7 @@ import { getMatches } from '@tauri-apps/plugin-cli';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
 import { ThumbnailStrip } from './components/ThumbnailStrip';
+import { ContactSheet } from './components/ContactSheet';
 import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -14,7 +15,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 
-import { isDirectory } from './services/tauriCommands';
+import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
 
 function App() {
   const {
@@ -22,6 +23,7 @@ function App() {
     showSettings,
     errorMessage,
     isFullscreen,
+    viewMode,
     setError,
     setShowControls,
     setFullscreen,
@@ -179,12 +181,58 @@ function App() {
   });
 
   const { showControls } = useViewerStore();
+  const [isSecondary, setIsSecondary] = useState(false);
+
+  // Detect if this is a secondary window
+  useEffect(() => {
+    const label = getCurrentWindow().label;
+    setIsSecondary(label === 'secondary');
+  }, []);
+
+  // Listen for sync events if we are a secondary window
+  useEffect(() => {
+    if (!isSecondary) return;
+
+    const unlisten = listen<{ imagePath: string | null }>('state-sync', (event) => {
+      if (event.payload.imagePath) {
+        openImage(event.payload.imagePath);
+      }
+    });
+    requestStateSync().catch((err) => console.error('Failed to request projector state:', err));
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [isSecondary, openImage]);
+
+  // Respond to newly opened secondary windows with the current image
+  useEffect(() => {
+    if (isSecondary) return;
+
+    const unlisten = listen('state-sync-request', () => {
+      if (currentImagePath) {
+        emitStateSync(currentImagePath).catch((err) => console.error('Failed to sync projector state:', err));
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [currentImagePath, isSecondary]);
+
+  // Emit sync events when the image changes in the main window
+  useEffect(() => {
+    if (isSecondary || !currentImagePath) return;
+    emitStateSync(currentImagePath).catch((err) => console.error('Failed to sync projector state:', err));
+  }, [currentImagePath, isSecondary]);
 
   const containerClasses = [
     'app-container',
     isFullscreen ? 'fullscreen' : '',
     showControls ? 'controls-visible' : '',
-    settings.showThumbnails && currentImagePath ? 'with-thumbnails' : '',
+    settings.showThumbnails && currentImagePath && viewMode === 'viewer' && !isSecondary ? 'with-thumbnails' : '',
+    viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
+    isSecondary ? 'secondary-window' : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -195,16 +243,24 @@ function App() {
     >
       {currentImagePath ? (
         <>
-          <ImageCanvas />
-          <ViewerChrome
-            onOpenFile={openFilePicker}
-            onOpenFolder={openFolderPicker}
-            onNext={() => goNext()}
-            onPrev={() => goPrev()}
-            onStartSlideshow={startSlideshow}
-            onTogglePause={toggleSlideshowPause}
-          />
-          {settings.showThumbnails && <ThumbnailStrip />}
+          {isSecondary ? (
+            <ImageCanvas />
+          ) : viewMode === 'viewer' ? (
+            <>
+              <ImageCanvas />
+              <ViewerChrome
+                onOpenFile={openFilePicker}
+                onOpenFolder={openFolderPicker}
+                onNext={() => goNext()}
+                onPrev={() => goPrev()}
+                onStartSlideshow={startSlideshow}
+                onTogglePause={toggleSlideshowPause}
+              />
+              {settings.showThumbnails && <ThumbnailStrip />}
+            </>
+          ) : (
+            <ContactSheet />
+          )}
         </>
       ) : (
         <EmptyState onOpenFile={openFilePicker} onOpenFolder={openFolderPicker} />

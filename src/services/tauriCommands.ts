@@ -67,10 +67,46 @@ export async function getThumbnail(filePath: string): Promise<string> {
 }
 
 import { revealItemInDir, openUrl } from '@tauri-apps/plugin-opener';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { emit } from '@tauri-apps/api/event';
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
 export async function revealInExplorer(filePath: string): Promise<void> {
   return revealItemInDir(filePath);
+}
+
+/** Open a secondary window for Presentation Mode */
+export async function openSecondaryWindow(): Promise<void> {
+  const label = 'secondary';
+  try {
+    const webview = new WebviewWindow(label, {
+      title: 'LightFrame — Projector',
+      width: 800,
+      height: 600,
+      visible: true,
+      center: true,
+    });
+
+    webview.once('tauri://created', () => {
+      console.log('Secondary window created');
+    });
+
+    webview.once('tauri://error', (e) => {
+      console.error('Failed to create secondary window:', e);
+    });
+  } catch (err) {
+    console.error('Secondary window error:', err);
+  }
+}
+
+/** Emit a sync event to update secondary windows */
+export async function emitStateSync(imagePath: string | null): Promise<void> {
+  return emit('state-sync', { imagePath });
+}
+
+/** Ask the main window to send its current state */
+export async function requestStateSync(): Promise<void> {
+  return emit('state-sync-request');
 }
 
 /** Open Windows Default Apps settings */
