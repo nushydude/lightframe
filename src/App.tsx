@@ -27,6 +27,7 @@ function App() {
     setError,
     setShowControls,
     setFullscreen,
+    reset,
   } = useViewerStore();
 
   const { settings, loadSettings } = useSettingsStore();
@@ -168,6 +169,19 @@ function App() {
     }
   }, [currentImagePath, isFullscreen, setFullscreen]);
 
+  const handleGoHome = useCallback(async () => {
+    try {
+      if (isFullscreen) {
+        await getCurrentWindow().setFullscreen(false);
+        setFullscreen(false);
+      }
+    } catch (err) {
+      console.error('Failed to exit fullscreen before returning home:', err);
+    } finally {
+      reset();
+    }
+  }, [isFullscreen, reset, setFullscreen]);
+
   // Register keyboard shortcuts
   useKeyboardShortcuts({
     openFilePicker,
@@ -251,6 +265,7 @@ function App() {
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}
+                onGoHome={handleGoHome}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={startSlideshow}
@@ -259,7 +274,7 @@ function App() {
               {settings.showThumbnails && <ThumbnailStrip />}
             </>
           ) : (
-            <ContactSheet />
+            <ContactSheet onGoHome={handleGoHome} />
           )}
         </>
       ) : (

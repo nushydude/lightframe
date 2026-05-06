@@ -113,7 +113,8 @@ html, body, #root {
 
 .thumbnail-strip {
   display: flex;
-  padding: 0 calc(50% - 35px); /* Allows centering first/last items */
+  min-width: 100%;
+  padding: 0 12px;
   gap: 8px;
   height: 70px;
 }
@@ -203,6 +204,12 @@ html, body, #root {
   gap: 12px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .contact-sheet-header h2 {
   font-size: 18px;
   font-weight: 600;
@@ -225,6 +232,26 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   transition: all var(--transition-fast);
+}
+
+.header-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.header-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
 }
 
 .close-btn:hover {
@@ -465,7 +492,21 @@ html, body, #root {
 .top-bar-right {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.top-bar-group {
+  display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.top-bar-separator {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
   flex-shrink: 0;
 }
 
@@ -498,18 +539,47 @@ html, body, #root {
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   width: 36px;
+  min-width: 36px;
   height: 36px;
+  padding: 0 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   cursor: pointer;
   transition: background var(--transition-fast), border-color var(--transition-fast);
   font-size: 16px;
+  flex-shrink: 0;
 }
 
 .top-bar-btn:hover {
   background: var(--bg-control-hover);
   border-color: var(--border-hover);
+}
+
+.top-bar-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.top-bar-btn-label {
+  display: none;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (min-width: 1280px) {
+  .top-bar-btn--labeled {
+    width: auto;
+    justify-content: flex-start;
+  }
+
+  .top-bar-btn-label {
+    display: inline;
+  }
 }
 
 /* ===== Bottom Controls ===== */
@@ -1332,4 +1402,3 @@ html, body, #root {
   background: var(--accent);
   transition: width 0.3s ease;
 }
-

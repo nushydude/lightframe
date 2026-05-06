@@ -11,6 +11,7 @@ interface ViewerState {
   currentIndex: number;
   isFolderScanning: boolean;
   cacheBuster: number;
+  loadGeneration: number;
 
   // Display state
   isFullscreen: boolean;
@@ -61,6 +62,7 @@ interface ViewerState {
   setError: (msg: string | null) => void;
   saveRotation: () => Promise<void>;
   setViewMode: (mode: 'viewer' | 'grid') => void;
+  beginLoadGeneration: () => number;
   reset: () => void;
 }
 
@@ -82,6 +84,7 @@ const initialState = {
   showSettings: false,
   errorMessage: null,
   cacheBuster: 0,
+  loadGeneration: 0,
   viewMode: 'viewer' as const,
 };
 
@@ -258,5 +261,15 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setViewMode: (mode) => set({ viewMode: mode }),
 
-  reset: () => set(initialState),
+  beginLoadGeneration: () => {
+    const nextGeneration = get().loadGeneration + 1;
+    set({ loadGeneration: nextGeneration });
+    return nextGeneration;
+  },
+
+  reset: () =>
+    set((state) => ({
+      ...initialState,
+      loadGeneration: state.loadGeneration + 1,
+    })),
 }));

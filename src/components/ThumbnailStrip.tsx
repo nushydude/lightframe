@@ -12,6 +12,7 @@ const MAX_THUMBNAIL_REQUESTS = 4;
  */
 export function ThumbnailStrip() {
   const { images, currentIndex, setCurrentIndex } = useViewerStore();
+  const containerRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLDivElement>(null);
   const cacheRef = useRef<Record<string, string>>({});
   const queuedRef = useRef<string[]>([]);
@@ -21,12 +22,17 @@ export function ThumbnailStrip() {
   const batchRafRef = useRef<number | null>(null);
 
   const [, setThumbnailVersion] = useState(0);
+  const [containerWidth, setContainerWidth] = useState(0);
 
   const startIndex = Math.max(0, currentIndex - THUMBNAIL_WINDOW_RADIUS);
   const endIndex = Math.min(images.length, currentIndex + THUMBNAIL_WINDOW_RADIUS + 1);
   const visibleImages = useMemo(
     () => images.slice(startIndex, endIndex),
     [endIndex, images, startIndex]
+  );
+  const visibleImageKey = useMemo(
+    () => visibleImages.map((image) => image.path).join('|'),
+    [visibleImages]
   );
 
   const flushThumbnailBatch = useCallback(() => {
@@ -102,14 +108,32 @@ export function ThumbnailStrip() {
   }, [queueThumbnail, visibleImages]);
 
   useEffect(() => {
-    if (activeItemRef.current) {
-      activeItemRef.current.scrollIntoView({
-        behavior: 'auto',
-        block: 'nearest',
-        inline: 'center',
-      });
-    }
-  }, [currentIndex]);
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateWidth = () => setContainerWidth(container.clientWidth);
+    updateWidth();
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const activeItem = activeItemRef.current;
+    if (!container || !activeItem) return;
+
+    const targetLeft = activeItem.offsetLeft - (container.clientWidth - activeItem.offsetWidth) / 2;
+    const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    const nextScrollLeft = Math.max(0, Math.min(targetLeft, maxScrollLeft));
+
+    container.scrollTo({
+      left: nextScrollLeft,
+      behavior: 'auto',
+    });
+  }, [containerWidth, currentIndex, endIndex, startIndex, visibleImageKey]);
 
   useEffect(() => {
     return () => {
@@ -122,7 +146,7 @@ export function ThumbnailStrip() {
   if (images.length <= 1) return null;
 
   return (
-    <div className="thumbnail-strip-container">
+    <div className="thumbnail-strip-container" ref={containerRef}>
       <div className="thumbnail-strip">
         {startIndex > 0 && (
           <div

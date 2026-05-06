@@ -1,58 +1,62 @@
 import { useCallback, useEffect } from 'react';
-import { useViewerStore } from '../state/viewerStore';
-import { scanFolder, getParentFolder } from '../services/tauriCommands';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { ImageFile } from '../types/image';
+import { scanFolder, getParentFolder } from '../services/tauriCommands';
+import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
+import type { ImageFile } from '../types/image';
 
 /** Play a subtle 'boop' sound when hitting the edge of a folder */
 function playBoundaryBeep() {
   try {
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
+    const AudioContextCtor =
+      window.AudioContext ||
+      (window as Window & { webkitAudioContext?: typeof window.AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    const ctx = new AudioContextCtor();
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
-    
+
     osc.type = 'sine';
     osc.frequency.setValueAtTime(300, ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.15);
-    
+
     gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
     gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-    
+
     osc.connect(gainNode);
     gainNode.connect(ctx.destination);
-    
+
     osc.start();
     osc.stop(ctx.currentTime + 0.15);
-  } catch (e) {
+  } catch {
     // Ignore audio errors
   }
 }
 
 function sortImages(images: ImageFile[], sortOrder: string): ImageFile[] {
   const sorted = [...images];
+
   switch (sortOrder) {
     case 'date':
       sorted.sort((a, b) => {
         const da = a.modified_at ? parseInt(a.modified_at, 10) : 0;
         const db = b.modified_at ? parseInt(b.modified_at, 10) : 0;
-        return db - da; // Newest first
+        return db - da;
       });
       break;
     case 'size':
-      sorted.sort((a, b) => b.size_bytes - a.size_bytes); // Largest first
+      sorted.sort((a, b) => b.size_bytes - a.size_bytes);
       break;
     case 'random':
       sorted.sort(() => Math.random() - 0.5);
       break;
     case 'name':
     default:
-      // By default they are naturally sorted from Rust
       break;
   }
+
   return sorted;
 }
 
@@ -74,17 +78,25 @@ export function useImageNavigation() {
     navigateFirst,
     navigateLast,
     setError,
+    beginLoadGeneration,
   } = useViewerStore();
 
-  const settings = useSettingsStore((s) => s.settings);
+  const settings = useSettingsStore((state) => state.settings);
+
+  const isCurrentGeneration = useCallback(
+    (generation: number) => useViewerStore.getState().loadGeneration === generation,
+    []
+  );
 
   useEffect(() => {
     if (images.length === 0 || settings.sortOrder === 'name') return;
+
     const sorted = sortImages([...images], settings.sortOrder);
     const currentPath = images[currentIndex]?.path;
     setImages(sorted);
+
     if (currentPath) {
-      const newIndex = sorted.findIndex(img => img.path === currentPath);
+      const newIndex = sorted.findIndex((image) => image.path === currentPath);
       if (newIndex >= 0 && newIndex !== currentIndex) {
         setCurrentIndex(newIndex);
       }
@@ -94,46 +106,66 @@ export function useImageNavigation() {
   /** Open and display a specific image file */
   const openImage = useCallback(
     async (filePath: string) => {
+      const loadGeneration = beginLoadGeneration();
+
       try {
-        // Immediately show the image
         const parentFolder = getParentFolder(filePath);
         setFolderPath(parentFolder);
         setCurrentImage(filePath, 0);
 
-        // Update window title
         const appWindow = getCurrentWindow();
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-        await appWindow.setTitle(`${fileName} — LightFrame`);
+        await appWindow.setTitle(`${fileName} - LightFrame`);
+        if (!isCurrentGeneration(loadGeneration)) return;
 
-        // Scan folder in background
         setFolderScanning(true);
+
         try {
           let folderImages = await scanFolder(parentFolder);
-          
+          if (!isCurrentGeneration(loadGeneration)) return;
+
           if (settings.sortOrder !== 'name') {
             folderImages = sortImages(folderImages, settings.sortOrder);
           }
-          
+          if (!isCurrentGeneration(loadGeneration)) return;
+
           setImages(folderImages);
 
-          // Find the current image in the list
           const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
-          const idx = folderImages.findIndex(
-            (img) => img.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
+          const index = folderImages.findIndex(
+            (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
           );
-          if (idx >= 0) {
-            setCurrentIndex(idx);
+
+          if (index >= 0 && isCurrentGeneration(loadGeneration)) {
+            setCurrentIndex(index);
           }
         } catch (err) {
           console.error('Failed to scan folder:', err);
+          if (isCurrentGeneration(loadGeneration)) {
+            setError(`Failed to scan folder: ${err}`);
+          }
         } finally {
-          setFolderScanning(false);
+          if (isCurrentGeneration(loadGeneration)) {
+            setFolderScanning(false);
+          }
         }
       } catch (err) {
-        setError(`Could not open image: ${err}`);
+        if (isCurrentGeneration(loadGeneration)) {
+          setError(`Could not open image: ${err}`);
+        }
       }
     },
-    [setCurrentImage, setImages, setFolderPath, setFolderScanning, setCurrentIndex, setError]
+    [
+      beginLoadGeneration,
+      isCurrentGeneration,
+      setCurrentImage,
+      setCurrentIndex,
+      setError,
+      setFolderPath,
+      setFolderScanning,
+      setImages,
+      settings.sortOrder,
+    ]
   );
 
   /** Open a file picker dialog */
@@ -148,6 +180,7 @@ export function useImageNavigation() {
           },
         ],
       });
+
       if (selected) {
         await openImage(selected as string);
       }
@@ -157,30 +190,56 @@ export function useImageNavigation() {
   }, [openImage]);
 
   /** Open a specific folder */
-  const openFolder = useCallback(async (folderPath: string) => {
-    try {
-      setFolderPath(folderPath);
-      setFolderScanning(true);
-      let folderImages = await scanFolder(folderPath);
-      if (settings.sortOrder !== 'name') {
-        folderImages = sortImages(folderImages, settings.sortOrder);
+  const openFolder = useCallback(
+    async (nextFolderPath: string) => {
+      const loadGeneration = beginLoadGeneration();
+
+      try {
+        setFolderPath(nextFolderPath);
+        setFolderScanning(true);
+
+        let folderImages = await scanFolder(nextFolderPath);
+        if (!isCurrentGeneration(loadGeneration)) return;
+
+        if (settings.sortOrder !== 'name') {
+          folderImages = sortImages(folderImages, settings.sortOrder);
+        }
+        if (!isCurrentGeneration(loadGeneration)) return;
+
+        setImages(folderImages);
+
+        if (folderImages.length > 0) {
+          setCurrentIndex(0);
+
+          const appWindow = getCurrentWindow();
+          const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
+          await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
+          if (!isCurrentGeneration(loadGeneration)) return;
+        } else if (isCurrentGeneration(loadGeneration)) {
+          setError('No supported images found in the selected folder');
+        }
+      } catch (err) {
+        console.error('Failed to open folder:', err);
+        if (isCurrentGeneration(loadGeneration)) {
+          setError(`Failed to open folder: ${err}`);
+        }
+      } finally {
+        if (isCurrentGeneration(loadGeneration)) {
+          setFolderScanning(false);
+        }
       }
-      setImages(folderImages);
-      if (folderImages.length > 0) {
-        setCurrentIndex(0);
-        const appWindow = getCurrentWindow();
-        const folderName = folderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-        await appWindow.setTitle(`[Folder] ${folderName} — LightFrame`);
-      } else {
-        setError('No supported images found in the selected folder');
-      }
-    } catch (err) {
-      console.error('Failed to open folder:', err);
-      setError(`Failed to open folder: ${err}`);
-    } finally {
-      setFolderScanning(false);
-    }
-  }, [setImages, setFolderPath, setFolderScanning, setCurrentIndex, setError, settings.sortOrder]);
+    },
+    [
+      beginLoadGeneration,
+      isCurrentGeneration,
+      setCurrentIndex,
+      setError,
+      setFolderPath,
+      setFolderScanning,
+      setImages,
+      settings.sortOrder,
+    ]
+  );
 
   /** Open a folder picker dialog */
   const openFolderPicker = useCallback(async () => {
@@ -189,6 +248,7 @@ export function useImageNavigation() {
         directory: true,
         multiple: false,
       });
+
       if (selected) {
         await openFolder(selected as string);
       }
@@ -206,7 +266,7 @@ export function useImageNavigation() {
       }
       return success;
     },
-    [navigateNext, images.length]
+    [images.length, navigateNext]
   );
 
   /** Navigate to the previous image */
@@ -218,7 +278,7 @@ export function useImageNavigation() {
       }
       return success;
     },
-    [navigatePrev, images.length]
+    [images.length, navigatePrev]
   );
 
   return {

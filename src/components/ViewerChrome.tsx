@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
-import { useViewerStore } from '../state/viewerStore';
+import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, message } from '@tauri-apps/plugin-dialog';
-import { moveToTrash, copyImageToClipboard, revealInExplorer, openSecondaryWindow } from '../services/tauriCommands';
 import { ExifPanel } from './ExifPanel';
+import { moveToTrash, copyImageToClipboard, revealInExplorer, openSecondaryWindow } from '../services/tauriCommands';
+import { useViewerStore } from '../state/viewerStore';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
+  onGoHome: () => void;
   onNext: () => void;
   onPrev: () => void;
   onStartSlideshow: () => void;
@@ -18,6 +19,7 @@ interface ViewerChromeProps {
 export function ViewerChrome({
   onOpenFile,
   onOpenFolder,
+  onGoHome,
   onNext,
   onPrev,
   onStartSlideshow,
@@ -47,9 +49,8 @@ export function ViewerChrome({
 
   const [showExif, setShowExif] = useState(false);
 
-  // Listen for keyboard shortcut 'I'
   useEffect(() => {
-    const handler = () => setShowExif((v) => !v);
+    const handler = () => setShowExif((value) => !value);
     window.addEventListener('toggle-exif', handler);
 
     return () => {
@@ -66,9 +67,9 @@ export function ViewerChrome({
   const toggleFullscreen = async () => {
     try {
       const appWindow = getCurrentWindow();
-      const newFs = !isFullscreen;
-      await appWindow.setFullscreen(newFs);
-      setFullscreen(newFs);
+      const nextFullscreen = !isFullscreen;
+      await appWindow.setFullscreen(nextFullscreen);
+      setFullscreen(nextFullscreen);
     } catch (err) {
       console.error('Failed to toggle fullscreen:', err);
     }
@@ -77,10 +78,13 @@ export function ViewerChrome({
   const handleDelete = async () => {
     if (!currentImagePath) return;
     try {
-      const confirmed = await confirm(`Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`, { 
-        title: 'Delete Image', 
-        kind: 'warning' 
-      });
+      const confirmed = await confirm(
+        `Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`,
+        {
+          title: 'Delete Image',
+          kind: 'warning',
+        }
+      );
       if (confirmed) {
         await moveToTrash(currentImagePath);
         removeImage(currentIndex);
@@ -101,7 +105,7 @@ export function ViewerChrome({
       await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
     }
   };
-  
+
   const handleReveal = async () => {
     if (!currentImagePath) return;
     try {
@@ -122,10 +126,11 @@ export function ViewerChrome({
 
   return (
     <>
-      {/* Top Bar */}
       <div className="top-bar" role="toolbar" aria-label="Image information">
         <div className="top-bar-left">
-          <span className="file-name" title={fileName}>{fileName}</span>
+          <span className="file-name" title={fileName}>
+            {fileName}
+          </span>
           {images.length > 0 && (
             <span className="image-counter">
               {currentIndex + 1} / {images.length}
@@ -133,135 +138,154 @@ export function ViewerChrome({
             </span>
           )}
         </div>
+
         <div className="top-bar-right">
-          <button
-            className="top-bar-btn"
-            onClick={handleCopy}
-            title="Copy to Clipboard"
-            aria-label="Copy to Clipboard"
-            id="btn-copy"
-          >
-            📋
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={handleDelete}
-            title="Move to Recycle Bin"
-            aria-label="Delete image"
-            id="btn-delete"
-          >
-            🗑
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={onOpenFile}
-            title="Open file (Ctrl+O)"
-            aria-label="Open file"
-            id="btn-open-file"
-          >
-            📄
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={handleReveal}
-            title="Show in folder (Ctrl+Shift+O)"
-            aria-label="Show in folder"
-            id="btn-reveal"
-          >
-            📂
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={onOpenFolder}
-            title="Open folder"
-            aria-label="Open folder"
-            id="btn-open-folder"
-          >
-            📁
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={toggleFullscreen}
-            title="Toggle fullscreen (F11)"
-            aria-label="Toggle fullscreen"
-            id="btn-fullscreen"
-          >
-            {isFullscreen ? '⊡' : '⊞'}
-          </button>
-          <button
-            className={`top-bar-btn ${viewMode === 'grid' ? 'active' : ''}`}
-            onClick={() => setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer')}
-            title="Grid view (G)"
-            aria-label="Toggle grid view"
-            id="btn-grid"
-          >
-            ⊞
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={openSecondaryWindow}
-            title="Open Projector Mode (Secondary Window)"
-            aria-label="Open projector mode"
-            id="btn-projector"
-          >
-            📽
-          </button>
-          <button
-            className={`top-bar-btn ${showExif ? 'active' : ''}`}
-            onClick={() => setShowExif((v) => !v)}
-            title="Image info (I)"
-            aria-label="Toggle image info panel"
-            id="btn-info"
-          >
-            ℹ
-          </button>
-          <button
-            className="top-bar-btn"
-            onClick={() => setShowSettings(true)}
-            title="Settings (Ctrl+,)"
-            aria-label="Open settings"
-            id="btn-settings"
-          >
-            ⚙
-          </button>
+          <div className="top-bar-group" aria-label="Navigation actions">
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={onGoHome}
+              title="Back to landing page"
+              aria-label="Back to landing page"
+              id="btn-home"
+            >
+              <span className="top-bar-btn-icon">⌂</span>
+              <span className="top-bar-btn-label">Home</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={onOpenFile}
+              title="Open file (Ctrl+O)"
+              aria-label="Open file"
+              id="btn-open-file"
+            >
+              <span className="top-bar-btn-icon">📄</span>
+              <span className="top-bar-btn-label">Open</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={onOpenFolder}
+              title="Open folder"
+              aria-label="Open folder"
+              id="btn-open-folder"
+            >
+              <span className="top-bar-btn-icon">📁</span>
+              <span className="top-bar-btn-label">Folder</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={handleReveal}
+              title="Show in folder (Ctrl+Shift+O)"
+              aria-label="Show in folder"
+              id="btn-reveal"
+            >
+              <span className="top-bar-btn-icon">📂</span>
+              <span className="top-bar-btn-label">Reveal</span>
+            </button>
+          </div>
+
+          <div className="top-bar-separator" aria-hidden="true" />
+
+          <div className="top-bar-group" aria-label="File actions">
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={handleCopy}
+              title="Copy to Clipboard"
+              aria-label="Copy to Clipboard"
+              id="btn-copy"
+            >
+              <span className="top-bar-btn-icon">📋</span>
+              <span className="top-bar-btn-label">Copy</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={handleDelete}
+              title="Move to Recycle Bin"
+              aria-label="Delete image"
+              id="btn-delete"
+            >
+              <span className="top-bar-btn-icon">🗑</span>
+              <span className="top-bar-btn-label">Delete</span>
+            </button>
+          </div>
+
+          <div className="top-bar-separator" aria-hidden="true" />
+
+          <div className="top-bar-group" aria-label="View actions">
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={toggleFullscreen}
+              title="Toggle fullscreen (F11)"
+              aria-label="Toggle fullscreen"
+              id="btn-fullscreen"
+            >
+              <span className="top-bar-btn-icon">{isFullscreen ? '🗗' : '⛶'}</span>
+              <span className="top-bar-btn-label">Full</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled ${viewMode === 'grid' ? 'active' : ''}`}
+              onClick={() => setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer')}
+              title="Grid view (G)"
+              aria-label="Toggle grid view"
+              id="btn-grid"
+            >
+              <span className="top-bar-btn-icon">▦</span>
+              <span className="top-bar-btn-label">Grid</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={openSecondaryWindow}
+              title="Open Projector Mode (Secondary Window)"
+              aria-label="Open projector mode"
+              id="btn-projector"
+            >
+              <span className="top-bar-btn-icon">📽</span>
+              <span className="top-bar-btn-label">Projector</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled ${showExif ? 'active' : ''}`}
+              onClick={() => setShowExif((value) => !value)}
+              title="Image info (I)"
+              aria-label="Toggle image info panel"
+              id="btn-info"
+            >
+              <span className="top-bar-btn-icon">ℹ</span>
+              <span className="top-bar-btn-label">Info</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={() => setShowSettings(true)}
+              title="Settings (Ctrl+,)"
+              aria-label="Open settings"
+              id="btn-settings"
+            >
+              <span className="top-bar-btn-icon">⚙</span>
+              <span className="top-bar-btn-label">Settings</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* EXIF Info Panel */}
       {showExif && currentImagePath && (
         <ExifPanel filePath={currentImagePath} onClose={() => setShowExif(false)} />
       )}
 
-      {/* Navigation Arrows */}
       {images.length > 1 && (
         <>
-          <button
-            className="nav-arrow left"
-            onClick={onPrev}
-            aria-label="Previous image"
-            id="btn-prev"
-          >
+          <button className="nav-arrow left" onClick={onPrev} aria-label="Previous image" id="btn-prev">
             ‹
           </button>
-          <button
-            className="nav-arrow right"
-            onClick={onNext}
-            aria-label="Next image"
-            id="btn-next"
-          >
+          <button className="nav-arrow right" onClick={onNext} aria-label="Next image" id="btn-next">
             ›
           </button>
         </>
       )}
 
-      {/* Slideshow Indicator */}
       {isSlideshowActive && (
         <div className={`slideshow-indicator ${isSlideshowPaused ? 'paused' : ''}`}>
           {isSlideshowPaused ? '⏸ Paused' : '▶ Slideshow'}
         </div>
       )}
 
-      {/* Bottom Controls */}
       <div className="bottom-controls" role="toolbar" aria-label="Image controls">
         <button
           className="control-btn"
@@ -340,7 +364,7 @@ export function ViewerChrome({
         >
           ↺
         </button>
-        
+
         <button
           className="control-btn"
           onClick={() => useViewerStore.getState().rotateClockwise()}
