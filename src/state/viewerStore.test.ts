@@ -64,11 +64,14 @@ describe('viewerStore', () => {
       isFullscreen: true,
     });
 
+    const previousGeneration = useViewerStore.getState().loadGeneration;
+
     useViewerStore.getState().reset();
     
     const state = useViewerStore.getState();
     expect(state.currentImagePath).toBeNull();
     expect(state.currentIndex).toBe(-1);
     expect(state.isFullscreen).toBe(false);
+    expect(state.loadGeneration).toBe(previousGeneration + 1);
   });
 });

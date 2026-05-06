@@ -10,11 +10,15 @@ const GRID_OVERSCAN_ROWS = 3;
 const MAX_CACHED_THUMBNAILS = 900;
 const MAX_THUMBNAIL_REQUESTS = 6;
 
+interface ContactSheetProps {
+  onGoHome: () => void;
+}
+
 /**
  * A full-screen grid view of all images in the current folder.
  * Windowed rendering keeps large folders responsive.
  */
-export function ContactSheet() {
+export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const { images, currentIndex, setCurrentIndex, setViewMode } = useViewerStore();
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -228,13 +232,25 @@ export function ContactSheet() {
           <h2>Contact Sheet</h2>
           <span className="image-count">{images.length} images</span>
         </div>
-        <button
-          className="close-btn"
-          onClick={() => setViewMode('viewer')}
-          title="Close Grid View (Esc)"
-        >
-          x
-        </button>
+        <div className="header-actions">
+          <button
+            className="header-btn"
+            onClick={onGoHome}
+            title="Back to landing page"
+            aria-label="Back to landing page"
+            id="btn-home-grid"
+          >
+            Home
+          </button>
+          <button
+            className="close-btn"
+            onClick={() => setViewMode('viewer')}
+            title="Close Grid View (Esc)"
+            aria-label="Close grid view"
+          >
+            x
+          </button>
+        </div>
       </div>
       <div className="contact-sheet-content" ref={contentRef} onScroll={handleScroll}>
         <div

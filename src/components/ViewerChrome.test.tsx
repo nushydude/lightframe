@@ -8,6 +8,7 @@ describe('ViewerChrome', () => {
   const defaultProps = {
     onOpenFile: vi.fn(),
     onOpenFolder: vi.fn(),
+    onGoHome: vi.fn(),
     onNext: vi.fn(),
     onPrev: vi.fn(),
     onStartSlideshow: vi.fn(),
@@ -55,6 +56,16 @@ describe('ViewerChrome', () => {
     fireEvent.click(nextBtn);
 
     expect(defaultProps.onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call onGoHome when the home button is clicked', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Back to landing page'));
+
+    expect(defaultProps.onGoHome).toHaveBeenCalledTimes(1);
   });
 
   it('should toggle fullscreen when button is clicked', async () => {
