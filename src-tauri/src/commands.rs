@@ -1,9 +1,9 @@
+use little_exif::exif_tag::ExifTag;
+use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
-use little_exif::metadata::Metadata;
-use little_exif::exif_tag::ExifTag;
 
 /// Supported image extensions for the viewer
 const SUPPORTED_EXTENSIONS: &[&str] =
