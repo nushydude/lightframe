@@ -261,7 +261,7 @@ function App() {
             <ImageCanvas />
           ) : viewMode === 'viewer' ? (
             <>
-              <ImageCanvas />
+              <ImageCanvas onWheelNext={goNext} onWheelPrev={goPrev} />
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}

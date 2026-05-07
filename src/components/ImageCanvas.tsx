@@ -3,8 +3,13 @@ import { useViewerStore } from '../state/viewerStore';
 import { convertFileSrc } from '../services/tauriCommands';
 import { useZoomPan } from '../hooks/useZoomPan';
 
+type ImageCanvasProps = {
+  onWheelNext?: () => void;
+  onWheelPrev?: () => void;
+};
+
 /** Main image display canvas with zoom/pan support */
-export function ImageCanvas() {
+export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const { currentImagePath, zoomMode, currentIndex, rotation, cacheBuster } = useViewerStore();
@@ -16,7 +21,7 @@ export function ImageCanvas() {
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
-  } = useZoomPan(containerRef);
+  } = useZoomPan(containerRef, { onWheelNext, onWheelPrev });
 
   const [imageSrc, setImageSrc] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
