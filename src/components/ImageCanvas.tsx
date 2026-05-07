@@ -1,6 +1,10 @@
 import { useRef, useState, useCallback, useEffect, type CSSProperties } from 'react';
 import { useViewerStore } from '../state/viewerStore';
-import { convertFileSrc } from '../services/tauriCommands';
+import {
+  getImageAssetUrl,
+  preloadImageAsset,
+  trimImageAssetCache,
+} from '../services/imageAssetCache';
 import { useZoomPan } from '../hooks/useZoomPan';
 
 type ImageCanvasProps = {
@@ -26,8 +30,6 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [imageSrc, setImageSrc] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // Preload cache
-  const preloadCache = useRef<Map<string, string>>(new Map());
   const images = useViewerStore((s) => s.images);
 
   // Convert file path to asset URL and display
@@ -41,25 +43,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
     const loadImage = async () => {
       try {
-        // Check cache first
-        const cached = preloadCache.current.get(currentImagePath);
-        if (cached && !cached.includes(`v=${cacheBuster}`)) {
-          // If cached but buster changed, ignore cache
-        } else if (cached) {
-          if (!cancelled) {
-            setImageSrc(cached);
-            setIsLoading(false);
-          }
-          return;
-        }
-
         setIsLoading(true);
-        const url = await convertFileSrc(currentImagePath);
-        const bustedUrl = `${url}${url.includes('?') ? '&' : '?'}v=${cacheBuster}`;
+        const url = await getImageAssetUrl(currentImagePath);
         
         if (!cancelled) {
-          setImageSrc(bustedUrl);
-          preloadCache.current.set(currentImagePath, bustedUrl);
+          setImageSrc(url);
         }
       } catch (err) {
         console.error('Failed to load image:', err);
@@ -83,37 +71,21 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     // Longer debounce for preload so we don't spam requests when scanning quickly
     const timer = window.setTimeout(() => {
       const preloadIndices = [currentIndex - 1, currentIndex + 1, currentIndex + 2];
-      preloadIndices.forEach(async (idx) => {
+      preloadIndices.forEach((idx) => {
         if (idx >= 0 && idx < images.length) {
           const path = images[idx].path;
-          if (!preloadCache.current.has(path)) {
-            try {
-              const url = await convertFileSrc(path);
-              preloadCache.current.set(path, url);
-              // Preload into browser cache
-              const img = new Image();
-              img.src = url;
-            } catch {
-              // Ignore preload failures
-            }
-          }
+          preloadImageAsset(path).catch(() => {
+            // Ignore preload failures
+          });
         }
       });
 
-      // Clean up distant cache entries (keep window of 10)
-      if (preloadCache.current.size > 20) {
-        const keys = Array.from(preloadCache.current.keys());
-        const currentPaths = new Set(
-          images
-            .slice(Math.max(0, currentIndex - 5), currentIndex + 6)
-            .map((img) => img.path)
-        );
-        keys.forEach((key) => {
-          if (!currentPaths.has(key)) {
-            preloadCache.current.delete(key);
-          }
-        });
-      }
+      const currentPaths = new Set(
+        images
+          .slice(Math.max(0, currentIndex - 5), currentIndex + 6)
+          .map((img) => img.path)
+      );
+      trimImageAssetCache(currentPaths, 20);
     }, 150);
 
     return () => window.clearTimeout(timer);
