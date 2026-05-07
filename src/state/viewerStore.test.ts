@@ -1,9 +1,23 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useViewerStore } from './viewerStore';
-import { describe, it, expect, beforeEach } from 'vitest';
+
+const { saveRotatedImageMock, invalidateImageAssetMock } = vi.hoisted(() => ({
+  saveRotatedImageMock: vi.fn(),
+  invalidateImageAssetMock: vi.fn(),
+}));
+
+vi.mock('../services/tauriCommands', () => ({
+  saveRotatedImage: saveRotatedImageMock,
+}));
+
+vi.mock('../services/imageAssetCache', () => ({
+  invalidateImageAsset: invalidateImageAssetMock,
+}));
 
 describe('viewerStore', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
+    vi.clearAllMocks();
   });
 
   it('should set current image and reset display state', () => {
@@ -41,6 +55,24 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().currentIndex).toBe(0);
   });
 
+  it('should not change cacheBuster during normal navigation', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+      cacheBuster: 123,
+    });
+
+    useViewerStore.getState().navigateNext(false);
+    expect(useViewerStore.getState().cacheBuster).toBe(123);
+
+    useViewerStore.getState().navigatePrev(false);
+    expect(useViewerStore.getState().cacheBuster).toBe(123);
+  });
+
   it('should zoom in and out with clamping', () => {
     useViewerStore.getState().setZoomLevel(1);
     
@@ -73,5 +105,27 @@ describe('viewerStore', () => {
     expect(state.currentIndex).toBe(-1);
     expect(state.isFullscreen).toBe(false);
     expect(state.loadGeneration).toBe(previousGeneration + 1);
+  });
+
+  it('should invalidate current image and update cacheBuster after saveRotation', async () => {
+    saveRotatedImageMock.mockResolvedValue(undefined);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(5678);
+
+    useViewerStore.setState({
+      currentImagePath: 'test.jpg',
+      rotation: 90,
+      cacheBuster: 10,
+    });
+
+    try {
+      await useViewerStore.getState().saveRotation();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(saveRotatedImageMock).toHaveBeenCalledWith('test.jpg', 90);
+    expect(invalidateImageAssetMock).toHaveBeenCalledWith('test.jpg');
+    expect(useViewerStore.getState().rotation).toBe(0);
+    expect(useViewerStore.getState().cacheBuster).toBe(5678);
   });
 });
