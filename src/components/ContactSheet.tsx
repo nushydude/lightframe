@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { useViewerStore } from '../state/viewerStore';
-import { getThumbnail } from '../services/tauriCommands';
+import {
+  evictThumbnailsExcept,
+  getCachedThumbnail,
+  preloadThumbnails,
+} from '../services/thumbnailCache';
 
 const GRID_ITEM_SIZE = 140;
 const GRID_GAP = 20;
 const GRID_LABEL_HEIGHT = 20;
 const GRID_ROW_HEIGHT = GRID_ITEM_SIZE + GRID_GAP + GRID_LABEL_HEIGHT;
 const GRID_OVERSCAN_ROWS = 3;
-const MAX_CACHED_THUMBNAILS = 900;
-const MAX_THUMBNAIL_REQUESTS = 6;
+const MAX_CACHED_THUMBNAILS = 1000;
 
 interface ContactSheetProps {
   onGoHome: () => void;
@@ -27,12 +30,9 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
-  const cacheRef = useRef<Record<string, string>>({});
-  const queuedRef = useRef<string[]>([]);
-  const queuedPathsRef = useRef<Set<string>>(new Set());
-  const inFlightRef = useRef<Set<string>>(new Set());
-  const batchRef = useRef<Record<string, string>>({});
   const batchRafRef = useRef<number | null>(null);
+  const hasPendingThumbnailUpdatesRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const totalRows = Math.ceil(images.length / columns);
   const activeRow = currentIndex >= 0 ? Math.floor(currentIndex / columns) : 0;
@@ -56,9 +56,8 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
   const flushThumbnailBatch = useCallback(() => {
     batchRafRef.current = null;
-    const batch = batchRef.current;
-    batchRef.current = {};
-    if (Object.keys(batch).length === 0) return;
+    if (!hasPendingThumbnailUpdatesRef.current) return;
+    hasPendingThumbnailUpdatesRef.current = false;
 
     setThumbnailVersion((version) => version + 1);
   }, []);
@@ -68,47 +67,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     batchRafRef.current = window.requestAnimationFrame(flushThumbnailBatch);
   }, [flushThumbnailBatch]);
 
-  const pumpThumbnailQueue = useCallback(() => {
-    while (
-      inFlightRef.current.size < MAX_THUMBNAIL_REQUESTS &&
-      queuedRef.current.length > 0
-    ) {
-      const path = queuedRef.current.shift();
-      if (!path) return;
-
-      queuedPathsRef.current.delete(path);
-      if (cacheRef.current[path] || inFlightRef.current.has(path)) continue;
-
-      inFlightRef.current.add(path);
-      getThumbnail(path)
-        .then((base64) => {
-          cacheRef.current[path] = base64;
-          batchRef.current[path] = base64;
-          scheduleThumbnailFlush();
-        })
-        .catch(() => {
-          // Ignore thumbnail failures to keep scrolling quiet and responsive.
-        })
-        .finally(() => {
-          inFlightRef.current.delete(path);
-          pumpThumbnailQueue();
-        });
-    }
+  const handleThumbnailLoaded = useCallback(() => {
+    if (!isMountedRef.current) return;
+    hasPendingThumbnailUpdatesRef.current = true;
+    scheduleThumbnailFlush();
   }, [scheduleThumbnailFlush]);
-
-  const queueThumbnail = useCallback((path: string) => {
-    if (
-      cacheRef.current[path] ||
-      queuedPathsRef.current.has(path) ||
-      inFlightRef.current.has(path)
-    ) {
-      return;
-    }
-
-    queuedPathsRef.current.add(path);
-    queuedRef.current.push(path);
-    pumpThumbnailQueue();
-  }, [pumpThumbnailQueue]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -145,30 +108,32 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
   }, [activeRow, currentIndex]);
 
   useEffect(() => {
-    visibleImages.forEach((image) => queueThumbnail(image.path));
+    const visiblePaths = visibleImages.map((image) => image.path);
+    preloadThumbnails(visiblePaths, {
+      concurrency: 6,
+      onLoaded: handleThumbnailLoaded,
+      isActive: () => isMountedRef.current,
+    });
 
-    if (Object.keys(cacheRef.current).length > MAX_CACHED_THUMBNAILS) {
-      const keepStart = Math.max(0, visibleRange.startIndex - columns * GRID_OVERSCAN_ROWS * 4);
-      const keepEnd = Math.min(
-        images.length,
-        visibleRange.endIndex + columns * GRID_OVERSCAN_ROWS * 4
-      );
-      const keepPaths = new Set(images.slice(keepStart, keepEnd).map((image) => image.path));
-      const nextCache: Record<string, string> = {};
-
-      keepPaths.forEach((path) => {
-        if (cacheRef.current[path]) {
-          nextCache[path] = cacheRef.current[path];
-        }
-      });
-
-      cacheRef.current = nextCache;
-      setThumbnailVersion((version) => version + 1);
-    }
-  }, [columns, images, queueThumbnail, visibleImages, visibleRange.endIndex, visibleRange.startIndex]);
+    const keepStart = Math.max(0, visibleRange.startIndex - columns * GRID_OVERSCAN_ROWS * 4);
+    const keepEnd = Math.min(
+      images.length,
+      visibleRange.endIndex + columns * GRID_OVERSCAN_ROWS * 4
+    );
+    const keepPaths = new Set(images.slice(keepStart, keepEnd).map((image) => image.path));
+    evictThumbnailsExcept(keepPaths, MAX_CACHED_THUMBNAILS);
+  }, [
+    columns,
+    handleThumbnailLoaded,
+    images,
+    visibleImages,
+    visibleRange.endIndex,
+    visibleRange.startIndex,
+  ]);
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       if (scrollRafRef.current !== null) {
         window.cancelAnimationFrame(scrollRafRef.current);
       }
@@ -265,7 +230,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
           {visibleImages.map((image, visibleIndex) => {
             const index = visibleRange.startIndex + visibleIndex;
             const isActive = index === currentIndex;
-            const url = cacheRef.current[image.path];
+            const url = getCachedThumbnail(image.path);
 
             return (
               <div
