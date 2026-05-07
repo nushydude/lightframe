@@ -20,6 +20,7 @@ pub fn run() {
             commands::is_dir,
             commands::scan_folder,
             commands::get_image_metadata,
+            commands::get_preview_image,
             commands::read_settings,
             commands::write_settings,
             commands::move_to_trash,

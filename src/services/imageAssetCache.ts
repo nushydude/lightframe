@@ -1,4 +1,4 @@
-import { convertFileSrc } from './tauriCommands';
+import { convertFileSrc, getPreviewImage } from './tauriCommands';
 
 type ImageAssetEntry = {
   url: string;
@@ -6,9 +6,19 @@ type ImageAssetEntry = {
   lastUsedAt: number;
 };
 
-const imageAssetCache = new Map<string, ImageAssetEntry>();
+type PreviewAssetEntry = {
+  dataUrl: string;
+  version: number;
+  maxDimension: number;
+  lastUsedAt: number;
+};
+
+const fullImageAssetCache = new Map<string, ImageAssetEntry>();
+const previewImageAssetCache = new Map<string, PreviewAssetEntry>();
 const pendingInvalidations = new Map<string, number>();
 const latestMutationVersions = new Map<string, number>();
+const DEFAULT_PREVIEW_MAX_DIMENSION = 2048;
+const MAX_PREVIEW_CACHE_ENTRIES = 12;
 
 function applyVersionToUrl(url: string, version: number): string {
   if (version <= 0) {
@@ -57,36 +67,55 @@ async function createCacheEntry(path: string, version: number): Promise<ImageAss
   };
 }
 
-export async function getImageAssetUrl(path: string): Promise<string> {
-  const existing = imageAssetCache.get(path);
+function currentVersion(path: string): number {
+  return Math.max(pendingInvalidations.get(path) ?? 0, latestMutationVersions.get(path) ?? 0);
+}
+
+function trimCacheEntries<T extends { lastUsedAt: number }>(
+  cache: Map<string, T>,
+  keepPaths: Set<string>,
+  maxEntries: number
+): void {
+  if (maxEntries < 0 || cache.size <= maxEntries) return;
+
+  const evictable = Array.from(cache.entries())
+    .filter(([path]) => !keepPaths.has(path))
+    .sort((a, b) => {
+      if (a[1].lastUsedAt !== b[1].lastUsedAt) {
+        return a[1].lastUsedAt - b[1].lastUsedAt;
+      }
+      return a[0].localeCompare(b[0]);
+    });
+
+  for (const [path] of evictable) {
+    if (cache.size <= maxEntries) break;
+    cache.delete(path);
+  }
+}
+
+export async function getFullAsset(path: string): Promise<string> {
+  const existing = fullImageAssetCache.get(path);
   if (existing) {
     existing.lastUsedAt = Date.now();
     return existing.url;
   }
 
-  const startVersion = Math.max(
-    pendingInvalidations.get(path) ?? 0,
-    latestMutationVersions.get(path) ?? 0
-  );
+  const startVersion = currentVersion(path);
   const entry = await createCacheEntry(path, startVersion);
 
-  const resolvedVersion = Math.max(
-    startVersion,
-    pendingInvalidations.get(path) ?? 0,
-    latestMutationVersions.get(path) ?? 0
-  );
+  const resolvedVersion = Math.max(startVersion, currentVersion(path));
   if (resolvedVersion !== entry.version) {
     entry.version = resolvedVersion;
     entry.url = applyVersionToUrl(entry.url, resolvedVersion);
   }
 
-  const current = imageAssetCache.get(path);
+  const current = fullImageAssetCache.get(path);
   if (current && current.version >= entry.version) {
     current.lastUsedAt = Date.now();
     return current.url;
   }
 
-  imageAssetCache.set(path, entry);
+  fullImageAssetCache.set(path, entry);
   if (entry.version > 0) {
     latestMutationVersions.set(path, entry.version);
   }
@@ -99,10 +128,77 @@ export async function getImageAssetUrl(path: string): Promise<string> {
   return entry.url;
 }
 
-export async function preloadImageAsset(path: string): Promise<void> {
-  const url = await getImageAssetUrl(path);
+export async function getImageAssetUrl(path: string): Promise<string> {
+  return getFullAsset(path);
+}
+
+export async function getPreviewAsset(
+  path: string,
+  maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION
+): Promise<string> {
+  const version = currentVersion(path);
+  const existing = previewImageAssetCache.get(path);
+  if (existing && existing.version === version && existing.maxDimension === maxDimension) {
+    existing.lastUsedAt = Date.now();
+    return existing.dataUrl;
+  }
+
+  let entry: PreviewAssetEntry = {
+    dataUrl: await getPreviewImage(path, maxDimension),
+    version,
+    maxDimension,
+    lastUsedAt: Date.now(),
+  };
+
+  const resolvedVersion = Math.max(version, currentVersion(path));
+  if (resolvedVersion !== entry.version) {
+    entry = {
+      dataUrl: await getPreviewImage(path, maxDimension),
+      version: resolvedVersion,
+      maxDimension,
+      lastUsedAt: Date.now(),
+    };
+  }
+
+  const current = previewImageAssetCache.get(path);
+  if (
+    current &&
+    current.version >= entry.version &&
+    current.maxDimension === entry.maxDimension
+  ) {
+    current.lastUsedAt = Date.now();
+    return current.dataUrl;
+  }
+
+  previewImageAssetCache.set(path, entry);
+  if (entry.version > 0) {
+    latestMutationVersions.set(path, entry.version);
+  }
+  if (pendingInvalidations.get(path) === entry.version) {
+    pendingInvalidations.delete(path);
+  }
+
+  trimCacheEntries(previewImageAssetCache, new Set([path]), MAX_PREVIEW_CACHE_ENTRIES);
+  return entry.dataUrl;
+}
+
+export async function preloadFullAsset(path: string): Promise<void> {
+  const url = await getFullAsset(path);
   const img = new Image();
   img.src = url;
+}
+
+export async function preloadPreviewAsset(
+  path: string,
+  maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION
+): Promise<void> {
+  const dataUrl = await getPreviewAsset(path, maxDimension);
+  const img = new Image();
+  img.src = dataUrl;
+}
+
+export async function preloadImageAsset(path: string): Promise<void> {
+  return preloadFullAsset(path);
 }
 
 export function invalidateImageAsset(path: string): void {
@@ -110,7 +206,9 @@ export function invalidateImageAsset(path: string): void {
   pendingInvalidations.set(path, version);
   latestMutationVersions.set(path, version);
 
-  const existing = imageAssetCache.get(path);
+  previewImageAssetCache.delete(path);
+
+  const existing = fullImageAssetCache.get(path);
   if (!existing) return;
 
   existing.version = version;
@@ -119,21 +217,10 @@ export function invalidateImageAsset(path: string): void {
 }
 
 export function trimImageAssetCache(keepPaths: Set<string>, maxEntries: number): void {
-  if (maxEntries < 0 || imageAssetCache.size <= maxEntries) return;
-
-  const evictable = Array.from(imageAssetCache.entries())
-    .filter(([path]) => !keepPaths.has(path))
-    .sort((a, b) => {
-      if (a[1].lastUsedAt !== b[1].lastUsedAt) {
-        return a[1].lastUsedAt - b[1].lastUsedAt;
-      }
-      return a[0].localeCompare(b[0]);
-    });
-
-  for (const [path] of evictable) {
-    if (imageAssetCache.size <= maxEntries) {
-      break;
-    }
-    imageAssetCache.delete(path);
-  }
+  trimCacheEntries(fullImageAssetCache, keepPaths, maxEntries);
+  trimCacheEntries(
+    previewImageAssetCache,
+    keepPaths,
+    Math.min(maxEntries, MAX_PREVIEW_CACHE_ENTRIES)
+  );
 }

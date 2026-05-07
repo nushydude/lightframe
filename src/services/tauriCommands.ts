@@ -30,6 +30,11 @@ export async function getImageMetadata(filePath: string): Promise<ImageMetadata>
   return invoke<ImageMetadata>('get_image_metadata', { filePath });
 }
 
+/** Generate a downscaled preview image and return it as a data URL */
+export async function getPreviewImage(filePath: string, maxDimension: number): Promise<string> {
+  return invoke<string>('get_preview_image', { filePath, maxDimension });
+}
+
 /** Read persisted application settings */
 export async function readSettings(): Promise<AppSettings> {
   const raw = await invoke<Record<string, unknown>>('read_settings');
