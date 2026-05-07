@@ -111,6 +111,22 @@ enum NatSortPart {
     Num(u64),
 }
 
+#[derive(Debug, Clone)]
+struct ScannedImage {
+    image: ImageFile,
+    sort_key: Vec<NatSortPart>,
+    lowercase_file_name: String,
+}
+
+fn sort_scanned_images(images: &mut [ScannedImage]) {
+    images.sort_by(|a, b| {
+        a.sort_key
+            .cmp(&b.sort_key)
+            .then_with(|| a.lowercase_file_name.cmp(&b.lowercase_file_name))
+            .then_with(|| a.image.path.cmp(&b.image.path))
+    });
+}
+
 /// Check if a path is a directory
 #[tauri::command]
 pub fn is_dir(path: String) -> bool {
@@ -125,7 +141,7 @@ fn scan_folder_blocking(folder_path: String) -> Result<Vec<ImageFile>, String> {
 
     let entries = fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))?;
 
-    let mut images: Vec<ImageFile> = Vec::new();
+    let mut images: Vec<ScannedImage> = Vec::new();
 
     for entry in entries {
         let entry = match entry {
@@ -157,23 +173,20 @@ fn scan_folder_blocking(folder_path: String) -> Result<Vec<ImageFile>, String> {
             format!("{}", duration.as_secs())
         });
 
-        images.push(ImageFile {
-            path: file_path.to_string_lossy().to_string(),
-            file_name,
-            extension,
-            size_bytes,
-            modified_at,
+        let path = file_path.to_string_lossy().to_string();
+        let sort_key = natural_sort_key(&file_name);
+        let lowercase_file_name = file_name.to_lowercase();
+
+        images.push(ScannedImage {
+            sort_key,
+            lowercase_file_name,
+            image: ImageFile { path, file_name, extension, size_bytes, modified_at },
         });
     }
 
-    // Natural sort by filename
-    images.sort_by(|a, b| {
-        let key_a = natural_sort_key(&a.file_name);
-        let key_b = natural_sort_key(&b.file_name);
-        key_a.cmp(&key_b)
-    });
+    sort_scanned_images(&mut images);
 
-    Ok(images)
+    Ok(images.into_iter().map(|scanned| scanned.image).collect())
 }
 
 /// Scan a folder for supported image files
@@ -538,16 +551,52 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path();
 
-        File::create(path.join("img1.jpg")).unwrap();
-        File::create(path.join("img2.png")).unwrap();
+        File::create(path.join("image10.jpg")).unwrap();
+        File::create(path.join("image2.png")).unwrap();
+        File::create(path.join("image1.webp")).unwrap();
+        File::create(path.join("no_extension")).unwrap();
         File::create(path.join("not_an_image.txt")).unwrap();
         fs::create_dir(path.join("subdir")).unwrap();
 
         let results = scan_folder_blocking(path.to_string_lossy().to_string()).unwrap();
 
-        assert_eq!(results.len(), 2);
-        assert!(results.iter().any(|img| img.file_name == "img1.jpg"));
-        assert!(results.iter().any(|img| img.file_name == "img2.png"));
+        let sorted_names: Vec<&str> = results.iter().map(|img| img.file_name.as_str()).collect();
+        assert_eq!(sorted_names, vec!["image1.webp", "image2.png", "image10.jpg"]);
+        assert!(!results.iter().any(|img| img.file_name == "no_extension"));
+    }
+
+    #[test]
+    fn test_sort_scanned_images_tie_breaks_on_lowercase_then_path() {
+        let mut images = vec![
+            ScannedImage {
+                sort_key: natural_sort_key("img2.jpg"),
+                lowercase_file_name: "img2.jpg".to_string(),
+                image: ImageFile {
+                    path: "/tmp/z/img2.jpg".to_string(),
+                    file_name: "img2.jpg".to_string(),
+                    extension: "jpg".to_string(),
+                    size_bytes: 0,
+                    modified_at: None,
+                },
+            },
+            ScannedImage {
+                sort_key: natural_sort_key("IMG2.jpg"),
+                lowercase_file_name: "img2.jpg".to_string(),
+                image: ImageFile {
+                    path: "/tmp/a/IMG2.jpg".to_string(),
+                    file_name: "IMG2.jpg".to_string(),
+                    extension: "jpg".to_string(),
+                    size_bytes: 0,
+                    modified_at: None,
+                },
+            },
+        ];
+
+        sort_scanned_images(&mut images);
+
+        let sorted_names: Vec<&str> =
+            images.iter().map(|scanned| scanned.image.file_name.as_str()).collect();
+        assert_eq!(sorted_names, vec!["IMG2.jpg", "img2.jpg"]);
     }
 
     #[test]
