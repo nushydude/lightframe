@@ -103,6 +103,41 @@ export function useImageNavigation() {
     }
   }, [settings.sortOrder]);
 
+  const scanFolderForImage = useCallback(
+    async (loadGeneration: number, filePath: string, parentFolder: string) => {
+      try {
+        let folderImages = await scanFolder(parentFolder);
+        if (!isCurrentGeneration(loadGeneration)) return;
+
+        if (settings.sortOrder !== 'name') {
+          folderImages = sortImages(folderImages, settings.sortOrder);
+        }
+        if (!isCurrentGeneration(loadGeneration)) return;
+
+        setImages(folderImages);
+
+        const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
+        const index = folderImages.findIndex(
+          (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
+        );
+
+        if (index >= 0 && isCurrentGeneration(loadGeneration)) {
+          setCurrentIndex(index);
+        }
+      } catch (err) {
+        console.error('Failed to scan folder:', err);
+        if (isCurrentGeneration(loadGeneration)) {
+          setError(`Failed to scan folder: ${err}`);
+        }
+      } finally {
+        if (isCurrentGeneration(loadGeneration)) {
+          setFolderScanning(false);
+        }
+      }
+    },
+    [isCurrentGeneration, setCurrentIndex, setError, setFolderScanning, setImages, settings.sortOrder]
+  );
+
   /** Open and display a specific image file */
   const openImage = useCallback(
     async (filePath: string) => {
@@ -119,36 +154,7 @@ export function useImageNavigation() {
         if (!isCurrentGeneration(loadGeneration)) return;
 
         setFolderScanning(true);
-
-        try {
-          let folderImages = await scanFolder(parentFolder);
-          if (!isCurrentGeneration(loadGeneration)) return;
-
-          if (settings.sortOrder !== 'name') {
-            folderImages = sortImages(folderImages, settings.sortOrder);
-          }
-          if (!isCurrentGeneration(loadGeneration)) return;
-
-          setImages(folderImages);
-
-          const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
-          const index = folderImages.findIndex(
-            (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
-          );
-
-          if (index >= 0 && isCurrentGeneration(loadGeneration)) {
-            setCurrentIndex(index);
-          }
-        } catch (err) {
-          console.error('Failed to scan folder:', err);
-          if (isCurrentGeneration(loadGeneration)) {
-            setError(`Failed to scan folder: ${err}`);
-          }
-        } finally {
-          if (isCurrentGeneration(loadGeneration)) {
-            setFolderScanning(false);
-          }
-        }
+        await scanFolderForImage(loadGeneration, filePath, parentFolder);
       } catch (err) {
         if (isCurrentGeneration(loadGeneration)) {
           setError(`Could not open image: ${err}`);
@@ -158,13 +164,44 @@ export function useImageNavigation() {
     [
       beginLoadGeneration,
       isCurrentGeneration,
+      scanFolderForImage,
       setCurrentImage,
-      setCurrentIndex,
+      setError,
+      setFolderPath,
+    ]
+  );
+
+  /** Open an image for startup and continue folder scan in the background */
+  const openImageForStartup = useCallback(
+    async (filePath: string) => {
+      const loadGeneration = beginLoadGeneration();
+
+      try {
+        const parentFolder = getParentFolder(filePath);
+        setFolderPath(parentFolder);
+        setCurrentImage(filePath, 0);
+
+        const appWindow = getCurrentWindow();
+        const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
+        await appWindow.setTitle(`${fileName} - LightFrame`);
+        if (!isCurrentGeneration(loadGeneration)) return;
+
+        setFolderScanning(true);
+        void scanFolderForImage(loadGeneration, filePath, parentFolder);
+      } catch (err) {
+        if (isCurrentGeneration(loadGeneration)) {
+          setError(`Could not open image: ${err}`);
+        }
+      }
+    },
+    [
+      beginLoadGeneration,
+      isCurrentGeneration,
+      scanFolderForImage,
+      setCurrentImage,
       setError,
       setFolderPath,
       setFolderScanning,
-      setImages,
-      settings.sortOrder,
     ]
   );
 
@@ -288,6 +325,7 @@ export function useImageNavigation() {
     folderPath,
     isFolderScanning,
     openImage,
+    openImageForStartup,
     openFolder,
     openFilePicker,
     openFolderPicker,

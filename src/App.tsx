@@ -16,6 +16,7 @@ import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 
 import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
+import { resolveStartupDecision } from './services/startup';
 
 function App() {
   const {
@@ -34,6 +35,7 @@ function App() {
 
   const {
     openImage,
+    openImageForStartup,
     openFolder,
     openFilePicker,
     openFolderPicker,
@@ -50,12 +52,22 @@ function App() {
   } = useSlideshow();
 
   const [isDragOver, setIsDragOver] = useState(false);
+  const [hasStartupResolved, setHasStartupResolved] = useState(false);
+  const [startupShowAttempted, setStartupShowAttempted] = useState(false);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startupShowAttemptedRef = useRef(false);
 
-  // Load settings on mount
-  useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
+  const showMainWindowOnce = useCallback(async () => {
+    if (startupShowAttemptedRef.current) return;
+    startupShowAttemptedRef.current = true;
+    setStartupShowAttempted(true);
+
+    try {
+      await getCurrentWindow().show();
+    } catch (err) {
+      console.error('Failed to show main window:', err);
+    }
+  }, []);
 
   // Apply theme
   useEffect(() => {
@@ -68,41 +80,49 @@ function App() {
     }
   }, [settings.theme]);
 
-  // Handle CLI arguments (default file association) and unhide window
+  // Handle CLI arguments (default file association) and resolve startup readiness
   useEffect(() => {
-    let unlisten: () => void;
-    
+    let unlisten: (() => void) | undefined;
+    let isCancelled = false;
+
     async function init() {
+      // Request settings immediately; empty startup can render once this is requested.
+      void loadSettings();
+
       try {
         const matches = await getMatches();
-        const fileArg = matches.args.file;
-        if (fileArg && typeof fileArg.value === 'string' && fileArg.value.trim() !== '') {
-          // Fire and forget openImage (it synchronously sets the image but asynchronously scans the folder)
-          openImage(fileArg.value);
-          // Wait just long enough for React to commit the first render with the image path
-          setTimeout(() => {
-            getCurrentWindow().show();
-          }, 50);
-        } else {
-          await getCurrentWindow().show();
+        const startupDecision = resolveStartupDecision(matches.args.file);
+
+        if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
+          await openImageForStartup(startupDecision.filePath);
         }
       } catch (err) {
         console.error('Failed to parse CLI args on startup:', err);
-        await getCurrentWindow().show();
+        setError(`Failed to parse CLI args on startup: ${err}`);
+      } finally {
+        if (!isCancelled) {
+          setHasStartupResolved(true);
+        }
       }
     }
-    
-    init();
+
+    void init();
 
     // Still listen in case another instance sends a message (future single-instance support)
-    listen<string>('open-file', (event) => {
-      openImage(event.payload);
+    listen<string>('open-file', async (event) => {
+      await openImage(event.payload);
     }).then((fn) => { unlisten = fn; });
 
     return () => {
+      isCancelled = true;
       if (unlisten) unlisten();
     };
-  }, [openImage]);
+  }, [loadSettings, openImage, openImageForStartup, setError]);
+
+  useEffect(() => {
+    if (!hasStartupResolved || startupShowAttempted) return;
+    void showMainWindowOnce();
+  }, [hasStartupResolved, showMainWindowOnce, startupShowAttempted]);
 
   // Listen for tauri file drop events
   useEffect(() => {

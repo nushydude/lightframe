@@ -66,6 +66,37 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
   });
 
+  it('should resolve startup image open before folder scan finishes', async () => {
+    const deferredImages = [
+      { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+    ];
+    (getParentFolder as any).mockReturnValue('c:/test');
+
+    let resolveScan: ((images: typeof deferredImages) => void) | undefined;
+    (scanFolder as any).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveScan = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openImageForStartup('c:/test/img1.jpg');
+    });
+
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
+    expect(useViewerStore.getState().isFolderScanning).toBe(true);
+
+    resolveScan?.(deferredImages);
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().isFolderScanning).toBe(false);
+      expect(useViewerStore.getState().images).toEqual(deferredImages);
+    });
+  });
+
   it('should navigate next and previous', async () => {
     const mockImages = [
       { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
