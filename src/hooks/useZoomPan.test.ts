@@ -12,9 +12,10 @@ describe('useZoomPan', () => {
     useViewerStore.getState().reset();
     containerRef = { current: document.createElement('div') } as any;
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
-  it('should handle wheel zoom', () => {
+  it('should handle wheel zoom in zoom mode', () => {
     act(() => {
       useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'zoom' } });
     });
@@ -28,6 +29,72 @@ describe('useZoomPan', () => {
 
     expect(useViewerStore.getState().zoomLevel).toBeGreaterThan(1);
     expect(useViewerStore.getState().zoomMode).toBe('custom');
+  });
+
+  it('should navigate next/prev in navigate mode', () => {
+    const onWheelNext = vi.fn();
+    const onWheelPrev = vi.fn();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-07T00:00:00.000Z'));
+
+    act(() => {
+      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' } });
+    });
+
+    renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
+
+    act(() => {
+      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+      vi.advanceTimersByTime(221);
+    });
+    act(() => {
+      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+    });
+
+    expect(onWheelNext).toHaveBeenCalledTimes(1);
+    expect(onWheelPrev).toHaveBeenCalledTimes(1);
+  });
+
+  it('should ignore mostly horizontal wheel in navigate mode', () => {
+    const onWheelNext = vi.fn();
+    const onWheelPrev = vi.fn();
+
+    act(() => {
+      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' } });
+    });
+
+    renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
+
+    act(() => {
+      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaX: 120, deltaY: 50 }));
+    });
+
+    expect(onWheelNext).not.toHaveBeenCalled();
+    expect(onWheelPrev).not.toHaveBeenCalled();
+  });
+
+  it('should throttle rapid navigate wheel events', () => {
+    const onWheelNext = vi.fn();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-07T00:00:00.000Z'));
+
+    act(() => {
+      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' } });
+    });
+
+    renderHook(() => useZoomPan(containerRef, { onWheelNext }));
+
+    act(() => {
+      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+    });
+    expect(onWheelNext).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(221);
+      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+    });
+    expect(onWheelNext).toHaveBeenCalledTimes(2);
   });
 
   it('should handle dragging (panning)', () => {

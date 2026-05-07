@@ -2,9 +2,17 @@ import { useCallback, useRef, useState, useEffect } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 
+type UseZoomPanOptions = {
+  onWheelNext?: () => void;
+  onWheelPrev?: () => void;
+};
 
 /** Hook for zoom and pan functionality */
-export function useZoomPan(containerRef: React.RefObject<HTMLDivElement | null>) {
+export function useZoomPan(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  options: UseZoomPanOptions = {}
+) {
+  const { onWheelNext, onWheelPrev } = options;
   const {
     zoomMode,
     zoomLevel,
@@ -22,6 +30,8 @@ export function useZoomPan(containerRef: React.RefObject<HTMLDivElement | null>)
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const panStartRef = useRef({ x: 0, y: 0 });
+  const lastWheelNavigationAtRef = useRef(0);
+  const wheelNavigationThrottleMs = 220;
 
   /** Handle mouse wheel for zoom or navigation */
   const handleWheel = useCallback(
@@ -31,10 +41,32 @@ export function useZoomPan(containerRef: React.RefObject<HTMLDivElement | null>)
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
         const newLevel = Math.max(0.1, Math.min(20, zoomLevel * delta));
         setZoomLevel(newLevel);
+        return;
       }
-      // Navigate mode is handled by keyboard shortcuts hook
+
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY === 0) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastWheelNavigationAtRef.current < wheelNavigationThrottleMs) {
+        return;
+      }
+      lastWheelNavigationAtRef.current = now;
+
+      if (e.deltaY > 0) {
+        onWheelNext?.();
+      } else if (e.deltaY < 0) {
+        onWheelPrev?.();
+      }
     },
-    [zoomLevel, settings.mouseWheelBehavior, setZoomLevel]
+    [
+      zoomLevel,
+      settings.mouseWheelBehavior,
+      setZoomLevel,
+      onWheelNext,
+      onWheelPrev,
+    ]
   );
 
   /** Start panning */
