@@ -62,8 +62,12 @@ export async function saveRotatedImage(filePath: string, rotationDegrees: number
 }
 
 /** Get a small base64 thumbnail for an image */
-export async function getThumbnail(filePath: string): Promise<string> {
-  return invoke<string>('get_thumbnail', { filePath });
+export async function getThumbnail(
+  filePath: string,
+  sizeBytes?: number,
+  modifiedAt?: string
+): Promise<string> {
+  return invoke<string>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
 }
 
 import { revealItemInDir, openUrl } from '@tauri-apps/plugin-opener';

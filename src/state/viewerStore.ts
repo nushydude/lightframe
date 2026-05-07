@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
+import { invalidateThumbnail } from '../services/thumbnailCache';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
 
@@ -253,6 +254,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       const { saveRotatedImage } = await import('../services/tauriCommands');
       await saveRotatedImage(currentImagePath, rotation);
       invalidateImageAsset(currentImagePath);
+      invalidateThumbnail(currentImagePath);
       set({ rotation: 0, cacheBuster: Date.now() });
     } catch (err) {
       set({ errorMessage: `Failed to save rotation: ${err}` });

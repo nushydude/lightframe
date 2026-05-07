@@ -108,12 +108,18 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
   }, [activeRow, currentIndex]);
 
   useEffect(() => {
-    const visiblePaths = visibleImages.map((image) => image.path);
-    preloadThumbnails(visiblePaths, {
-      concurrency: 6,
-      onLoaded: handleThumbnailLoaded,
-      isActive: () => isMountedRef.current,
-    });
+    preloadThumbnails(
+      visibleImages.map((image) => ({
+        path: image.path,
+        sizeBytes: image.size_bytes,
+        modifiedAt: image.modified_at,
+      })),
+      {
+        concurrency: 6,
+        onLoaded: handleThumbnailLoaded,
+        isActive: () => isMountedRef.current,
+      }
+    );
 
     const keepStart = Math.max(0, visibleRange.startIndex - columns * GRID_OVERSCAN_ROWS * 4);
     const keepEnd = Math.min(
@@ -230,7 +236,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
           {visibleImages.map((image, visibleIndex) => {
             const index = visibleRange.startIndex + visibleIndex;
             const isActive = index === currentIndex;
-            const url = getCachedThumbnail(image.path);
+            const url = getCachedThumbnail({
+              path: image.path,
+              sizeBytes: image.size_bytes,
+              modifiedAt: image.modified_at,
+            });
 
             return (
               <div

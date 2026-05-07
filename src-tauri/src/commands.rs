@@ -1,3 +1,4 @@
+use crate::thumbnails;
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
@@ -322,23 +323,18 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
 
 /// Generate a small base64 thumbnail for high-performance navigation
 #[tauri::command]
-pub async fn get_thumbnail(file_path: String) -> Result<String, String> {
+pub async fn get_thumbnail(
+    app: AppHandle,
+    file_path: String,
+    size_bytes: Option<u64>,
+    modified_at: Option<String>,
+) -> Result<String, String> {
     let path = Path::new(&file_path);
-
-    // Load image and downscale to 160px max (standard thumbnail size)
-    // We use thumbnail_exact for speed and specific sizing
-    let img = image::open(path).map_err(|e| format!("Failed to open for thumbnail: {}", e))?;
-    let thumb = img.thumbnail(160, 160);
-
-    // Write to buffer as JPEG for small transfer size
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    thumb
-        .write_to(&mut buffer, image::ImageFormat::Jpeg)
-        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
-
-    let base64_str =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buffer.into_inner());
-    Ok(format!("data:image/jpeg;base64,{}", base64_str))
+    let metadata = thumbnails::resolve_source_metadata(path, size_bytes, modified_at.as_deref())?;
+    let app_cache_dir =
+        app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
+    let thumbnail_cache_dir = app_cache_dir.join("thumbnails");
+    thumbnails::get_or_create_thumbnail(path, &metadata, &thumbnail_cache_dir)
 }
 
 #[derive(serde::Serialize)]

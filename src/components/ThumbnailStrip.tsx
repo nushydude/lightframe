@@ -56,12 +56,19 @@ export function ThumbnailStrip() {
   }, [scheduleThumbnailFlush]);
 
   useEffect(() => {
+    preloadThumbnails(
+      visibleImages.map((image) => ({
+        path: image.path,
+        sizeBytes: image.size_bytes,
+        modifiedAt: image.modified_at,
+      })),
+      {
+        concurrency: 4,
+        onLoaded: handleThumbnailLoaded,
+        isActive: () => isMountedRef.current,
+      }
+    );
     const visiblePaths = visibleImages.map((image) => image.path);
-    preloadThumbnails(visiblePaths, {
-      concurrency: 4,
-      onLoaded: handleThumbnailLoaded,
-      isActive: () => isMountedRef.current,
-    });
     evictThumbnailsExcept(new Set(visiblePaths), MAX_STRIP_THUMBNAILS);
   }, [handleThumbnailLoaded, visibleImages]);
 
@@ -116,7 +123,11 @@ export function ThumbnailStrip() {
         {visibleImages.map((image, visibleIndex) => {
           const index = startIndex + visibleIndex;
           const isActive = index === currentIndex;
-          const url = getCachedThumbnail(image.path);
+          const url = getCachedThumbnail({
+            path: image.path,
+            sizeBytes: image.size_bytes,
+            modifiedAt: image.modified_at,
+          });
 
           return (
             <div

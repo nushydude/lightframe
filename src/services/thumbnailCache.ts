@@ -4,6 +4,7 @@ const DEFAULT_MAX_ENTRIES = 1000;
 const DEFAULT_CONCURRENCY = 6;
 
 type ThumbnailCacheEntry = {
+  token: string;
   dataUrl?: string;
   lastAccessedAt: number;
   inFlightPromise?: Promise<string>;
@@ -17,9 +18,16 @@ type PreloadThumbnailOptions = {
   isActive?: () => boolean;
 };
 
+export type ThumbnailRequest = {
+  path: string;
+  sizeBytes?: number;
+  modifiedAt?: string | null;
+};
+
 const thumbnailCache = new Map<string, ThumbnailCacheEntry>();
-const queuedPaths = new Set<string>();
-const requestQueue: string[] = [];
+const requestMetadataByPath = new Map<string, ThumbnailRequest>();
+const queuedRequests = new Set<string>();
+const requestQueue: ThumbnailRequestQueueItem[] = [];
 const inFlightResolvers = new Map<
   string,
   { resolve: (dataUrl: string) => void; reject: (reason?: unknown) => void }
@@ -31,6 +39,11 @@ let accessCounter = 0;
 let inFlightCount = 0;
 let maxEntries = DEFAULT_MAX_ENTRIES;
 let concurrencyLimit = DEFAULT_CONCURRENCY;
+
+type ThumbnailRequestQueueItem = {
+  path: string;
+  token: string;
+};
 
 function touchEntry(entry: ThumbnailCacheEntry): void {
   accessCounter += 1;
@@ -47,14 +60,15 @@ function normalizeConcurrency(value: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-function getOrCreateEntry(path: string): ThumbnailCacheEntry {
+function getOrCreateEntry(path: string, token: string): ThumbnailCacheEntry {
   const existing = thumbnailCache.get(path);
-  if (existing) {
+  if (existing && existing.token === token) {
     touchEntry(existing);
     return existing;
   }
 
   const created: ThumbnailCacheEntry = {
+    token,
     lastAccessedAt: 0,
   };
   touchEntry(created);
@@ -62,10 +76,33 @@ function getOrCreateEntry(path: string): ThumbnailCacheEntry {
   return created;
 }
 
-function enqueuePath(path: string): void {
-  if (queuedPaths.has(path)) return;
-  queuedPaths.add(path);
-  requestQueue.push(path);
+function normalizeRequest(request: string | ThumbnailRequest): ThumbnailRequest {
+  if (typeof request === 'string') {
+    return { path: request };
+  }
+  return request;
+}
+
+function parseModifiedAtSeconds(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.floor(parsed);
+}
+
+function metadataToken(request: ThumbnailRequest): string {
+  return `${request.sizeBytes ?? ''}|${parseModifiedAtSeconds(request.modifiedAt) ?? ''}`;
+}
+
+function requestKey(path: string, token: string): string {
+  return `${path}::${token}`;
+}
+
+function enqueuePath(path: string, token: string): void {
+  const key = requestKey(path, token);
+  if (queuedRequests.has(key)) return;
+  queuedRequests.add(key);
+  requestQueue.push({ path, token });
 }
 
 function addListener(path: string, options: PreloadThumbnailOptions): void {
@@ -103,29 +140,40 @@ function notifyLoaded(path: string): void {
   listenersByPath.delete(path);
 }
 
-function resolveSuccess(path: string, dataUrl: string): void {
+function resolveSuccess(path: string, token: string, dataUrl: string): void {
   const entry = thumbnailCache.get(path);
-  if (entry) {
+  let isCurrentToken = false;
+  if (entry && entry.token === token) {
+    isCurrentToken = true;
     entry.dataUrl = dataUrl;
     touchEntry(entry);
     entry.inFlightPromise = undefined;
   }
 
-  const resolver = inFlightResolvers.get(path);
-  inFlightResolvers.delete(path);
+  const resolverKey = requestKey(path, token);
+  const resolver = inFlightResolvers.get(resolverKey);
+  inFlightResolvers.delete(resolverKey);
   resolver?.resolve(dataUrl);
-  notifyLoaded(path);
+  if (isCurrentToken) {
+    notifyLoaded(path);
+  }
   enforceCacheLimit();
 }
 
-function resolveError(path: string, error: unknown): void {
-  thumbnailCache.delete(path);
-  queuedPaths.delete(path);
+function resolveError(path: string, token: string, error: unknown): void {
+  const entry = thumbnailCache.get(path);
+  if (entry?.token === token) {
+    thumbnailCache.delete(path);
+    requestMetadataByPath.delete(path);
+  }
 
-  const resolver = inFlightResolvers.get(path);
-  inFlightResolvers.delete(path);
+  const resolverKey = requestKey(path, token);
+  const resolver = inFlightResolvers.get(resolverKey);
+  inFlightResolvers.delete(resolverKey);
   resolver?.reject(error);
-  clearListeners(path);
+  if (entry?.token === token) {
+    clearListeners(path);
+  }
   enforceCacheLimit();
 }
 
@@ -156,38 +204,49 @@ function enforceCacheLimit(): void {
       break;
     }
     thumbnailCache.delete(path);
-    queuedPaths.delete(path);
-    inFlightResolvers.delete(path);
+    for (const key of Array.from(queuedRequests)) {
+      if (key.startsWith(`${path}::`)) {
+        queuedRequests.delete(key);
+      }
+    }
     listenersByPath.delete(path);
+    requestMetadataByPath.delete(path);
   }
 }
 
 function pumpQueue(): void {
   while (inFlightCount < concurrencyLimit && requestQueue.length > 0) {
-    const path = requestQueue.shift();
-    if (!path) {
+    const queued = requestQueue.shift();
+    if (!queued) {
       return;
     }
+    const { path, token } = queued;
+    const queuedKey = requestKey(path, token);
 
-    queuedPaths.delete(path);
+    queuedRequests.delete(queuedKey);
 
     const entry = thumbnailCache.get(path);
-    if (!entry?.inFlightPromise) {
+    if (!entry?.inFlightPromise || entry.token !== token) {
       continue;
     }
 
     if (entry.dataUrl) {
-      resolveSuccess(path, entry.dataUrl);
+      resolveSuccess(path, token, entry.dataUrl);
       continue;
     }
 
     inFlightCount += 1;
-    getThumbnail(path)
+    const metadata = requestMetadataByPath.get(path);
+    if (!metadata || metadataToken(metadata) !== token) {
+      inFlightCount -= 1;
+      continue;
+    }
+    getThumbnail(path, metadata?.sizeBytes, metadata?.modifiedAt ?? undefined)
       .then((dataUrl) => {
-        resolveSuccess(path, dataUrl);
+        resolveSuccess(path, token, dataUrl);
       })
       .catch((error) => {
-        resolveError(path, error);
+        resolveError(path, token, error);
       })
       .finally(() => {
         inFlightCount -= 1;
@@ -196,9 +255,17 @@ function pumpQueue(): void {
   }
 }
 
-export function getCachedThumbnail(path: string): string | undefined {
+export function getCachedThumbnail(request: string | ThumbnailRequest): string | undefined {
+  const normalized = normalizeRequest(request);
+  const { path } = normalized;
+  const existingMetadata = requestMetadataByPath.get(path);
+  if (existingMetadata && metadataToken(existingMetadata) !== metadataToken(normalized)) {
+    thumbnailCache.delete(path);
+    requestMetadataByPath.set(path, normalized);
+  }
+
   const entry = thumbnailCache.get(path);
-  if (!entry?.dataUrl) {
+  if (!entry?.dataUrl || entry.token !== metadataToken(normalized)) {
     return undefined;
   }
 
@@ -206,38 +273,61 @@ export function getCachedThumbnail(path: string): string | undefined {
   return entry.dataUrl;
 }
 
-export function loadThumbnail(path: string): Promise<string> {
-  const cached = getCachedThumbnail(path);
+export function loadThumbnail(request: string | ThumbnailRequest): Promise<string> {
+  const normalized = normalizeRequest(request);
+  const { path, sizeBytes, modifiedAt } = normalized;
+  const token = metadataToken(normalized);
+  const existingMetadata = requestMetadataByPath.get(path);
+  if (existingMetadata && metadataToken(existingMetadata) !== token) {
+    thumbnailCache.delete(path);
+  }
+  const cached = getCachedThumbnail(normalized);
   if (cached) {
     return Promise.resolve(cached);
   }
 
-  const entry = getOrCreateEntry(path);
+  const entry = getOrCreateEntry(path, token);
+
   if (entry.inFlightPromise) {
     return entry.inFlightPromise;
   }
 
   entry.inFlightPromise = new Promise<string>((resolve, reject) => {
-    inFlightResolvers.set(path, { resolve, reject });
+    inFlightResolvers.set(requestKey(path, token), { resolve, reject });
   });
 
-  enqueuePath(path);
+  requestMetadataByPath.set(path, { path, sizeBytes, modifiedAt });
+  enqueuePath(path, token);
   pumpQueue();
   return entry.inFlightPromise;
 }
 
-export function preloadThumbnails(paths: string[], options: PreloadThumbnailOptions = {}): void {
+export function invalidateThumbnail(path: string): void {
+  thumbnailCache.delete(path);
+  requestMetadataByPath.delete(path);
+  listenersByPath.delete(path);
+}
+
+export function preloadThumbnails(
+  requests: Array<string | ThumbnailRequest>,
+  options: PreloadThumbnailOptions = {}
+): void {
   if (typeof options.concurrency === 'number') {
     concurrencyLimit = normalizeConcurrency(options.concurrency);
   }
 
-  const uniquePaths = new Set(paths);
-  uniquePaths.forEach((path) => {
-    if (options.onLoaded && !getCachedThumbnail(path)) {
+  const uniqueRequests = new Map<string, ThumbnailRequest>();
+  requests.forEach((request) => {
+    const normalized = normalizeRequest(request);
+    uniqueRequests.set(normalized.path, normalized);
+  });
+
+  uniqueRequests.forEach((request, path) => {
+    if (options.onLoaded && !getCachedThumbnail(request)) {
       addListener(path, options);
     }
 
-    void loadThumbnail(path).catch(() => {
+    void loadThumbnail(request).catch(() => {
       // Ignore preload failures and let future attempts retry.
     });
   });
@@ -255,10 +345,11 @@ export function evictThumbnailsExcept(keepPaths: Set<string>, maxEntriesOverride
 
 export function clearThumbnailCacheForTests(): void {
   thumbnailCache.clear();
-  queuedPaths.clear();
+  queuedRequests.clear();
   requestQueue.length = 0;
   inFlightResolvers.clear();
   listenersByPath.clear();
+  requestMetadataByPath.clear();
   latestKeepPaths = new Set();
   accessCounter = 0;
   inFlightCount = 0;
