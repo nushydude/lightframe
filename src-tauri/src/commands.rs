@@ -115,9 +115,7 @@ pub fn is_dir(path: String) -> bool {
     Path::new(&path).is_dir()
 }
 
-/// Scan a folder for supported image files
-#[tauri::command]
-pub async fn scan_folder(folder_path: String) -> Result<Vec<ImageFile>, String> {
+fn scan_folder_blocking(folder_path: String) -> Result<Vec<ImageFile>, String> {
     let path = Path::new(&folder_path);
     if !path.is_dir() {
         return Err(format!("'{}' is not a valid directory", folder_path));
@@ -176,9 +174,16 @@ pub async fn scan_folder(folder_path: String) -> Result<Vec<ImageFile>, String> 
     Ok(images)
 }
 
-/// Get image metadata (dimensions, format, file size)
+/// Scan a folder for supported image files
 #[tauri::command]
-pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, String> {
+pub async fn scan_folder(folder_path: String) -> Result<Vec<ImageFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_folder_blocking(folder_path))
+        .await
+        .map_err(|err| format!("Scan folder worker failed: {}", err))?
+}
+
+/// Get image metadata (dimensions, format, file size)
+fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
         return Err(format!("'{}' is not a valid file", file_path));
@@ -211,6 +216,14 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
     };
 
     Ok(ImageMetadata { width, height, file_size_bytes, format })
+}
+
+/// Get image metadata (dimensions, format, file size)
+#[tauri::command]
+pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || get_image_metadata_blocking(file_path))
+        .await
+        .map_err(|err| format!("Image metadata worker failed: {}", err))?
 }
 
 /// Get the settings file path
@@ -250,8 +263,7 @@ pub async fn move_to_trash(file_path: String) -> Result<(), String> {
 }
 
 /// Copy an image file to the OS clipboard
-#[tauri::command]
-pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
+fn copy_image_to_clipboard_blocking(file_path: String) -> Result<(), String> {
     let img = image::open(&file_path).map_err(|e| format!("Failed to open image: {}", e))?;
     let rgba = img.into_rgba8();
     let (width, height) = rgba.dimensions();
@@ -268,9 +280,16 @@ pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Rotate an image file on disk and save it
+/// Copy an image file to the OS clipboard
 #[tauri::command]
-pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Result<(), String> {
+pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || copy_image_to_clipboard_blocking(file_path))
+        .await
+        .map_err(|err| format!("Clipboard worker failed: {}", err))?
+}
+
+/// Rotate an image file on disk and save it
+fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Result<(), String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
         return Err(format!("'{}' is not a valid file", file_path));
@@ -321,6 +340,29 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
     Ok(())
 }
 
+/// Rotate an image file on disk and save it
+#[tauri::command]
+pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_rotated_image_blocking(file_path, rotation_degrees)
+    })
+    .await
+    .map_err(|err| format!("Rotation worker failed: {}", err))?
+}
+
+/// Generate a small base64 thumbnail for high-performance navigation
+fn get_thumbnail_blocking(
+    file_path: String,
+    size_bytes: Option<u64>,
+    modified_at: Option<String>,
+    app_cache_dir: PathBuf,
+) -> Result<String, String> {
+    let path = Path::new(&file_path);
+    let metadata = thumbnails::resolve_source_metadata(path, size_bytes, modified_at.as_deref())?;
+    let thumbnail_cache_dir = app_cache_dir.join("thumbnails");
+    thumbnails::get_or_create_thumbnail(path, &metadata, &thumbnail_cache_dir)
+}
+
 /// Generate a small base64 thumbnail for high-performance navigation
 #[tauri::command]
 pub async fn get_thumbnail(
@@ -329,12 +371,13 @@ pub async fn get_thumbnail(
     size_bytes: Option<u64>,
     modified_at: Option<String>,
 ) -> Result<String, String> {
-    let path = Path::new(&file_path);
-    let metadata = thumbnails::resolve_source_metadata(path, size_bytes, modified_at.as_deref())?;
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    let thumbnail_cache_dir = app_cache_dir.join("thumbnails");
-    thumbnails::get_or_create_thumbnail(path, &metadata, &thumbnail_cache_dir)
+    tauri::async_runtime::spawn_blocking(move || {
+        get_thumbnail_blocking(file_path, size_bytes, modified_at, app_cache_dir)
+    })
+    .await
+    .map_err(|err| format!("Thumbnail worker failed: {}", err))?
 }
 
 #[derive(serde::Serialize)]
@@ -351,8 +394,7 @@ pub struct ExifData {
 }
 
 /// Extract EXIF metadata from an image
-#[tauri::command]
-pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
+fn get_exif_metadata_blocking(file_path: String) -> Result<ExifData, String> {
     let file =
         std::fs::File::open(&file_path).map_err(|e| format!("Failed to open file: {}", e))?;
     let mut reader = std::io::BufReader::new(file);
@@ -411,6 +453,14 @@ pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
     Ok(data)
 }
 
+/// Extract EXIF metadata from an image
+#[tauri::command]
+pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
+    tauri::async_runtime::spawn_blocking(move || get_exif_metadata_blocking(file_path))
+        .await
+        .map_err(|err| format!("EXIF worker failed: {}", err))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,8 +485,8 @@ mod tests {
         assert!(key_a < key_b);
     }
 
-    #[tokio::test]
-    async fn test_scan_folder() {
+    #[test]
+    fn test_scan_folder_blocking() {
         let dir = tempdir().unwrap();
         let path = dir.path();
 
@@ -445,10 +495,27 @@ mod tests {
         File::create(path.join("not_an_image.txt")).unwrap();
         fs::create_dir(path.join("subdir")).unwrap();
 
-        let results = scan_folder(path.to_string_lossy().to_string()).await.unwrap();
+        let results = scan_folder_blocking(path.to_string_lossy().to_string()).unwrap();
 
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|img| img.file_name == "img1.jpg"));
         assert!(results.iter().any(|img| img.file_name == "img2.png"));
+    }
+
+    #[test]
+    fn test_get_image_metadata_blocking_png_dimensions_and_size() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("tiny.png");
+
+        image::RgbaImage::new(2, 3).save(&image_path).unwrap();
+        let expected_size = fs::metadata(&image_path).unwrap().len();
+
+        let metadata =
+            get_image_metadata_blocking(image_path.to_string_lossy().to_string()).unwrap();
+
+        assert_eq!(metadata.width, Some(2));
+        assert_eq!(metadata.height, Some(3));
+        assert_eq!(metadata.format, "PNG");
+        assert_eq!(metadata.file_size_bytes, expected_size);
     }
 }
