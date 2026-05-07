@@ -1,4 +1,6 @@
 use crate::thumbnails;
+use base64::Engine;
+use image::GenericImageView;
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
@@ -224,6 +226,51 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
     tauri::async_runtime::spawn_blocking(move || get_image_metadata_blocking(file_path))
         .await
         .map_err(|err| format!("Image metadata worker failed: {}", err))?
+}
+
+fn get_preview_image_blocking(file_path: String, max_dimension: u32) -> Result<String, String> {
+    if max_dimension == 0 {
+        return Err("max_dimension must be greater than zero".to_string());
+    }
+
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let img = image::open(path).map_err(|e| format!("Failed to open image for preview: {}", e))?;
+    let (width, height) = img.dimensions();
+    let preview = if width > max_dimension || height > max_dimension {
+        img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let has_alpha = preview.color().has_alpha();
+    let mime_type = if has_alpha { "image/png" } else { "image/jpeg" };
+
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    if has_alpha {
+        preview
+            .write_to(&mut buffer, image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
+    } else {
+        image::DynamicImage::ImageRgb8(preview.to_rgb8())
+            .write_to(&mut buffer, image::ImageFormat::Jpeg)
+            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
+    }
+
+    let bytes = buffer.into_inner();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", mime_type, encoded))
+}
+
+#[tauri::command]
+pub async fn get_preview_image(file_path: String, max_dimension: u32) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_preview_image_blocking(file_path, max_dimension)
+    })
+    .await
+    .map_err(|err| format!("Preview image worker failed: {}", err))?
 }
 
 /// Get the settings file path
@@ -464,6 +511,7 @@ pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
     use std::fs::File;
     use tempfile::tempdir;
 
@@ -517,5 +565,50 @@ mod tests {
         assert_eq!(metadata.height, Some(3));
         assert_eq!(metadata.format, "PNG");
         assert_eq!(metadata.file_size_bytes, expected_size);
+    }
+
+    fn decode_data_url(data_url: &str) -> Vec<u8> {
+        let (_, payload) = data_url.split_once(',').unwrap();
+        base64::engine::general_purpose::STANDARD.decode(payload).unwrap()
+    }
+
+    #[test]
+    fn test_get_preview_image_blocking_respects_max_dimension() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large.jpg");
+        image::RgbImage::from_pixel(5000, 3000, image::Rgb([200, 50, 50]))
+            .save(&image_path)
+            .unwrap();
+
+        let preview_data_url =
+            get_preview_image_blocking(image_path.to_string_lossy().to_string(), 2048).unwrap();
+        let bytes = decode_data_url(&preview_data_url);
+        let preview = image::load_from_memory(&bytes).unwrap();
+        let (width, height) = preview.dimensions();
+
+        assert!(
+            preview_data_url.starts_with("data:image/jpeg;base64,")
+                || preview_data_url.starts_with("data:image/png;base64,")
+        );
+        assert!(width <= 2048);
+        assert!(height <= 2048);
+    }
+
+    #[test]
+    fn test_get_preview_image_blocking_does_not_upscale_small_images() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("small.png");
+        image::RgbaImage::from_pixel(640, 360, image::Rgba([0, 120, 220, 255]))
+            .save(&image_path)
+            .unwrap();
+
+        let preview_data_url =
+            get_preview_image_blocking(image_path.to_string_lossy().to_string(), 2048).unwrap();
+        let bytes = decode_data_url(&preview_data_url);
+        let preview = image::load_from_memory(&bytes).unwrap();
+        let (width, height) = preview.dimensions();
+
+        assert_eq!(width, 640);
+        assert_eq!(height, 360);
     }
 }

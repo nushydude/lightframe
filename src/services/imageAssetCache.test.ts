@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const convertFileSrcMock = vi.fn(async (path: string) => `asset://localhost/${path}`);
+const getPreviewImageMock = vi.fn(
+  async (path: string, maxDimension: number) =>
+    `data:image/jpeg;base64,preview-${maxDimension}-${path}`
+);
 
 vi.mock('./tauriCommands', () => ({
   convertFileSrc: convertFileSrcMock,
+  getPreviewImage: getPreviewImageMock,
 }));
 
 async function loadCacheModule() {
@@ -176,5 +181,42 @@ describe('imageAssetCache', () => {
     await getImageAssetUrl(pathA);
     await getImageAssetUrl(pathB);
     expect(convertFileSrcMock).toHaveBeenCalledTimes(6);
+  });
+
+  it('caches preview data URLs and reuses them for repeated reads', async () => {
+    const { getPreviewAsset } = await loadCacheModule();
+    const path = 'C:/images/preview-a.jpg';
+
+    const first = await getPreviewAsset(path);
+    const second = await getPreviewAsset(path);
+
+    expect(first).toBe(second);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidateImageAsset clears stale preview cache for that path', async () => {
+    const { getPreviewAsset, invalidateImageAsset } = await loadCacheModule();
+    const path = 'C:/images/preview-invalidate.jpg';
+
+    await getPreviewAsset(path);
+    invalidateImageAsset(path);
+    await getPreviewAsset(path);
+
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps preview cache bounded and evicts least-recently-used entries', async () => {
+    const { getPreviewAsset } = await loadCacheModule();
+    const paths = Array.from({ length: 13 }, (_, i) => `C:/images/preview-${i}.jpg`);
+
+    for (const [index, path] of paths.entries()) {
+      vi.setSystemTime(new Date(`2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`));
+      await getPreviewAsset(path);
+    }
+
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(13);
+
+    await getPreviewAsset(paths[0]);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(14);
   });
 });
