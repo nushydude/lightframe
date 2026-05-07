@@ -20,6 +20,7 @@
     "fs:allow-read-file",
     "fs:allow-read-dir",
     "cli:default",
+    "core:window:allow-show",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-title",
