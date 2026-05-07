@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useViewerStore } from '../state/viewerStore';
-import { getThumbnail } from '../services/tauriCommands';
+import {
+  evictThumbnailsExcept,
+  getCachedThumbnail,
+  preloadThumbnails,
+} from '../services/thumbnailCache';
 
 const THUMBNAIL_ITEM_WIDTH = 78;
 const THUMBNAIL_WINDOW_RADIUS = 35;
-const MAX_THUMBNAIL_REQUESTS = 4;
+const MAX_STRIP_THUMBNAILS = 1000;
 
 /**
  * A high-performance horizontal strip of thumbnails for quick navigation.
@@ -14,12 +18,9 @@ export function ThumbnailStrip() {
   const { images, currentIndex, setCurrentIndex } = useViewerStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLDivElement>(null);
-  const cacheRef = useRef<Record<string, string>>({});
-  const queuedRef = useRef<string[]>([]);
-  const queuedPathsRef = useRef<Set<string>>(new Set());
-  const inFlightRef = useRef<Set<string>>(new Set());
-  const batchRef = useRef<Record<string, string>>({});
   const batchRafRef = useRef<number | null>(null);
+  const hasPendingThumbnailUpdatesRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const [, setThumbnailVersion] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -37,9 +38,8 @@ export function ThumbnailStrip() {
 
   const flushThumbnailBatch = useCallback(() => {
     batchRafRef.current = null;
-    const batch = batchRef.current;
-    batchRef.current = {};
-    if (Object.keys(batch).length === 0) return;
+    if (!hasPendingThumbnailUpdatesRef.current) return;
+    hasPendingThumbnailUpdatesRef.current = false;
 
     setThumbnailVersion((version) => version + 1);
   }, []);
@@ -49,63 +49,21 @@ export function ThumbnailStrip() {
     batchRafRef.current = window.requestAnimationFrame(flushThumbnailBatch);
   }, [flushThumbnailBatch]);
 
-  const pumpThumbnailQueue = useCallback(() => {
-    while (
-      inFlightRef.current.size < MAX_THUMBNAIL_REQUESTS &&
-      queuedRef.current.length > 0
-    ) {
-      const path = queuedRef.current.shift();
-      if (!path) return;
-
-      queuedPathsRef.current.delete(path);
-      if (cacheRef.current[path] || inFlightRef.current.has(path)) continue;
-
-      inFlightRef.current.add(path);
-      getThumbnail(path)
-        .then((base64) => {
-          cacheRef.current[path] = base64;
-          batchRef.current[path] = base64;
-          scheduleThumbnailFlush();
-        })
-        .catch((err) => {
-          console.error('Thumbnail failed:', err);
-        })
-        .finally(() => {
-          inFlightRef.current.delete(path);
-          pumpThumbnailQueue();
-        });
-    }
+  const handleThumbnailLoaded = useCallback(() => {
+    if (!isMountedRef.current) return;
+    hasPendingThumbnailUpdatesRef.current = true;
+    scheduleThumbnailFlush();
   }, [scheduleThumbnailFlush]);
 
-  const queueThumbnail = useCallback((path: string) => {
-    if (
-      cacheRef.current[path] ||
-      queuedPathsRef.current.has(path) ||
-      inFlightRef.current.has(path)
-    ) {
-      return;
-    }
-
-    queuedPathsRef.current.add(path);
-    queuedRef.current.push(path);
-    pumpThumbnailQueue();
-  }, [pumpThumbnailQueue]);
-
   useEffect(() => {
-    visibleImages.forEach((image) => queueThumbnail(image.path));
-
-    if (Object.keys(cacheRef.current).length > 160) {
-      const keepPaths = new Set(visibleImages.map((image) => image.path));
-      const nextCache: Record<string, string> = {};
-      keepPaths.forEach((path) => {
-        if (cacheRef.current[path]) {
-          nextCache[path] = cacheRef.current[path];
-        }
-      });
-      cacheRef.current = nextCache;
-      setThumbnailVersion((version) => version + 1);
-    }
-  }, [queueThumbnail, visibleImages]);
+    const visiblePaths = visibleImages.map((image) => image.path);
+    preloadThumbnails(visiblePaths, {
+      concurrency: 4,
+      onLoaded: handleThumbnailLoaded,
+      isActive: () => isMountedRef.current,
+    });
+    evictThumbnailsExcept(new Set(visiblePaths), MAX_STRIP_THUMBNAILS);
+  }, [handleThumbnailLoaded, visibleImages]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -137,6 +95,7 @@ export function ThumbnailStrip() {
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       if (batchRafRef.current !== null) {
         window.cancelAnimationFrame(batchRafRef.current);
       }
@@ -157,7 +116,7 @@ export function ThumbnailStrip() {
         {visibleImages.map((image, visibleIndex) => {
           const index = startIndex + visibleIndex;
           const isActive = index === currentIndex;
-          const url = cacheRef.current[image.path];
+          const url = getCachedThumbnail(image.path);
 
           return (
             <div
