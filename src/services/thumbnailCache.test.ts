@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getThumbnailMock = vi.fn<(path: string) => Promise<string>>();
+const getThumbnailMock = vi.fn<
+  (path: string, sizeBytes?: number, modifiedAt?: string) => Promise<string>
+>();
 
 vi.mock('./tauriCommands', () => ({
   getThumbnail: getThumbnailMock,
@@ -40,6 +42,83 @@ describe('thumbnailCache', () => {
     expect(cached).toBe('data:image/jpeg;base64,AAA');
     expect(second).toBe('data:image/jpeg;base64,AAA');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
+
+    clearThumbnailCacheForTests();
+  });
+
+  it('reuses cached thumbnails for identical structured requests', async () => {
+    const { clearThumbnailCacheForTests, loadThumbnail } = await loadThumbnailCacheModule();
+    getThumbnailMock.mockResolvedValueOnce('data:image/jpeg;base64,STRUCTURED');
+
+    const request = { path: 'C:/images/structured.jpg', sizeBytes: 300, modifiedAt: '10' };
+    const first = await loadThumbnail(request);
+    const second = await loadThumbnail(request);
+
+    expect(first).toBe('data:image/jpeg;base64,STRUCTURED');
+    expect(second).toBe('data:image/jpeg;base64,STRUCTURED');
+    expect(getThumbnailMock).toHaveBeenCalledTimes(1);
+    expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/structured.jpg', 300, '10');
+
+    clearThumbnailCacheForTests();
+  });
+
+  it('drops stale path entries when metadata changes for the same image path', async () => {
+    const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
+      await loadThumbnailCacheModule();
+
+    getThumbnailMock
+      .mockResolvedValueOnce('data:image/jpeg;base64,OLD')
+      .mockResolvedValueOnce('data:image/jpeg;base64,NEW');
+
+    await loadThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' });
+
+    expect(
+      getCachedThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' })
+    ).toBe('data:image/jpeg;base64,OLD');
+
+    expect(
+      getCachedThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '2' })
+    ).toBeUndefined();
+
+    const refreshed = await loadThumbnail({
+      path: 'C:/images/a.jpg',
+      sizeBytes: 100,
+      modifiedAt: '2',
+    });
+
+    expect(refreshed).toBe('data:image/jpeg;base64,NEW');
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(1, 'C:/images/a.jpg', 100, '1');
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(2, 'C:/images/a.jpg', 100, '2');
+
+    clearThumbnailCacheForTests();
+  });
+
+  it('ignores stale in-flight completions when metadata changes mid-flight', async () => {
+    const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
+      await loadThumbnailCacheModule();
+    const deferredA = createDeferred<string>();
+    const deferredB = createDeferred<string>();
+
+    getThumbnailMock
+      .mockImplementationOnce(() => deferredA.promise)
+      .mockImplementationOnce(() => deferredB.promise);
+
+    const requestA = { path: 'C:/images/race.jpg', sizeBytes: 100, modifiedAt: '1' };
+    const requestB = { path: 'C:/images/race.jpg', sizeBytes: 100, modifiedAt: '2' };
+
+    const promiseA = loadThumbnail(requestA);
+    const promiseB = loadThumbnail(requestB);
+
+    expect(promiseA).not.toBe(promiseB);
+    expect(getThumbnailMock).toHaveBeenCalledTimes(2);
+
+    deferredA.resolve('data:image/jpeg;base64,OLD');
+    await expect(promiseA).resolves.toBe('data:image/jpeg;base64,OLD');
+    expect(getCachedThumbnail(requestB)).toBeUndefined();
+
+    deferredB.resolve('data:image/jpeg;base64,NEW');
+    await expect(promiseB).resolves.toBe('data:image/jpeg;base64,NEW');
+    expect(getCachedThumbnail(requestB)).toBe('data:image/jpeg;base64,NEW');
 
     clearThumbnailCacheForTests();
   });

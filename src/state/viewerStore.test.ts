@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useViewerStore } from './viewerStore';
 
-const { saveRotatedImageMock, invalidateImageAssetMock } = vi.hoisted(() => ({
+const { saveRotatedImageMock, invalidateImageAssetMock, invalidateThumbnailMock } = vi.hoisted(() => ({
   saveRotatedImageMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
+  invalidateThumbnailMock: vi.fn(),
 }));
 
 vi.mock('../services/tauriCommands', () => ({
@@ -12,6 +13,10 @@ vi.mock('../services/tauriCommands', () => ({
 
 vi.mock('../services/imageAssetCache', () => ({
   invalidateImageAsset: invalidateImageAssetMock,
+}));
+
+vi.mock('../services/thumbnailCache', () => ({
+  invalidateThumbnail: invalidateThumbnailMock,
 }));
 
 describe('viewerStore', () => {
@@ -125,6 +130,7 @@ describe('viewerStore', () => {
 
     expect(saveRotatedImageMock).toHaveBeenCalledWith('test.jpg', 90);
     expect(invalidateImageAssetMock).toHaveBeenCalledWith('test.jpg');
+    expect(invalidateThumbnailMock).toHaveBeenCalledWith('test.jpg');
     expect(useViewerStore.getState().rotation).toBe(0);
     expect(useViewerStore.getState().cacheBuster).toBe(5678);
   });
