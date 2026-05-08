@@ -21,6 +21,8 @@
     "fs:allow-read-dir",
     "cli:default",
     "core:window:allow-show",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-title",

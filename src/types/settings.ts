@@ -7,6 +7,10 @@ export interface AppSettings {
   mouseWheelBehavior: 'zoom' | 'navigate';
   defaultFitMode: 'fit' | 'fill' | 'actual';
   rememberWindowBounds: boolean;
+  windowX?: number;
+  windowY?: number;
+  windowWidth?: number;
+  windowHeight?: number;
   sortOrder: 'name' | 'date' | 'size' | 'random';
   showThumbnails: boolean;
 }
@@ -35,6 +39,10 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     mouse_wheel_behavior: settings.mouseWheelBehavior,
     default_fit_mode: settings.defaultFitMode,
     remember_window_bounds: settings.rememberWindowBounds,
+    window_x: settings.windowX,
+    window_y: settings.windowY,
+    window_width: settings.windowWidth,
+    window_height: settings.windowHeight,
     sort_order: settings.sortOrder,
     show_thumbnails: settings.showThumbnails,
   };
@@ -57,6 +65,10 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       (raw.default_fit_mode as AppSettings['defaultFitMode']) || DEFAULT_SETTINGS.defaultFitMode,
     rememberWindowBounds:
       (raw.remember_window_bounds as boolean) ?? DEFAULT_SETTINGS.rememberWindowBounds,
+    windowX: raw.window_x as number | undefined,
+    windowY: raw.window_y as number | undefined,
+    windowWidth: raw.window_width as number | undefined,
+    windowHeight: raw.window_height as number | undefined,
     sortOrder:
       (raw.sort_order as AppSettings['sortOrder']) || DEFAULT_SETTINGS.sortOrder,
     showThumbnails: (raw.show_thumbnails as boolean) ?? DEFAULT_SETTINGS.showThumbnails,

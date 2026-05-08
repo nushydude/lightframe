@@ -1,0 +1,150 @@
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SETTINGS } from '../types/settings';
+import { hasCompleteWindowBounds, persistWindowBoundsSafely, shouldPersistWindowBounds } from './windowBounds';
+
+describe('hasCompleteWindowBounds', () => {
+  it('returns true when all bounds are finite numbers', () => {
+    expect(
+      hasCompleteWindowBounds({
+        windowX: 100,
+        windowY: 200,
+        windowWidth: 1200,
+        windowHeight: 800,
+      })
+    ).toBe(true);
+  });
+
+  it('returns false when any bounds value is missing', () => {
+    expect(
+      hasCompleteWindowBounds({
+        windowX: 100,
+        windowY: 200,
+        windowWidth: 1200,
+      })
+    ).toBe(false);
+  });
+});
+
+describe('shouldPersistWindowBounds', () => {
+  it('returns true for main window when remember is enabled and window is normal', () => {
+    expect(
+      shouldPersistWindowBounds({
+        settings: { ...DEFAULT_SETTINGS, rememberWindowBounds: true },
+        isMainWindow: true,
+        isFullscreen: false,
+        isMinimized: false,
+      })
+    ).toBe(true);
+  });
+
+  it('returns false when remember is disabled', () => {
+    expect(
+      shouldPersistWindowBounds({
+        settings: { ...DEFAULT_SETTINGS, rememberWindowBounds: false },
+        isMainWindow: true,
+        isFullscreen: false,
+        isMinimized: false,
+      })
+    ).toBe(false);
+  });
+
+  it('returns false for non-main windows', () => {
+    expect(
+      shouldPersistWindowBounds({
+        settings: { ...DEFAULT_SETTINGS, rememberWindowBounds: true },
+        isMainWindow: false,
+        isFullscreen: false,
+        isMinimized: false,
+      })
+    ).toBe(false);
+  });
+
+  it('returns false while fullscreen or minimized', () => {
+    expect(
+      shouldPersistWindowBounds({
+        settings: { ...DEFAULT_SETTINGS, rememberWindowBounds: true },
+        isMainWindow: true,
+        isFullscreen: true,
+        isMinimized: false,
+      })
+    ).toBe(false);
+
+    expect(
+      shouldPersistWindowBounds({
+        settings: { ...DEFAULT_SETTINGS, rememberWindowBounds: true },
+        isMainWindow: true,
+        isFullscreen: false,
+        isMinimized: true,
+      })
+    ).toBe(false);
+  });
+});
+
+describe('persistWindowBoundsSafely', () => {
+  const baseSettings = {
+    ...DEFAULT_SETTINGS,
+    rememberWindowBounds: true,
+  };
+
+  it('does not call updateSettings if unmounted after flag read resolves', async () => {
+    let isUnmounted = false;
+    let resolveFlags!: (value: { isFullscreen: boolean; isMinimized: boolean }) => void;
+    const flagsPromise = new Promise<{ isFullscreen: boolean; isMinimized: boolean }>((resolve) => {
+      resolveFlags = resolve;
+    });
+    const updateSettings = vi.fn(async () => {});
+
+    const persistPromise = persistWindowBoundsSafely({
+      isUnmounted: () => isUnmounted,
+      isSettingsLoaded: true,
+      isMainWindow: true,
+      settings: baseSettings,
+      readWindowFlags: () => flagsPromise,
+      readWindowBounds: async () => ({
+        position: { x: 100, y: 100 },
+        size: { width: 1280, height: 720 },
+      }),
+      updateSettings,
+    });
+
+    isUnmounted = true;
+    resolveFlags({ isFullscreen: false, isMinimized: false });
+    await persistPromise;
+
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('does not call updateSettings if unmounted after bounds read resolves', async () => {
+    let isUnmounted = false;
+    let resolveBounds!: (value: {
+      position: { x: number; y: number };
+      size: { width: number; height: number };
+    }) => void;
+    const boundsPromise = new Promise<{
+      position: { x: number; y: number };
+      size: { width: number; height: number };
+    }>((resolve) => {
+      resolveBounds = resolve;
+    });
+    const updateSettings = vi.fn(async () => {});
+
+    const persistPromise = persistWindowBoundsSafely({
+      isUnmounted: () => isUnmounted,
+      isSettingsLoaded: true,
+      isMainWindow: true,
+      settings: baseSettings,
+      readWindowFlags: async () => ({ isFullscreen: false, isMinimized: false }),
+      readWindowBounds: () => boundsPromise,
+      updateSettings,
+    });
+
+    isUnmounted = true;
+    resolveBounds({
+      position: { x: 200, y: 150 },
+      size: { width: 1366, height: 768 },
+    });
+    await persistPromise;
+
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+});
