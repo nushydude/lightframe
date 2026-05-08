@@ -28,6 +28,7 @@ function App() {
     setError,
     setShowControls,
     setFullscreen,
+    setDefaultZoomMode,
     reset,
   } = useViewerStore();
 
@@ -81,14 +82,23 @@ function App() {
     }
   }, [settings.theme]);
 
+  // Keep viewer default zoom mode in sync with settings for newly opened images.
+  useEffect(() => {
+    setDefaultZoomMode(settings.defaultFitMode);
+  }, [settings.defaultFitMode, setDefaultZoomMode]);
+
   // Handle CLI arguments (default file association) and resolve startup readiness
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let isCancelled = false;
 
     async function init() {
-      // Request settings immediately; empty startup can render once this is requested.
-      void loadSettings();
+      // Ensure persisted settings are loaded before startup image open.
+      await loadSettings();
+      if (!isCancelled) {
+        const loadedDefaultFitMode = useSettingsStore.getState().settings.defaultFitMode;
+        useViewerStore.getState().setDefaultZoomMode(loadedDefaultFitMode);
+      }
 
       try {
         const matches = await getMatches();
