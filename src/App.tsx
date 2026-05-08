@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
 import { getMatches } from '@tauri-apps/plugin-cli';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
@@ -17,6 +17,10 @@ import { useSettingsStore } from './state/settingsStore';
 
 import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
+import {
+  hasCompleteWindowBounds,
+  persistWindowBoundsSafely,
+} from './services/windowBounds';
 
 function App() {
   const {
@@ -32,7 +36,7 @@ function App() {
     reset,
   } = useViewerStore();
 
-  const { settings, loadSettings } = useSettingsStore();
+  const { settings, isLoaded, loadSettings, updateSettings } = useSettingsStore();
 
   const {
     openImage,
@@ -58,6 +62,11 @@ function App() {
   const [startupShowAttempted, setStartupShowAttempted] = useState(false);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupShowAttemptedRef = useRef(false);
+  const appWindowRef = useRef(getCurrentWindow());
+  const isMainWindowRef = useRef(appWindowRef.current.label === 'main');
+  const settingsRef = useRef(settings);
+  const settingsLoadedRef = useRef(isLoaded);
+  const saveBoundsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showMainWindowOnce = useCallback(async () => {
     if (startupShowAttemptedRef.current) return;
@@ -65,11 +74,20 @@ function App() {
     setStartupShowAttempted(true);
 
     try {
-      await getCurrentWindow().show();
+      await appWindowRef.current.show();
     } catch (err) {
       console.error('Failed to show main window:', err);
     }
   }, []);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+    settingsLoadedRef.current = isLoaded;
+    if (!settings.rememberWindowBounds && saveBoundsTimerRef.current) {
+      clearTimeout(saveBoundsTimerRef.current);
+      saveBoundsTimerRef.current = null;
+    }
+  }, [isLoaded, settings]);
 
   // Apply theme
   useEffect(() => {
@@ -96,8 +114,26 @@ function App() {
       // Ensure persisted settings are loaded before startup image open.
       await loadSettings();
       if (!isCancelled) {
-        const loadedDefaultFitMode = useSettingsStore.getState().settings.defaultFitMode;
+        const loadedSettings = useSettingsStore.getState().settings;
+        const loadedDefaultFitMode = loadedSettings.defaultFitMode;
         useViewerStore.getState().setDefaultZoomMode(loadedDefaultFitMode);
+
+        if (
+          isMainWindowRef.current &&
+          loadedSettings.rememberWindowBounds &&
+          hasCompleteWindowBounds(loadedSettings)
+        ) {
+          try {
+            await appWindowRef.current.setPosition(
+              new PhysicalPosition(loadedSettings.windowX, loadedSettings.windowY)
+            );
+            await appWindowRef.current.setSize(
+              new PhysicalSize(loadedSettings.windowWidth, loadedSettings.windowHeight)
+            );
+          } catch (err) {
+            console.error('Failed to restore window bounds:', err);
+          }
+        }
       }
 
       try {
@@ -134,6 +170,89 @@ function App() {
     if (!hasStartupResolved || startupShowAttempted) return;
     void showMainWindowOnce();
   }, [hasStartupResolved, showMainWindowOnce, startupShowAttempted]);
+
+  useEffect(() => {
+    if (!isMainWindowRef.current) return;
+
+    let isUnmounted = false;
+    let unlistenMoved: (() => void) | undefined;
+    let unlistenResized: (() => void) | undefined;
+
+    const persistWindowBounds = async () => {
+      try {
+        await persistWindowBoundsSafely({
+          isUnmounted: () => isUnmounted,
+          isSettingsLoaded: settingsLoadedRef.current,
+          isMainWindow: true,
+          settings: settingsRef.current,
+          readWindowFlags: async () => {
+            const [isFullscreen, isMinimized] = await Promise.all([
+              appWindowRef.current.isFullscreen(),
+              appWindowRef.current.isMinimized(),
+            ]);
+            return { isFullscreen, isMinimized };
+          },
+          readWindowBounds: async () => {
+            const [position, size] = await Promise.all([
+              appWindowRef.current.outerPosition(),
+              appWindowRef.current.innerSize(),
+            ]);
+            return { position, size };
+          },
+          updateSettings: async (partial) => {
+            if (isUnmounted) return;
+            await updateSettings(partial);
+          },
+        });
+      } catch (err) {
+        console.error('Failed to persist window bounds:', err);
+      }
+    };
+
+    const scheduleWindowBoundsPersist = () => {
+      if (saveBoundsTimerRef.current) {
+        clearTimeout(saveBoundsTimerRef.current);
+      }
+      saveBoundsTimerRef.current = setTimeout(() => {
+        saveBoundsTimerRef.current = null;
+        void persistWindowBounds();
+      }, 500);
+    };
+
+    appWindowRef.current.onMoved(() => {
+      scheduleWindowBoundsPersist();
+    }).then((unlisten) => {
+      if (isUnmounted) {
+        unlisten();
+      } else {
+        unlistenMoved = unlisten;
+      }
+    }).catch((err) => {
+      console.error('Failed to attach window move listener:', err);
+    });
+
+    appWindowRef.current.onResized(() => {
+      scheduleWindowBoundsPersist();
+    }).then((unlisten) => {
+      if (isUnmounted) {
+        unlisten();
+      } else {
+        unlistenResized = unlisten;
+      }
+    }).catch((err) => {
+      console.error('Failed to attach window resize listener:', err);
+    });
+
+    return () => {
+      isUnmounted = true;
+      if (saveBoundsTimerRef.current) {
+        clearTimeout(saveBoundsTimerRef.current);
+        saveBoundsTimerRef.current = null;
+      }
+      if (unlistenMoved) unlistenMoved();
+      if (unlistenResized) unlistenResized();
+    };
+  }, [updateSettings]);
 
   // Listen for tauri file drop events
   useEffect(() => {
@@ -191,9 +310,8 @@ function App() {
     }
     if (!currentImagePath) return;
     try {
-      const appWindow = getCurrentWindow();
       const newFs = !isFullscreen;
-      await appWindow.setFullscreen(newFs);
+      await appWindowRef.current.setFullscreen(newFs);
       setFullscreen(newFs);
     } catch (err) {
       console.error('Failed to toggle fullscreen:', err);
@@ -203,7 +321,7 @@ function App() {
   const handleGoHome = useCallback(async () => {
     try {
       if (isFullscreen) {
-        await getCurrentWindow().setFullscreen(false);
+        await appWindowRef.current.setFullscreen(false);
         setFullscreen(false);
       }
     } catch (err) {
@@ -231,7 +349,7 @@ function App() {
 
   // Detect if this is a secondary window
   useEffect(() => {
-    const label = getCurrentWindow().label;
+    const label = appWindowRef.current.label;
     setIsSecondary(label === 'secondary');
   }, []);
 

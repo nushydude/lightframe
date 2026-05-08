@@ -39,6 +39,14 @@ pub struct AppSettings {
     pub mouse_wheel_behavior: String,
     pub default_fit_mode: String,
     pub remember_window_bounds: bool,
+    #[serde(default)]
+    pub window_x: Option<f64>,
+    #[serde(default)]
+    pub window_y: Option<f64>,
+    #[serde(default)]
+    pub window_width: Option<f64>,
+    #[serde(default)]
+    pub window_height: Option<f64>,
     pub sort_order: String,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
@@ -59,6 +67,10 @@ impl Default for AppSettings {
             mouse_wheel_behavior: "zoom".to_string(),
             default_fit_mode: "fit".to_string(),
             remember_window_bounds: true,
+            window_x: None,
+            window_y: None,
+            window_width: None,
+            window_height: None,
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
         }
@@ -659,5 +671,27 @@ mod tests {
 
         assert_eq!(width, 640);
         assert_eq!(height, 360);
+    }
+
+    #[test]
+    fn test_app_settings_deserialize_legacy_json_without_window_bounds() {
+        let legacy_json = r#"{
+            "theme":"dark",
+            "slideshow_interval_seconds":4,
+            "loop_slideshow":false,
+            "shuffle_slideshow":false,
+            "auto_fullscreen_on_slideshow":true,
+            "mouse_wheel_behavior":"zoom",
+            "default_fit_mode":"fit",
+            "remember_window_bounds":true,
+            "sort_order":"name",
+            "show_thumbnails":true
+        }"#;
+
+        let settings: AppSettings = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(settings.window_x, None);
+        assert_eq!(settings.window_y, None);
+        assert_eq!(settings.window_width, None);
+        assert_eq!(settings.window_height, None);
     }
 }
