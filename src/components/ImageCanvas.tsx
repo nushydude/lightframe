@@ -7,6 +7,12 @@ import {
   preloadPreviewAsset,
   trimImageAssetCache,
 } from '../services/imageAssetCache';
+import {
+  NAVIGATION_CACHE_MAX_FULL_ASSET_ENTRIES,
+  NAVIGATION_CACHE_NEXT_IMAGES,
+  NAVIGATION_CACHE_PRELOAD_DEBOUNCE_MS,
+  NAVIGATION_CACHE_PREVIOUS_IMAGES,
+} from '../services/navigationCacheConfig';
 import { getImageMetadata } from '../services/tauriCommands';
 import type { ImageMetadata } from '../types/image';
 import { useZoomPan } from '../hooks/useZoomPan';
@@ -22,6 +28,16 @@ type ImageCanvasProps = {
   onWheelPrev?: () => void;
 };
 
+function getHotWindowIndices(currentIndex: number, imageCount: number): number[] {
+  const start = Math.max(0, currentIndex - NAVIGATION_CACHE_PREVIOUS_IMAGES);
+  const end = Math.min(imageCount - 1, currentIndex + NAVIGATION_CACHE_NEXT_IMAGES);
+  const indices: number[] = [];
+  for (let index = start; index <= end; index += 1) {
+    indices.push(index);
+  }
+  return indices;
+}
+
 /** Main image display canvas with zoom/pan support */
 export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -34,7 +50,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomMode: 'fit',
     zoomLevel: 1,
   });
-  const { currentImagePath, zoomMode, currentIndex, rotation, cacheBuster } = useViewerStore();
+  const { currentImagePath, zoomMode, currentIndex, rotation, cacheBuster, loadGeneration } =
+    useViewerStore();
   const {
     zoomLevel,
     panX,
@@ -185,40 +202,63 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     ensureFullResolutionLoaded(currentImagePath, activeRequestIdRef.current);
   }, [currentImagePath, ensureFullResolutionLoaded, isFullResolutionReady, zoomLevel, zoomMode]);
 
+  useEffect(() => {
+    const folderPaths = new Set(images.map((image) => image.path));
+    trimImageAssetCache(folderPaths, Number.POSITIVE_INFINITY, { pruneMissing: true });
+  }, [images]);
+
   // Preload adjacent images
   useEffect(() => {
     if (images.length === 0 || currentIndex < 0) return;
 
-    // Longer debounce for preload so we don't spam requests when scanning quickly
+    let cancelled = false;
+    const preloadIndices = getHotWindowIndices(currentIndex, images.length);
+    const keepSet = new Set(preloadIndices.map((index) => images[index].path));
+    const scheduledLoadGeneration = loadGeneration;
+    const canStore = () =>
+      !cancelled &&
+      isMountedRef.current &&
+      useViewerStore.getState().loadGeneration === scheduledLoadGeneration;
+
+    // Debounce preloading so quick scanning does not flood cache requests.
     const timer = window.setTimeout(() => {
-      const preloadIndices = [currentIndex - 1, currentIndex + 1, currentIndex + 2];
-      preloadIndices.forEach((idx) => {
-        if (idx >= 0 && idx < images.length) {
-          const path = images[idx].path;
+      if (!canStore()) {
+        return;
+      }
+
+      const preloadPromises = preloadIndices
+        .map((index) => images[index]?.path)
+        .filter((path): path is string => Boolean(path) && path !== currentImagePath)
+        .map((path) => {
           const metadataForPath = metadataByPathRef.current.get(path) ?? null;
           const preloadPromise = shouldPreloadAdjacentFullResolution(
             metadataForPath,
             PREVIEW_MAX_DIMENSION
           )
-            ? preloadFullAsset(path)
-            : preloadPreviewAsset(path, PREVIEW_MAX_DIMENSION);
+            ? preloadFullAsset(path, { canStore })
+            : preloadPreviewAsset(path, PREVIEW_MAX_DIMENSION, { canStore });
 
-          preloadPromise.catch(() => {
+          return preloadPromise.catch(() => {
             // Ignore preload failures
           });
+        });
+
+      void Promise.allSettled(preloadPromises).then(() => {
+        if (!canStore()) {
+          return;
         }
+
+        trimImageAssetCache(keepSet, NAVIGATION_CACHE_MAX_FULL_ASSET_ENTRIES, {
+          pruneMissing: true,
+        });
       });
+    }, NAVIGATION_CACHE_PRELOAD_DEBOUNCE_MS);
 
-      const currentPaths = new Set(
-        images
-          .slice(Math.max(0, currentIndex - 5), currentIndex + 6)
-          .map((img) => img.path)
-      );
-      trimImageAssetCache(currentPaths, 20);
-    }, 150);
-
-    return () => window.clearTimeout(timer);
-  }, [currentIndex, images]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [currentImagePath, currentIndex, images, loadGeneration]);
 
   const handleImageLoad = useCallback(() => {
     setIsLoading(false);

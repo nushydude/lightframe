@@ -13,6 +13,16 @@ type PreviewAssetEntry = {
   lastUsedAt: number;
 };
 
+type CacheStoreGuard = () => boolean;
+
+type CacheReadOptions = {
+  canStore?: CacheStoreGuard;
+};
+
+type CacheTrimOptions = {
+  pruneMissing?: boolean;
+};
+
 const fullImageAssetCache = new Map<string, ImageAssetEntry>();
 const previewImageAssetCache = new Map<string, PreviewAssetEntry>();
 const pendingInvalidations = new Map<string, number>();
@@ -93,7 +103,19 @@ function trimCacheEntries<T extends { lastUsedAt: number }>(
   }
 }
 
-export async function getFullAsset(path: string): Promise<string> {
+function shouldStore(options?: CacheReadOptions): boolean {
+  return options?.canStore?.() ?? true;
+}
+
+function maybePruneEntries<T>(cache: Map<string, T>, keepPaths: Set<string>): void {
+  for (const path of cache.keys()) {
+    if (!keepPaths.has(path)) {
+      cache.delete(path);
+    }
+  }
+}
+
+export async function getFullAsset(path: string, options?: CacheReadOptions): Promise<string> {
   const existing = fullImageAssetCache.get(path);
   if (existing) {
     existing.lastUsedAt = Date.now();
@@ -107,6 +129,10 @@ export async function getFullAsset(path: string): Promise<string> {
   if (resolvedVersion !== entry.version) {
     entry.version = resolvedVersion;
     entry.url = applyVersionToUrl(entry.url, resolvedVersion);
+  }
+
+  if (!shouldStore(options)) {
+    return entry.url;
   }
 
   const current = fullImageAssetCache.get(path);
@@ -134,7 +160,8 @@ export async function getImageAssetUrl(path: string): Promise<string> {
 
 export async function getPreviewAsset(
   path: string,
-  maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION
+  maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION,
+  options?: CacheReadOptions
 ): Promise<string> {
   const version = currentVersion(path);
   const existing = previewImageAssetCache.get(path);
@@ -160,6 +187,10 @@ export async function getPreviewAsset(
     };
   }
 
+  if (!shouldStore(options)) {
+    return entry.dataUrl;
+  }
+
   const current = previewImageAssetCache.get(path);
   if (
     current &&
@@ -182,17 +213,34 @@ export async function getPreviewAsset(
   return entry.dataUrl;
 }
 
-export async function preloadFullAsset(path: string): Promise<void> {
-  const url = await getFullAsset(path);
+export async function preloadFullAsset(path: string, options?: CacheReadOptions): Promise<void> {
+  if (!shouldStore(options)) {
+    return;
+  }
+
+  const url = await getFullAsset(path, options);
+  if (!shouldStore(options)) {
+    return;
+  }
+
   const img = new Image();
   img.src = url;
 }
 
 export async function preloadPreviewAsset(
   path: string,
-  maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION
+  maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION,
+  options?: CacheReadOptions
 ): Promise<void> {
-  const dataUrl = await getPreviewAsset(path, maxDimension);
+  if (!shouldStore(options)) {
+    return;
+  }
+
+  const dataUrl = await getPreviewAsset(path, maxDimension, options);
+  if (!shouldStore(options)) {
+    return;
+  }
+
   const img = new Image();
   img.src = dataUrl;
 }
@@ -206,17 +254,20 @@ export function invalidateImageAsset(path: string): void {
   pendingInvalidations.set(path, version);
   latestMutationVersions.set(path, version);
 
+  fullImageAssetCache.delete(path);
   previewImageAssetCache.delete(path);
-
-  const existing = fullImageAssetCache.get(path);
-  if (!existing) return;
-
-  existing.version = version;
-  existing.url = applyVersionToUrl(existing.url, version);
-  existing.lastUsedAt = Date.now();
 }
 
-export function trimImageAssetCache(keepPaths: Set<string>, maxEntries: number): void {
+export function trimImageAssetCache(
+  keepPaths: Set<string>,
+  maxEntries: number,
+  options?: CacheTrimOptions
+): void {
+  if (options?.pruneMissing) {
+    maybePruneEntries(fullImageAssetCache, keepPaths);
+    maybePruneEntries(previewImageAssetCache, keepPaths);
+  }
+
   trimCacheEntries(fullImageAssetCache, keepPaths, maxEntries);
   trimCacheEntries(
     previewImageAssetCache,

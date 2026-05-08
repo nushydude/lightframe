@@ -56,7 +56,7 @@ describe('imageAssetCache', () => {
     expect(secondA).not.toBe(firstA);
     expect(secondA).toContain('v=');
     expect(secondB).toBe(firstB);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
+    expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
   });
 
   it('applies invalidation version when path is invalidated before first read', async () => {
@@ -183,6 +183,23 @@ describe('imageAssetCache', () => {
     expect(convertFileSrcMock).toHaveBeenCalledTimes(6);
   });
 
+  it('trimImageAssetCache can prune non-keep paths even when cache is under max size', async () => {
+    const { getImageAssetUrl, trimImageAssetCache } = await loadCacheModule();
+
+    const keepPath = 'C:/images/keep.jpg';
+    const stalePath = 'C:/images/stale.jpg';
+
+    await getImageAssetUrl(keepPath);
+    await getImageAssetUrl(stalePath);
+    expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
+
+    trimImageAssetCache(new Set([keepPath]), 12, { pruneMissing: true });
+
+    await getImageAssetUrl(keepPath);
+    await getImageAssetUrl(stalePath);
+    expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
+  });
+
   it('caches preview data URLs and reuses them for repeated reads', async () => {
     const { getPreviewAsset } = await loadCacheModule();
     const path = 'C:/images/preview-a.jpg';
@@ -218,5 +235,55 @@ describe('imageAssetCache', () => {
 
     await getPreviewAsset(paths[0]);
     expect(getPreviewImageMock).toHaveBeenCalledTimes(14);
+  });
+
+  it('does not persist full asset cache entry when stale preload guard expires', async () => {
+    const { getImageAssetUrl, preloadFullAsset } = await loadCacheModule();
+    const path = 'C:/images/stale-preload-full.jpg';
+
+    let resolveConvert: ((url: string) => void) | undefined;
+    convertFileSrcMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveConvert = resolve;
+        })
+    );
+
+    let isCurrentGeneration = true;
+    const pendingPreload = preloadFullAsset(path, {
+      canStore: () => isCurrentGeneration,
+    });
+
+    isCurrentGeneration = false;
+    resolveConvert?.(`asset://localhost/${path}`);
+    await pendingPreload;
+
+    await getImageAssetUrl(path);
+    expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not persist preview cache entry when stale preload guard expires', async () => {
+    const { getPreviewAsset, preloadPreviewAsset } = await loadCacheModule();
+    const path = 'C:/images/stale-preload-preview.jpg';
+
+    let resolvePreview: ((dataUrl: string) => void) | undefined;
+    getPreviewImageMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePreview = resolve;
+        })
+    );
+
+    let isCurrentGeneration = true;
+    const pendingPreload = preloadPreviewAsset(path, 2048, {
+      canStore: () => isCurrentGeneration,
+    });
+
+    isCurrentGeneration = false;
+    resolvePreview?.(`data:image/jpeg;base64,preview-2048-${path}`);
+    await pendingPreload;
+
+    await getPreviewAsset(path);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
   });
 });
