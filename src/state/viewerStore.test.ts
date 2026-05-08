@@ -22,6 +22,7 @@ vi.mock('../services/thumbnailCache', () => ({
 describe('viewerStore', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
+    useViewerStore.getState().setDefaultZoomMode('fit');
     vi.clearAllMocks();
   });
 
@@ -34,6 +35,45 @@ describe('viewerStore', () => {
     expect(state.zoomMode).toBe('fit');
     expect(state.zoomLevel).toBe(1);
     expect(state.panX).toBe(0);
+  });
+
+  it('default zoom mode starts as fit', () => {
+    expect(useViewerStore.getState().defaultZoomMode).toBe('fit');
+  });
+
+  it("setDefaultZoomMode('fill') affects setCurrentImage", () => {
+    useViewerStore.getState().setDefaultZoomMode('fill');
+    useViewerStore.getState().setCurrentImage('fill-test.jpg', 0);
+
+    const state = useViewerStore.getState();
+    expect(state.currentImagePath).toBe('fill-test.jpg');
+    expect(state.zoomMode).toBe('fill');
+  });
+
+  it("setDefaultZoomMode('actual') affects setCurrentIndex", () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+    });
+    useViewerStore.getState().setDefaultZoomMode('actual');
+    useViewerStore.getState().setCurrentIndex(1);
+
+    const state = useViewerStore.getState();
+    expect(state.currentIndex).toBe(1);
+    expect(state.currentImagePath).toBe('2.jpg');
+    expect(state.zoomMode).toBe('actual');
+  });
+
+  it("reset preserves defaultZoomMode for next image open", () => {
+    useViewerStore.getState().setDefaultZoomMode('fill');
+    useViewerStore.getState().reset();
+    useViewerStore.getState().setCurrentImage('after-reset.jpg', 0);
+
+    const state = useViewerStore.getState();
+    expect(state.defaultZoomMode).toBe('fill');
+    expect(state.zoomMode).toBe('fill');
   });
 
   it('should navigate next correctly', () => {

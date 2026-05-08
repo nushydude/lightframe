@@ -110,6 +110,38 @@ describe('useImageNavigation', () => {
     });
   });
 
+  it('startup open honors current default zoom mode', async () => {
+    const deferredImages = [
+      { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+    ];
+    (getParentFolder as any).mockReturnValue('c:/test');
+
+    let resolveScan: ((images: typeof deferredImages) => void) | undefined;
+    (scanFolder as any).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveScan = resolve;
+        })
+    );
+
+    act(() => {
+      useViewerStore.getState().setDefaultZoomMode('actual');
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openImageForStartup('c:/test/img1.jpg');
+    });
+
+    expect(useViewerStore.getState().zoomMode).toBe('actual');
+
+    resolveScan?.(deferredImages);
+    await waitFor(() => {
+      expect(useViewerStore.getState().isFolderScanning).toBe(false);
+    });
+  });
+
   it('should navigate next and previous', async () => {
     const mockImages = [
       { path: 'c:/test/img1.jpg', file_name: 'img1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },

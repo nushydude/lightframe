@@ -17,6 +17,7 @@ interface ViewerState {
 
   // Display state
   isFullscreen: boolean;
+  defaultZoomMode: ZoomMode;
   zoomMode: ZoomMode;
   zoomLevel: number;
   panX: number;
@@ -46,6 +47,7 @@ interface ViewerState {
   removeImage: (index: number) => void;
 
   setFullscreen: (fs: boolean) => void;
+  setDefaultZoomMode: (mode: ZoomMode) => void;
   setZoomMode: (mode: ZoomMode) => void;
   setZoomLevel: (level: number) => void;
   setPan: (x: number, y: number) => void;
@@ -75,6 +77,7 @@ const initialState = {
   currentIndex: -1,
   isFolderScanning: false,
   isFullscreen: false,
+  defaultZoomMode: 'fit' as ZoomMode,
   zoomMode: 'fit' as ZoomMode,
   zoomLevel: 1,
   panX: 0,
@@ -97,7 +100,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     set({
       currentImagePath: path,
       currentIndex: index,
-      zoomMode: 'fit',
+      zoomMode: get().defaultZoomMode,
       zoomLevel: 1,
       panX: 0,
       panY: 0,
@@ -112,12 +115,12 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setFolderScanning: (scanning) => set({ isFolderScanning: scanning }),
 
   setCurrentIndex: (index: number) => {
-    const { images } = get();
+    const { images, defaultZoomMode } = get();
     if (index < 0 || index >= images.length) return;
     set({
       currentIndex: index,
       currentImagePath: images[index].path,
-      zoomMode: 'fit',
+      zoomMode: defaultZoomMode,
       zoomLevel: 1,
       panX: 0,
       panY: 0,
@@ -191,6 +194,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   },
 
   setFullscreen: (fs) => set({ isFullscreen: fs }),
+  setDefaultZoomMode: (mode) => set({ defaultZoomMode: mode }),
 
   setZoomMode: (mode) => {
     const updates: Partial<ViewerState> = { zoomMode: mode, panX: 0, panY: 0 };
@@ -272,6 +276,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   reset: () =>
     set((state) => ({
       ...initialState,
+      defaultZoomMode: state.defaultZoomMode,
       loadGeneration: state.loadGeneration + 1,
     })),
 }));
