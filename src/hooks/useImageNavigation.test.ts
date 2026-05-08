@@ -4,6 +4,8 @@ import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { scanFolder, getParentFolder } from '../services/tauriCommands';
+import { invalidateThumbnail } from '../services/thumbnailCache';
+import { invalidateImageAsset } from '../services/imageAssetCache';
 
 // Mock the services and Tauri APIs
 vi.mock('../services/tauriCommands', () => ({
@@ -19,6 +21,14 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: vi.fn(() => ({
     setTitle: vi.fn().mockResolvedValue(undefined),
   })),
+}));
+
+vi.mock('../services/thumbnailCache', () => ({
+  invalidateThumbnail: vi.fn(),
+}));
+
+vi.mock('../services/imageAssetCache', () => ({
+  invalidateImageAsset: vi.fn(),
 }));
 
 // Mock audio for playBoundaryBeep
@@ -42,6 +52,9 @@ const mockAudioContext = {
 describe('useImageNavigation', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, sortOrder: 'name' },
+    });
     vi.clearAllMocks();
   });
 
@@ -163,5 +176,108 @@ describe('useImageNavigation', () => {
     await waitFor(() => {
       expect(useViewerStore.getState().images[0].file_name).toBe('img2.jpg'); // Largest first
     });
+  });
+
+  it('refresh keeps current image when it still exists', async () => {
+    const initialImages = [
+      { path: 'c:/test/a.jpg', file_name: 'a.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/b.jpg', file_name: 'b.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
+    ];
+
+    act(() => {
+      useViewerStore.getState().setFolderPath('c:/test');
+      useViewerStore.getState().setImages(initialImages);
+      useViewerStore.getState().setCurrentIndex(1);
+    });
+
+    (scanFolder as any).mockResolvedValue([
+      { path: 'c:/test/c.jpg', file_name: 'c.jpg', extension: 'jpg', size_bytes: 150, modified_at: '3000' },
+      { path: 'c:/test/b.jpg', file_name: 'b.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
+    ]);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.refreshFolder();
+    });
+
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/b.jpg');
+  });
+
+  it('refresh selects nearest valid index when current image is removed', async () => {
+    const initialImages = [
+      { path: 'c:/test/a.jpg', file_name: 'a.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/b.jpg', file_name: 'b.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
+      { path: 'c:/test/c.jpg', file_name: 'c.jpg', extension: 'jpg', size_bytes: 300, modified_at: '3000' },
+    ];
+
+    act(() => {
+      useViewerStore.getState().setFolderPath('c:/test');
+      useViewerStore.getState().setImages(initialImages);
+      useViewerStore.getState().setCurrentIndex(2);
+    });
+
+    (scanFolder as any).mockResolvedValue([
+      { path: 'c:/test/a.jpg', file_name: 'a.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/b.jpg', file_name: 'b.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2000' },
+    ]);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.refreshFolder();
+    });
+
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/b.jpg');
+    expect(invalidateThumbnail).toHaveBeenCalledWith('c:/test/c.jpg');
+    expect(invalidateImageAsset).toHaveBeenCalledWith('c:/test/c.jpg');
+  });
+
+  it('refresh handles an empty folder', async () => {
+    act(() => {
+      useViewerStore.getState().setFolderPath('c:/test');
+      useViewerStore.getState().setImages([
+        { path: 'c:/test/a.jpg', file_name: 'a.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      ]);
+      useViewerStore.getState().setCurrentIndex(0);
+    });
+
+    (scanFolder as any).mockResolvedValue([]);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.refreshFolder();
+    });
+
+    expect(useViewerStore.getState().images).toEqual([]);
+    expect(useViewerStore.getState().currentImagePath).toBeNull();
+    expect(useViewerStore.getState().currentIndex).toBe(-1);
+    expect(useViewerStore.getState().errorMessage).toContain('No supported images');
+  });
+
+  it('refresh applies non-name sort order', async () => {
+    act(() => {
+      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, sortOrder: 'size' } });
+      useViewerStore.getState().setFolderPath('c:/test');
+      useViewerStore.getState().setImages([
+        { path: 'c:/test/a.jpg', file_name: 'a.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      ]);
+      useViewerStore.getState().setCurrentIndex(0);
+    });
+
+    (scanFolder as any).mockResolvedValue([
+      { path: 'c:/test/a.jpg', file_name: 'a.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1000' },
+      { path: 'c:/test/b.jpg', file_name: 'b.jpg', extension: 'jpg', size_bytes: 300, modified_at: '2000' },
+    ]);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.refreshFolder();
+    });
+
+    expect(useViewerStore.getState().images.map((img) => img.file_name)).toEqual(['b.jpg', 'a.jpg']);
   });
 });

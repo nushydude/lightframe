@@ -8,6 +8,7 @@ import { useViewerStore } from '../state/viewerStore';
 interface ViewerChromeProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
+  onRefreshFolder: () => void;
   onGoHome: () => void;
   onNext: () => void;
   onPrev: () => void;
@@ -19,6 +20,7 @@ interface ViewerChromeProps {
 export function ViewerChrome({
   onOpenFile,
   onOpenFolder,
+  onRefreshFolder,
   onGoHome,
   onNext,
   onPrev,
@@ -29,6 +31,7 @@ export function ViewerChrome({
     currentImagePath,
     images,
     currentIndex,
+    folderPath,
     isFullscreen,
     isSlideshowActive,
     isSlideshowPaused,
@@ -170,6 +173,17 @@ export function ViewerChrome({
             >
               <span className="top-bar-btn-icon">📁</span>
               <span className="top-bar-btn-label">Folder</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={onRefreshFolder}
+              title="Refresh folder (Ctrl+R / F6)"
+              aria-label="Refresh folder"
+              id="btn-refresh-folder"
+              disabled={!folderPath}
+            >
+              <span className="top-bar-btn-icon">↻</span>
+              <span className="top-bar-btn-label">Refresh</span>
             </button>
             <button
               className="top-bar-btn top-bar-btn--labeled"
