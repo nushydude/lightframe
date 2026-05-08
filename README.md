@@ -11,15 +11,41 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 - **Micro-Animations & Clean UI**: A disappearing Chrome interface, dark/light themes, and buttery smooth transitions.
 - **Zoom & Pan**: Fluid mouse-drag panning and shortcut-driven zoom controls.
 
-## Roadmap (Coming Soon)
+## Roadmap
 
-- **Image Management**: Delete images safely or copy them to the clipboard.
-- **Set as Default Viewer**: Allow users to easily register LightFrame as their default Windows Image Viewer.
-- **EXIF Metadata Panel**: View camera settings, location, and date taken.
-- **Quick OS Integrations**: "Open containing folder" integration.
-- **Advanced Formats**: Native HEIC and AVIF support.
-- **Enhanced Viewing**: Contact sheet (thumbnail strip) and multi-monitor support.
-- **Image Manipulation**: Temporary and permanent rotation saving.
+### Performance & Memory
+
+- **Smarter image preloading**: Reuse preloaded asset URLs during navigation and only cache-bust after file-changing operations like saved rotation or crop.
+- **Shared thumbnail cache**: Replace per-view base64 thumbnail caches with a shared LRU cache used by both the thumbnail strip and contact sheet.
+- **Disk-backed thumbnails**: Cache generated thumbnails by file path, modified time, and size to avoid decoding the same large images across sessions.
+- **Non-blocking image operations**: Move heavy thumbnail, clipboard, EXIF, rotation, and future crop work onto dedicated blocking worker tasks in Rust.
+- **Faster startup**: Keep the initial Tauri window hidden until CLI/file-association startup has resolved the first image or empty state.
+- **Large image preview path**: Show a fast downscaled preview first, then load full-resolution pixels when zooming or inspecting detail.
+- **Folder scan optimization**: Precompute natural sort keys during folder scans and avoid repeated string/key allocation inside sort comparators.
+
+### Viewer Polish
+
+- **Honor default fit mode**: Apply the saved default fit/fill/actual setting whenever a new image opens.
+- **Mouse wheel navigation**: Fully implement the existing "navigate" wheel mode setting.
+- **Persistent window bounds**: Save and restore window size and position when the setting is enabled.
+- **Navigation cache tuning**: Keep a small adjacent-image window hot without retaining stale full-size image references.
+- **Command palette**: Add a fast keyboard-first way to trigger viewer actions without crowding the chrome.
+- **Refresh current folder**: Add a refresh action that rescans the current folder, preserves the current image when possible, and updates the viewer after files are added, removed, or renamed outside LightFrame.
+
+### Image Editing
+
+- **Crop mode**: Add an interactive crop overlay with aspect ratio presets, keyboard nudging, and non-destructive preview.
+- **Save cropped copy**: Start with safe "Save Copy" behavior before adding overwrite support.
+- **Overwrite crop support**: Add explicit overwrite flow with confirmation, cache invalidation, and metadata preservation where possible.
+- **Lossless JPEG rotation**: Prefer metadata or lossless transforms when available instead of always re-encoding pixels.
+- **Edit history per image**: Track pending rotate/crop changes before committing them to disk.
+
+### Organization & Review
+
+- **Favorites and ratings**: Store lightweight sidecar metadata for quick curation without modifying original files.
+- **Compare view**: Show two images side by side for picking the sharper or better shot.
+- **Quick copy/move workflows**: Send selected images to common folders from the viewer or contact sheet.
+- **Improved format fallbacks**: Better thumbnail and metadata behavior for HEIC, AVIF, SVG, and other system-codec-dependent formats.
 
 ## Installation
 
