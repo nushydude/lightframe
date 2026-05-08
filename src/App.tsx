@@ -39,6 +39,7 @@ function App() {
     openFolder,
     openFilePicker,
     openFolderPicker,
+    refreshFolder,
     goNext,
     goPrev,
     goFirst,
@@ -209,6 +210,7 @@ function App() {
     goPrev,
     goFirst,
     goLast,
+    refreshFolder,
     startSlideshow,
     stopSlideshow,
     toggleSlideshowPause,
@@ -285,6 +287,7 @@ function App() {
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}
+                onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}

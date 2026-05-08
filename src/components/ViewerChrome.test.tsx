@@ -8,6 +8,7 @@ describe('ViewerChrome', () => {
   const defaultProps = {
     onOpenFile: vi.fn(),
     onOpenFolder: vi.fn(),
+    onRefreshFolder: vi.fn(),
     onGoHome: vi.fn(),
     onNext: vi.fn(),
     onPrev: vi.fn(),
@@ -66,6 +67,18 @@ describe('ViewerChrome', () => {
     fireEvent.click(screen.getByLabelText('Back to landing page'));
 
     expect(defaultProps.onGoHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('should refresh folder button be enabled when folder is open', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const refreshButton = screen.getByLabelText('Refresh folder');
+    expect(refreshButton).toBeEnabled();
+
+    fireEvent.click(refreshButton);
+    expect(defaultProps.onRefreshFolder).toHaveBeenCalledTimes(1);
   });
 
   it('should toggle fullscreen when button is clicked', async () => {

@@ -10,6 +10,7 @@ interface KeyboardHandlers {
   goPrev: (loop?: boolean) => boolean;
   goFirst: () => void;
   goLast: () => void;
+  refreshFolder: () => void;
   startSlideshow: () => void;
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
@@ -74,6 +75,13 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         return;
       }
 
+      // Ctrl + R: Refresh current folder
+      if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        handlers.refreshFolder();
+        return;
+      }
+
       // Escape: Close settings > stop slideshow > reset zoom > exit fullscreen
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -115,6 +123,13 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         if (!isSlideshowActive) {
           handlers.startSlideshow();
         }
+        return;
+      }
+
+      // F6: Refresh current folder
+      if (e.key === 'F6') {
+        e.preventDefault();
+        handlers.refreshFolder();
         return;
       }
 

@@ -2,9 +2,11 @@ import { useCallback, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { scanFolder, getParentFolder } from '../services/tauriCommands';
+import { invalidateImageAsset } from '../services/imageAssetCache';
+import { invalidateThumbnail } from '../services/thumbnailCache';
+import { sortImages } from '../services/imageSorting';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
-import type { ImageFile } from '../types/image';
 
 /** Play a subtle 'boop' sound when hitting the edge of a folder */
 function playBoundaryBeep() {
@@ -33,31 +35,6 @@ function playBoundaryBeep() {
   } catch {
     // Ignore audio errors
   }
-}
-
-function sortImages(images: ImageFile[], sortOrder: string): ImageFile[] {
-  const sorted = [...images];
-
-  switch (sortOrder) {
-    case 'date':
-      sorted.sort((a, b) => {
-        const da = a.modified_at ? parseInt(a.modified_at, 10) : 0;
-        const db = b.modified_at ? parseInt(b.modified_at, 10) : 0;
-        return db - da;
-      });
-      break;
-    case 'size':
-      sorted.sort((a, b) => b.size_bytes - a.size_bytes);
-      break;
-    case 'random':
-      sorted.sort(() => Math.random() - 0.5);
-      break;
-    case 'name':
-    default:
-      break;
-  }
-
-  return sorted;
 }
 
 /** Hook for image navigation and file opening */
@@ -294,6 +271,79 @@ export function useImageNavigation() {
     }
   }, [openFolder]);
 
+  /** Rescan current folder and preserve selection when possible */
+  const refreshFolder = useCallback(async () => {
+    if (!folderPath) {
+      setError('No folder is currently open to refresh');
+      return;
+    }
+
+    const previousImagePath = currentImagePath;
+    const previousIndex = currentIndex;
+    const previousPaths = new Set(images.map((image) => image.path));
+    const loadGeneration = beginLoadGeneration();
+
+    try {
+      setFolderScanning(true);
+
+      let refreshedImages = await scanFolder(folderPath);
+      if (!isCurrentGeneration(loadGeneration)) return;
+
+      if (settings.sortOrder !== 'name') {
+        refreshedImages = sortImages(refreshedImages, settings.sortOrder);
+      }
+      if (!isCurrentGeneration(loadGeneration)) return;
+
+      setImages(refreshedImages);
+
+      const refreshedPaths = new Set(refreshedImages.map((image) => image.path));
+      for (const existingPath of previousPaths) {
+        if (!refreshedPaths.has(existingPath)) {
+          invalidateThumbnail(existingPath);
+          invalidateImageAsset(existingPath);
+        }
+      }
+
+      if (refreshedImages.length === 0) {
+        useViewerStore.setState({ currentImagePath: null, currentIndex: -1 });
+        setError('No supported images found in the current folder');
+        return;
+      }
+
+      if (previousImagePath) {
+        const previousPathIndex = refreshedImages.findIndex((image) => image.path === previousImagePath);
+        if (previousPathIndex >= 0) {
+          setCurrentIndex(previousPathIndex);
+          return;
+        }
+      }
+
+      const nearestIndex = Math.min(Math.max(previousIndex, 0), refreshedImages.length - 1);
+      setCurrentIndex(nearestIndex);
+    } catch (err) {
+      console.error('Failed to refresh folder:', err);
+      if (isCurrentGeneration(loadGeneration)) {
+        setError(`Failed to refresh folder: ${err}`);
+      }
+    } finally {
+      if (isCurrentGeneration(loadGeneration)) {
+        setFolderScanning(false);
+      }
+    }
+  }, [
+    beginLoadGeneration,
+    currentImagePath,
+    currentIndex,
+    folderPath,
+    images,
+    isCurrentGeneration,
+    setCurrentIndex,
+    setError,
+    setFolderScanning,
+    setImages,
+    settings.sortOrder,
+  ]);
+
   /** Navigate to the next image */
   const goNext = useCallback(
     (loop?: boolean) => {
@@ -329,6 +379,7 @@ export function useImageNavigation() {
     openFolder,
     openFilePicker,
     openFolderPicker,
+    refreshFolder,
     goNext,
     goPrev,
     goFirst: navigateFirst,
