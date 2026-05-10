@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
 import { getMatches } from '@tauri-apps/plugin-cli';
@@ -9,11 +9,18 @@ import { ContactSheet } from './components/ContactSheet';
 import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
+import { CommandPalette } from './components/CommandPalette';
 import { useImageNavigation } from './hooks/useImageNavigation';
 import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
+import { createViewerCommands } from './services/commandRegistry';
+import {
+  copyCurrentImage,
+  deleteCurrentImage,
+  revealCurrentImage,
+} from './services/viewerActions';
 
 import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
@@ -26,11 +33,13 @@ function App() {
   const {
     currentImagePath,
     showSettings,
+    showCommandPalette,
     errorMessage,
     isFullscreen,
     viewMode,
     setError,
     setShowControls,
+    setShowCommandPalette,
     setFullscreen,
     setDefaultZoomMode,
     reset,
@@ -331,6 +340,49 @@ function App() {
     }
   }, [isFullscreen, reset, setFullscreen]);
 
+  const handleToggleFullscreen = useCallback(async () => {
+    try {
+      const nextFullscreen = !useViewerStore.getState().isFullscreen;
+      await appWindowRef.current.setFullscreen(nextFullscreen);
+      setFullscreen(nextFullscreen);
+    } catch (err) {
+      console.error('Failed to toggle fullscreen:', err);
+    }
+  }, [setFullscreen]);
+
+  const commandPaletteCommands = useMemo(
+    () =>
+      createViewerCommands({
+        openFilePicker,
+        openFolderPicker,
+        goNext: () => { goNext(); },
+        goPrev: () => { goPrev(); },
+        goFirst,
+        goLast,
+        toggleFullscreen: handleToggleFullscreen,
+        saveRotation: () => useViewerStore.getState().saveRotation(),
+        revealCurrentImage: () => revealCurrentImage(useViewerStore.getState().currentImagePath),
+        copyCurrentImage: () => copyCurrentImage(useViewerStore.getState().currentImagePath),
+        deleteCurrentImage: () =>
+          deleteCurrentImage({
+            currentImagePath: useViewerStore.getState().currentImagePath,
+            currentIndex: useViewerStore.getState().currentIndex,
+            removeImage: useViewerStore.getState().removeImage,
+          }),
+        startSlideshow,
+      }),
+    [
+      openFilePicker,
+      openFolderPicker,
+      goNext,
+      goPrev,
+      goFirst,
+      goLast,
+      handleToggleFullscreen,
+      startSlideshow,
+    ]
+  );
+
   // Register keyboard shortcuts
   useKeyboardShortcuts({
     openFilePicker,
@@ -342,6 +394,7 @@ function App() {
     startSlideshow,
     stopSlideshow,
     toggleSlideshowPause,
+    openCommandPalette: () => setShowCommandPalette(true),
   });
 
   const { showControls } = useViewerStore();
@@ -433,6 +486,13 @@ function App() {
       )}
 
       {showSettings && <SettingsPanel />}
+      {showCommandPalette && (
+        <CommandPalette
+          commands={commandPaletteCommands}
+          isOpen={showCommandPalette}
+          onClose={() => setShowCommandPalette(false)}
+        />
+      )}
       <UpdateNotification />
 
       {/* Error Banner */}

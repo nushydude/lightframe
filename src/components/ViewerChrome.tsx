@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, message } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
-import { moveToTrash, copyImageToClipboard, revealInExplorer, openSecondaryWindow } from '../services/tauriCommands';
+import { openSecondaryWindow } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
+import {
+  canSaveRotationForPath,
+  copyCurrentImage,
+  deleteCurrentImage,
+  revealCurrentImage,
+} from '../services/viewerActions';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -64,8 +69,7 @@ export function ViewerChrome({
   const fileName = currentImagePath
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
-  const currentExtension = fileName.split('.').pop()?.toLowerCase() || '';
-  const canSaveRotation = ['bmp', 'jpg', 'jpeg', 'png', 'webp'].includes(currentExtension);
+  const canSaveRotation = canSaveRotationForPath(currentImagePath);
 
   const toggleFullscreen = async () => {
     try {
@@ -79,43 +83,15 @@ export function ViewerChrome({
   };
 
   const handleDelete = async () => {
-    if (!currentImagePath) return;
-    try {
-      const confirmed = await confirm(
-        `Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`,
-        {
-          title: 'Delete Image',
-          kind: 'warning',
-        }
-      );
-      if (confirmed) {
-        await moveToTrash(currentImagePath);
-        removeImage(currentIndex);
-      }
-    } catch (err) {
-      console.error('Failed to move to trash:', err);
-      await message(`Failed to delete: ${err}`, { title: 'Error', kind: 'error' });
-    }
+    await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
   };
 
   const handleCopy = async () => {
-    if (!currentImagePath) return;
-    try {
-      await copyImageToClipboard(currentImagePath);
-      await message('Image copied to clipboard!', { title: 'Success', kind: 'info' });
-    } catch (err) {
-      console.error('Failed to copy image:', err);
-      await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
-    }
+    await copyCurrentImage(currentImagePath);
   };
 
   const handleReveal = async () => {
-    if (!currentImagePath) return;
-    try {
-      await revealInExplorer(currentImagePath);
-    } catch (err) {
-      console.error('Failed to reveal file:', err);
-    }
+    await revealCurrentImage(currentImagePath);
   };
 
   const getZoomDisplay = () => {
