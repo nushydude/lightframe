@@ -14,6 +14,7 @@ interface KeyboardHandlers {
   startSlideshow: () => void;
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
+  openCommandPalette: () => void;
 }
 
 /** Hook for handling all keyboard shortcuts */
@@ -22,6 +23,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     isFullscreen,
     isSlideshowActive,
     showSettings,
+    showCommandPalette,
     currentImagePath,
     viewMode,
     setFullscreen,
@@ -65,6 +67,20 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.ctrlKey && e.key === ',') {
         e.preventDefault();
         setShowSettings(!showSettings);
+        return;
+      }
+
+      // Ctrl + K / Ctrl + Shift + P: Open command palette
+      if ((e.ctrlKey && !e.shiftKey && (e.key === 'k' || e.key === 'K'))
+        || (e.ctrlKey && e.shiftKey && (e.key === 'p' || e.key === 'P'))) {
+        e.preventDefault();
+        if (!showCommandPalette) {
+          handlers.openCommandPalette();
+        }
+        return;
+      }
+
+      if (showCommandPalette) {
         return;
       }
 
@@ -237,6 +253,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       isFullscreen,
       isSlideshowActive,
       showSettings,
+      showCommandPalette,
       currentImagePath,
       viewMode,
       settings.loopSlideshow,

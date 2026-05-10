@@ -1402,3 +1402,88 @@ html, body, #root {
   background: var(--accent);
   transition: width 0.3s ease;
 }
+
+/* ===== Command Palette ===== */
+.command-palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-settings);
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+}
+
+.command-palette {
+  width: min(680px, 90vw);
+  max-height: 70vh;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.command-palette-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  padding: 14px 16px;
+  font-size: 14px;
+  font-family: var(--font-family);
+  outline: none;
+}
+
+.command-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  max-height: calc(70vh - 56px);
+  overflow-y: auto;
+}
+
+.command-palette-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  text-align: left;
+}
+
+.command-palette-item:hover,
+.command-palette-item.active {
+  background: var(--accent-dim);
+}
+
+.command-palette-item kbd {
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.command-palette-empty {
+  color: var(--text-secondary);
+  padding: 10px 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}

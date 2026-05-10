@@ -14,6 +14,7 @@ describe('useKeyboardShortcuts', () => {
     startSlideshow: vi.fn(),
     stopSlideshow: vi.fn(),
     toggleSlideshowPause: vi.fn(),
+    openCommandPalette: vi.fn(),
   };
 
   beforeEach(() => {
@@ -44,5 +45,17 @@ describe('useKeyboardShortcuts', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(handlers.refreshFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens command palette on Ctrl+K', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.openCommandPalette).toHaveBeenCalledTimes(1);
   });
 });

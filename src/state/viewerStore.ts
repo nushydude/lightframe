@@ -5,7 +5,7 @@ import { invalidateThumbnail } from '../services/thumbnailCache';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
 
-interface ViewerState {
+export interface ViewerState {
   // Image state
   currentImagePath: string | null;
   folderPath: string | null;
@@ -31,6 +31,7 @@ interface ViewerState {
   // UI state
   showControls: boolean;
   showSettings: boolean;
+  showCommandPalette: boolean;
   errorMessage: string | null;
   viewMode: 'viewer' | 'grid';
 
@@ -63,6 +64,7 @@ interface ViewerState {
 
   setShowControls: (show: boolean) => void;
   setShowSettings: (show: boolean) => void;
+  setShowCommandPalette: (show: boolean) => void;
   setError: (msg: string | null) => void;
   saveRotation: () => Promise<void>;
   setViewMode: (mode: 'viewer' | 'grid') => void;
@@ -87,6 +89,7 @@ const initialState = {
   isSlideshowPaused: false,
   showControls: true,
   showSettings: false,
+  showCommandPalette: false,
   errorMessage: null,
   cacheBuster: 0,
   loadGeneration: 0,
@@ -248,6 +251,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setShowControls: (show) => set({ showControls: show }),
   setShowSettings: (show) => set({ showSettings: show }),
+  setShowCommandPalette: (show) => set({ showCommandPalette: show }),
   setError: (msg) => set({ errorMessage: msg }),
   
   saveRotation: async () => {
