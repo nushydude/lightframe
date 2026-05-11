@@ -1,3 +1,9 @@
+export interface QuickDestination {
+  id: string;
+  label: string;
+  path: string;
+}
+
 export interface AppSettings {
   theme: 'system' | 'dark' | 'light';
   slideshowIntervalSeconds: number;
@@ -13,6 +19,7 @@ export interface AppSettings {
   windowHeight?: number;
   sortOrder: 'name' | 'date' | 'size' | 'random';
   showThumbnails: boolean;
+  quickDestinations: QuickDestination[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -26,6 +33,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   rememberWindowBounds: true,
   sortOrder: 'name',
   showThumbnails: true,
+  quickDestinations: [],
 };
 
 /** Convert frontend camelCase settings to Rust snake_case format */
@@ -45,6 +53,11 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     window_height: settings.windowHeight,
     sort_order: settings.sortOrder,
     show_thumbnails: settings.showThumbnails,
+    quick_destinations: settings.quickDestinations.map((destination) => ({
+      id: destination.id,
+      label: destination.label,
+      path: destination.path,
+    })),
   };
 }
 
@@ -71,5 +84,19 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     windowHeight: raw.window_height as number | undefined,
     sortOrder: (raw.sort_order as AppSettings['sortOrder']) || DEFAULT_SETTINGS.sortOrder,
     showThumbnails: (raw.show_thumbnails as boolean) ?? DEFAULT_SETTINGS.showThumbnails,
+    quickDestinations: Array.isArray(raw.quick_destinations)
+      ? raw.quick_destinations
+          .map((value) => {
+            const destination = value as Record<string, unknown>;
+            const id = String(destination.id ?? '').trim();
+            const label = String(destination.label ?? '').trim();
+            const path = String(destination.path ?? '').trim();
+            if (!id || !label || !path) {
+              return null;
+            }
+            return { id, label, path };
+          })
+          .filter((value): value is QuickDestination => value !== null)
+      : DEFAULT_SETTINGS.quickDestinations,
   };
 }

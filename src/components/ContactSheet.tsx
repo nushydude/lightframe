@@ -1,12 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type UIEvent } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
+import { useSettingsStore } from '../state/settingsStore';
 import {
   evictThumbnailsExcept,
   getCachedThumbnail,
+  invalidateThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
+import { invalidateImageAsset } from '../services/imageAssetCache';
+import {
+  selectRangePaths,
+  toggleSelectionPath,
+} from '../services/contactSheetSelection';
+import {
+  showTransferResultMessage,
+  transferImagesToDestination,
+} from '../services/viewerActions';
+import type { QuickDestination } from '../types/settings';
 
 const GRID_ITEM_SIZE = 140;
 const GRID_GAP = 20;
@@ -26,9 +38,12 @@ interface ContactSheetProps {
 export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const { images, currentIndex, setCurrentIndex, setViewMode } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
+  const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [columns, setColumns] = useState(1);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -129,6 +144,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const validPaths = new Set(images.map((image) => image.path));
+    setSelectedPaths((current) => current.filter((path) => validPaths.has(path)));
+  }, [images]);
+
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const nextScrollTop = event.currentTarget.scrollTop;
     if (scrollRafRef.current !== null) return;
@@ -142,6 +162,60 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const handleSelect = (index: number) => {
     setCurrentIndex(index);
     setViewMode('viewer');
+  };
+
+  const handleGridItemClick = (event: MouseEvent<HTMLDivElement>, index: number, path: string) => {
+    if (event.shiftKey && lastSelectedIndex !== null) {
+      setSelectedPaths((current) => selectRangePaths(images, lastSelectedIndex, index, current));
+      setLastSelectedIndex(index);
+      setCurrentIndex(index);
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedPaths((current) => toggleSelectionPath(current, path));
+      setLastSelectedIndex(index);
+      setCurrentIndex(index);
+      return;
+    }
+
+    setSelectedPaths([path]);
+    setLastSelectedIndex(index);
+    handleSelect(index);
+  };
+
+  const removeMovedImages = (paths: string[]) => {
+    const state = useViewerStore.getState();
+    const indexByPath = new Map(state.images.map((image, index) => [image.path, index]));
+    const indices = paths
+      .map((path) => {
+        invalidateThumbnail(path);
+        invalidateImageAsset(path);
+        return indexByPath.get(path);
+      })
+      .filter((index): index is number => index !== undefined)
+      .sort((a, b) => b - a);
+
+    for (const index of indices) {
+      useViewerStore.getState().removeImage(index);
+    }
+  };
+
+  const handleBulkTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
+    const targetPaths =
+      selectedPaths.length > 0 ? selectedPaths : currentIndex >= 0 ? [images[currentIndex].path] : [];
+    if (targetPaths.length === 0) {
+      return;
+    }
+
+    const result = await transferImagesToDestination(targetPaths, destination, mode);
+    if (mode === 'move') {
+      removeMovedImages(result.successes.map((success) => success.sourcePath));
+      setSelectedPaths((current) =>
+        current.filter((path) => !result.successes.some((success) => success.sourcePath === path))
+      );
+    }
+    await showTransferResultMessage(result, destination, mode);
   };
 
   useEffect(() => {
@@ -182,8 +256,67 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
         <div className="header-left">
           <h2>Contact Sheet</h2>
           <span className="image-count">{images.length} images</span>
+          {selectedPaths.length > 0 && (
+            <span className="image-count">{selectedPaths.length} selected</span>
+          )}
         </div>
         <div className="header-actions">
+          <details className="header-menu">
+            <summary
+              className="header-btn"
+              aria-label="Copy selected images"
+              title={
+                quickDestinations.length > 0
+                  ? 'Copy selected images'
+                  : 'Add quick destinations in settings'
+              }
+            >
+              Copy To
+            </summary>
+            <div className="header-menu-panel">
+              {quickDestinations.length === 0 ? (
+                <span className="header-menu-empty">No destinations configured</span>
+              ) : (
+                quickDestinations.map((destination) => (
+                  <button
+                    key={destination.id}
+                    className="header-menu-item"
+                    onClick={() => void handleBulkTransfer(destination, 'copy')}
+                  >
+                    {destination.label}
+                  </button>
+                ))
+              )}
+            </div>
+          </details>
+          <details className="header-menu">
+            <summary
+              className="header-btn"
+              aria-label="Move selected images"
+              title={
+                quickDestinations.length > 0
+                  ? 'Move selected images'
+                  : 'Add quick destinations in settings'
+              }
+            >
+              Move To
+            </summary>
+            <div className="header-menu-panel">
+              {quickDestinations.length === 0 ? (
+                <span className="header-menu-empty">No destinations configured</span>
+              ) : (
+                quickDestinations.map((destination) => (
+                  <button
+                    key={destination.id}
+                    className="header-menu-item"
+                    onClick={() => void handleBulkTransfer(destination, 'move')}
+                  >
+                    {destination.label}
+                  </button>
+                ))
+              )}
+            </div>
+          </details>
           <button
             className="header-btn"
             onClick={onGoHome}
@@ -228,8 +361,8 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             return (
               <div
                 key={image.path}
-                className={`grid-item ${isActive ? 'active' : ''}`}
-                onClick={() => handleSelect(index)}
+                className={`grid-item ${isActive ? 'active' : ''} ${selectedPaths.includes(image.path) ? 'selected' : ''}`}
+                onClick={(event) => handleGridItemClick(event, index, image.path)}
                 title={image.file_name}
               >
                 <div className="grid-thumbnail-wrapper">

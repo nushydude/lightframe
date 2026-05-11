@@ -1,7 +1,8 @@
 import React from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
-import type { AppSettings } from '../types/settings';
+import type { AppSettings, QuickDestination } from '../types/settings';
 import { openSettings, openUrlExternal } from '../services/tauriCommands';
 
 /** Settings panel overlay */
@@ -17,6 +18,41 @@ export function SettingsPanel() {
     if (e.target === e.currentTarget) {
       setShowSettings(false);
     }
+  };
+
+  const handleAddQuickDestination = async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || typeof selected !== 'string') {
+      return;
+    }
+
+    const normalizedPath = selected.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    if (settings.quickDestinations.some((destination) => destination.path === normalizedPath)) {
+      return;
+    }
+
+    const folderName = normalizedPath.replace(/\\/g, '/').split('/').pop() || normalizedPath;
+    const nextDestination: QuickDestination = {
+      id: `dest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: folderName,
+      path: normalizedPath,
+    };
+
+    await updateSettings({
+      quickDestinations: [...settings.quickDestinations, nextDestination],
+    });
+  };
+
+  const handleRemoveQuickDestination = async (destinationId: string) => {
+    await updateSettings({
+      quickDestinations: settings.quickDestinations.filter(
+        (destination) => destination.id !== destinationId
+      ),
+    });
   };
 
   return (
@@ -194,6 +230,42 @@ export function SettingsPanel() {
                 <span className="toggle-slider" />
               </label>
             </div>
+          </div>
+
+          <div className="settings-group">
+            <div className="settings-group-title">Quick Destinations</div>
+            <div className="setting-row setting-row-stack">
+              <span className="setting-label">Destination folders</span>
+              <button
+                className="setting-button-secondary"
+                onClick={() => void handleAddQuickDestination()}
+                id="btn-add-quick-destination"
+              >
+                Add folder
+              </button>
+            </div>
+            {settings.quickDestinations.length === 0 ? (
+              <p className="setting-help">Add a folder here to enable quick copy and move actions.</p>
+            ) : (
+              <div className="quick-destination-list">
+                {settings.quickDestinations.map((destination) => (
+                  <div className="quick-destination-item" key={destination.id}>
+                    <div className="quick-destination-meta">
+                      <div className="quick-destination-label">{destination.label}</div>
+                      <div className="quick-destination-path" title={destination.path}>
+                        {destination.path}
+                      </div>
+                    </div>
+                    <button
+                      className="setting-button-secondary"
+                      onClick={() => void handleRemoveQuickDestination(destination.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* System */}

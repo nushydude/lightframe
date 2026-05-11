@@ -32,6 +32,17 @@ describe('settingsToRust', () => {
       window_height: undefined,
     });
   });
+
+  it('maps quick destinations to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      quickDestinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' }],
+    });
+
+    expect(rust).toMatchObject({
+      quick_destinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' }],
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -63,5 +74,18 @@ describe('settingsFromRust', () => {
     expect(settings.windowY).toBeUndefined();
     expect(settings.windowWidth).toBeUndefined();
     expect(settings.windowHeight).toBeUndefined();
+  });
+
+  it('parses quick destinations from rust payloads and filters invalid entries', () => {
+    const settings = settingsFromRust({
+      quick_destinations: [
+        { id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' },
+        { id: '', label: 'Broken', path: 'D:/Broken' },
+      ],
+    });
+
+    expect(settings.quickDestinations).toEqual([
+      { id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' },
+    ]);
   });
 });
