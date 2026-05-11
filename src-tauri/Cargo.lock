@@ -2421,6 +2421,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libjpeg-turbo-rs"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9afcf8186dd5593e9e01f1dc88ebaa651da13b9accea861cdc8f19bb982d18c"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "libloading"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2444,12 +2453,13 @@ dependencies = [
 
 [[package]]
 name = "lightframe"
-version = "5.0.1"
+version = "6.0.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
  "image",
  "kamadak-exif",
+ "libjpeg-turbo-rs",
  "little_exif",
  "natord",
  "serde",
