@@ -10,6 +10,8 @@ import {
 } from '../services/cropMath';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
+export type ViewMode = 'viewer' | 'grid' | 'compare';
+export type CompareFocusedPane = 'primary' | 'secondary';
 
 const DEFAULT_CROP_RECT: NormalizedCropRect = {
   x: 0.1,
@@ -17,6 +19,86 @@ const DEFAULT_CROP_RECT: NormalizedCropRect = {
   width: 0.8,
   height: 0.8,
 };
+
+function isValidImageIndex(index: number, imageCount: number): boolean {
+  return index >= 0 && index < imageCount;
+}
+
+function getDefaultSecondaryIndex(primaryIndex: number, imageCount: number): number {
+  if (imageCount < 2 || !isValidImageIndex(primaryIndex, imageCount)) {
+    return -1;
+  }
+  if (primaryIndex + 1 < imageCount) {
+    return primaryIndex + 1;
+  }
+  if (primaryIndex - 1 >= 0) {
+    return primaryIndex - 1;
+  }
+  return -1;
+}
+
+function resolveCompareIndices(
+  imageCount: number,
+  currentIndex: number,
+  comparePrimaryIndex: number,
+  compareSecondaryIndex: number
+): { primaryIndex: number; secondaryIndex: number } {
+  if (imageCount < 2) {
+    return { primaryIndex: -1, secondaryIndex: -1 };
+  }
+
+  const primaryIndex = isValidImageIndex(comparePrimaryIndex, imageCount)
+    ? comparePrimaryIndex
+    : isValidImageIndex(currentIndex, imageCount)
+      ? currentIndex
+      : 0;
+  const secondaryIndex =
+    isValidImageIndex(compareSecondaryIndex, imageCount) && compareSecondaryIndex !== primaryIndex
+      ? compareSecondaryIndex
+      : getDefaultSecondaryIndex(primaryIndex, imageCount);
+
+  return { primaryIndex, secondaryIndex };
+}
+
+function resolveCompareStateForImages(
+  previousImages: ImageFile[],
+  nextImages: ImageFile[],
+  currentIndex: number,
+  comparePrimaryIndex: number,
+  compareSecondaryIndex: number,
+  compareFocusedPane: CompareFocusedPane
+): {
+  comparePrimaryIndex: number;
+  compareSecondaryIndex: number;
+  compareFocusedPane: CompareFocusedPane;
+} {
+  const previousPrimaryPath = isValidImageIndex(comparePrimaryIndex, previousImages.length)
+    ? previousImages[comparePrimaryIndex].path
+    : null;
+  const previousSecondaryPath = isValidImageIndex(compareSecondaryIndex, previousImages.length)
+    ? previousImages[compareSecondaryIndex].path
+    : null;
+
+  const mappedPrimaryIndex = previousPrimaryPath
+    ? nextImages.findIndex((image) => image.path === previousPrimaryPath)
+    : -1;
+  const mappedSecondaryIndex = previousSecondaryPath
+    ? nextImages.findIndex((image) => image.path === previousSecondaryPath)
+    : -1;
+  const { primaryIndex, secondaryIndex } = resolveCompareIndices(
+    nextImages.length,
+    currentIndex,
+    mappedPrimaryIndex,
+    mappedSecondaryIndex
+  );
+
+  return {
+    comparePrimaryIndex: primaryIndex,
+    compareSecondaryIndex: secondaryIndex,
+    compareFocusedPane:
+      compareFocusedPane === 'secondary' && secondaryIndex !== -1 ? 'secondary' : 'primary',
+  };
+}
 
 function cloneCropRect(rect: NormalizedCropRect | null): NormalizedCropRect | null {
   return rect ? { ...rect } : null;
@@ -102,7 +184,10 @@ interface ViewerState {
   showSettings: boolean;
   showCommandPalette: boolean;
   errorMessage: string | null;
-  viewMode: 'viewer' | 'grid';
+  viewMode: ViewMode;
+  comparePrimaryIndex: number;
+  compareSecondaryIndex: number;
+  compareFocusedPane: CompareFocusedPane;
 
   // Actions
   setCurrentImage: (path: string, index: number) => void;
@@ -147,7 +232,12 @@ interface ViewerState {
   setShowCommandPalette: (show: boolean) => void;
   setError: (msg: string | null) => void;
   saveRotation: () => Promise<void>;
-  setViewMode: (mode: 'viewer' | 'grid') => void;
+  setViewMode: (mode: ViewMode) => void;
+  enterCompareMode: () => boolean;
+  exitCompareMode: () => void;
+  switchCompareFocus: () => void;
+  moveCompareFocusedCandidate: (direction: -1 | 1) => boolean;
+  promoteFocusedComparePane: () => boolean;
   beginLoadGeneration: () => number;
   reset: () => void;
 }
@@ -178,7 +268,10 @@ const initialState = {
   errorMessage: null,
   cacheBuster: 0,
   loadGeneration: 0,
-  viewMode: 'viewer' as const,
+  viewMode: 'viewer' as ViewMode,
+  comparePrimaryIndex: -1,
+  compareSecondaryIndex: -1,
+  compareFocusedPane: 'secondary' as CompareFocusedPane,
 };
 
 function getPendingEditForCommit(
@@ -337,30 +430,83 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       });
     },
 
-    setImages: (images) => set({ images }),
+    setImages: (images) =>
+      set((state) => {
+        const compareState = resolveCompareStateForImages(
+          state.images,
+          images,
+          state.currentIndex,
+          state.comparePrimaryIndex,
+          state.compareSecondaryIndex,
+          state.compareFocusedPane
+        );
+
+        const updates: Partial<ViewerState> = {
+          images,
+          comparePrimaryIndex: compareState.comparePrimaryIndex,
+          compareSecondaryIndex: compareState.compareSecondaryIndex,
+          compareFocusedPane: compareState.compareFocusedPane,
+        };
+
+        if (state.viewMode === 'compare' && compareState.comparePrimaryIndex !== -1) {
+          const primaryPath = images[compareState.comparePrimaryIndex]?.path ?? null;
+          const editFields = getEditFieldsForPath(primaryPath, state.pendingEditsByPath);
+          updates.currentIndex = compareState.comparePrimaryIndex;
+          updates.currentImagePath = primaryPath;
+          updates.rotation = editFields.rotation;
+          updates.cropRect = editFields.cropRect;
+          updates.pendingCropPreview = editFields.pendingCropPreview;
+          updates.isCropMode = false;
+        }
+
+        if (state.viewMode === 'compare' && compareState.compareSecondaryIndex === -1) {
+          updates.viewMode = 'viewer';
+        }
+
+        return updates;
+      }),
 
     setFolderPath: (path) => set({ folderPath: path }),
 
     setFolderScanning: (scanning) => set({ isFolderScanning: scanning }),
 
     setCurrentIndex: (index: number) => {
-      const { images, defaultZoomMode, pendingEditsByPath } = get();
+      const { images, defaultZoomMode } = get();
       if (index < 0 || index >= images.length) return;
-      const path = images[index].path;
-      const editFields = getEditFieldsForPath(path, pendingEditsByPath);
-      set({
-        currentIndex: index,
-        currentImagePath: path,
-        zoomMode: defaultZoomMode,
-        zoomLevel: 1,
-        panX: 0,
-        panY: 0,
-        rotation: editFields.rotation,
-        isCropMode: false,
-        cropRect: editFields.cropRect,
-        pendingCropPreview: editFields.pendingCropPreview,
-        cropAspectRatio: 'free',
-        errorMessage: null,
+
+      set((state) => {
+        const path = images[index].path;
+        const editFields = getEditFieldsForPath(path, state.pendingEditsByPath);
+        const updates: Partial<ViewerState> = {
+          currentIndex: index,
+          currentImagePath: path,
+          zoomMode: defaultZoomMode,
+          zoomLevel: 1,
+          panX: 0,
+          panY: 0,
+          rotation: editFields.rotation,
+          isCropMode: false,
+          cropRect: editFields.cropRect,
+          pendingCropPreview: editFields.pendingCropPreview,
+          cropAspectRatio: 'free',
+          errorMessage: null,
+        };
+
+        if (state.viewMode === 'compare') {
+          const compareState = resolveCompareStateForImages(
+            state.images,
+            state.images,
+            index,
+            index,
+            state.compareSecondaryIndex,
+            state.compareFocusedPane
+          );
+          updates.comparePrimaryIndex = compareState.comparePrimaryIndex;
+          updates.compareSecondaryIndex = compareState.compareSecondaryIndex;
+          updates.compareFocusedPane = compareState.compareFocusedPane;
+        }
+
+        return updates;
       });
     },
 
@@ -420,9 +566,26 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           if (removedPath) {
             delete nextPendingEdits[removedPath];
           }
+
+          const compareState = resolveCompareStateForImages(
+            state.images,
+            newImages,
+            currentIndex,
+            state.comparePrimaryIndex,
+            state.compareSecondaryIndex,
+            state.compareFocusedPane
+          );
+
           return {
             images: newImages,
             pendingEditsByPath: nextPendingEdits,
+            comparePrimaryIndex: compareState.comparePrimaryIndex,
+            compareSecondaryIndex: compareState.compareSecondaryIndex,
+            compareFocusedPane: compareState.compareFocusedPane,
+            viewMode:
+              state.viewMode === 'compare' && compareState.compareSecondaryIndex === -1
+                ? 'viewer'
+                : state.viewMode,
           };
         });
         // If we deleted the current or a previous image, update the current index
@@ -670,6 +833,35 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           };
         }
 
+        if (mode === 'compare') {
+          const compareState = resolveCompareStateForImages(
+            state.images,
+            state.images,
+            state.currentIndex,
+            state.currentIndex,
+            state.compareSecondaryIndex,
+            'secondary'
+          );
+          if (compareState.compareSecondaryIndex === -1) {
+            return {};
+          }
+
+          const primaryPath = state.images[compareState.comparePrimaryIndex]?.path ?? null;
+          const editFields = getEditFieldsForPath(primaryPath, state.pendingEditsByPath);
+          return {
+            viewMode: mode,
+            currentIndex: compareState.comparePrimaryIndex,
+            currentImagePath: primaryPath,
+            comparePrimaryIndex: compareState.comparePrimaryIndex,
+            compareSecondaryIndex: compareState.compareSecondaryIndex,
+            compareFocusedPane: compareState.compareFocusedPane,
+            isCropMode: false,
+            cropRect: editFields.cropRect,
+            pendingCropPreview: editFields.pendingCropPreview,
+            rotation: editFields.rotation,
+          };
+        }
+
         const editFields = getEditFieldsForPath(state.currentImagePath, state.pendingEditsByPath);
         return {
           viewMode: mode,
@@ -679,6 +871,165 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           rotation: editFields.rotation,
         };
       }),
+
+    enterCompareMode: () => {
+      const state = get();
+      const compareState = resolveCompareStateForImages(
+        state.images,
+        state.images,
+        state.currentIndex,
+        state.currentIndex,
+        state.compareSecondaryIndex,
+        'secondary'
+      );
+      if (compareState.compareSecondaryIndex === -1) {
+        return false;
+      }
+
+      const primaryPath = state.images[compareState.comparePrimaryIndex]?.path ?? null;
+      const editFields = getEditFieldsForPath(primaryPath, state.pendingEditsByPath);
+      set({
+        viewMode: 'compare',
+        currentIndex: compareState.comparePrimaryIndex,
+        currentImagePath: primaryPath,
+        comparePrimaryIndex: compareState.comparePrimaryIndex,
+        compareSecondaryIndex: compareState.compareSecondaryIndex,
+        compareFocusedPane: compareState.compareFocusedPane,
+        isCropMode: false,
+        cropRect: editFields.cropRect,
+        pendingCropPreview: editFields.pendingCropPreview,
+        rotation: editFields.rotation,
+      });
+      return true;
+    },
+
+    exitCompareMode: () =>
+      set((state) => {
+        if (state.viewMode !== 'compare') {
+          return {};
+        }
+
+        const { primaryIndex } = resolveCompareIndices(
+          state.images.length,
+          state.currentIndex,
+          state.comparePrimaryIndex,
+          state.compareSecondaryIndex
+        );
+        const nextCurrentIndex =
+          isValidImageIndex(primaryIndex, state.images.length) ? primaryIndex : state.currentIndex;
+        const nextCurrentPath =
+          isValidImageIndex(nextCurrentIndex, state.images.length)
+            ? state.images[nextCurrentIndex].path
+            : null;
+        const editFields = getEditFieldsForPath(nextCurrentPath, state.pendingEditsByPath);
+        return {
+          viewMode: 'viewer',
+          currentIndex: nextCurrentIndex,
+          currentImagePath: nextCurrentPath,
+          comparePrimaryIndex: nextCurrentIndex,
+          compareSecondaryIndex: isValidImageIndex(nextCurrentIndex, state.images.length)
+            ? getDefaultSecondaryIndex(nextCurrentIndex, state.images.length)
+            : -1,
+          compareFocusedPane: 'secondary',
+          isCropMode: false,
+          cropRect: editFields.cropRect,
+          pendingCropPreview: editFields.pendingCropPreview,
+          rotation: editFields.rotation,
+        };
+      }),
+
+    switchCompareFocus: () =>
+      set((state) => {
+        if (state.viewMode !== 'compare' || state.compareSecondaryIndex === -1) {
+          return {};
+        }
+
+        return {
+          compareFocusedPane: state.compareFocusedPane === 'primary' ? 'secondary' : 'primary',
+        };
+      }),
+
+    moveCompareFocusedCandidate: (direction) => {
+      const state = get();
+      if (state.viewMode !== 'compare' || state.images.length < 2) {
+        return false;
+      }
+
+      const focusedIsPrimary = state.compareFocusedPane === 'primary';
+      const focusedIndex = focusedIsPrimary ? state.comparePrimaryIndex : state.compareSecondaryIndex;
+      const otherIndex = focusedIsPrimary ? state.compareSecondaryIndex : state.comparePrimaryIndex;
+
+      if (!isValidImageIndex(focusedIndex, state.images.length)) {
+        return false;
+      }
+
+      let nextIndex = focusedIndex + direction;
+      while (isValidImageIndex(nextIndex, state.images.length) && nextIndex === otherIndex) {
+        nextIndex += direction;
+      }
+
+      if (!isValidImageIndex(nextIndex, state.images.length)) {
+        return false;
+      }
+
+      if (focusedIsPrimary) {
+        const nextPath = state.images[nextIndex].path;
+        const editFields = getEditFieldsForPath(nextPath, state.pendingEditsByPath);
+        set({
+          comparePrimaryIndex: nextIndex,
+          currentIndex: nextIndex,
+          currentImagePath: nextPath,
+          isCropMode: false,
+          cropRect: editFields.cropRect,
+          pendingCropPreview: editFields.pendingCropPreview,
+          rotation: editFields.rotation,
+        });
+      } else {
+        set({ compareSecondaryIndex: nextIndex });
+      }
+
+      return true;
+    },
+
+    promoteFocusedComparePane: () => {
+      const state = get();
+      if (state.viewMode !== 'compare' || state.compareSecondaryIndex === -1) {
+        return false;
+      }
+
+      const focusedIndex =
+        state.compareFocusedPane === 'primary' ? state.comparePrimaryIndex : state.compareSecondaryIndex;
+      if (!isValidImageIndex(focusedIndex, state.images.length)) {
+        return false;
+      }
+
+      const nextPrimaryIndex = focusedIndex;
+      const nextSecondaryIndex =
+        state.compareFocusedPane === 'secondary'
+          ? state.comparePrimaryIndex
+          : state.compareSecondaryIndex;
+      const resolvedSecondaryIndex =
+        nextSecondaryIndex !== nextPrimaryIndex
+          ? nextSecondaryIndex
+          : getDefaultSecondaryIndex(nextPrimaryIndex, state.images.length);
+
+      const nextPrimaryPath = state.images[nextPrimaryIndex].path;
+      const editFields = getEditFieldsForPath(nextPrimaryPath, state.pendingEditsByPath);
+      set({
+        viewMode: 'compare',
+        currentIndex: nextPrimaryIndex,
+        currentImagePath: nextPrimaryPath,
+        comparePrimaryIndex: nextPrimaryIndex,
+        compareSecondaryIndex: resolvedSecondaryIndex,
+        compareFocusedPane: 'primary',
+        isCropMode: false,
+        cropRect: editFields.cropRect,
+        pendingCropPreview: editFields.pendingCropPreview,
+        rotation: editFields.rotation,
+      });
+
+      return true;
+    },
 
     beginLoadGeneration: () => {
       const nextGeneration = get().loadGeneration + 1;

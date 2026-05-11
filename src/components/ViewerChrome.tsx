@@ -67,6 +67,8 @@ export function ViewerChrome({
     cropAspectRatio,
     viewMode,
     setViewMode,
+    enterCompareMode,
+    exitCompareMode,
     enterCropMode,
     exitCropMode,
     setCropAspectRatio,
@@ -96,7 +98,8 @@ export function ViewerChrome({
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
   const canSaveRotation = canSaveRotationForPath(currentImagePath);
-  const cropDisabledByRotation = rotation !== 0;
+  const canEnterCompareMode = images.length > 1;
+  const cropDisabledByRotation = rotation !== 0 || viewMode === 'compare';
   const canPreviewCrop = isCropMode && cropRect !== null;
   const currentPendingEdit = currentImagePath ? pendingEditsByPath[currentImagePath] : undefined;
   const hasPendingEdits = Boolean(currentPendingEdit);
@@ -389,6 +392,27 @@ export function ViewerChrome({
               <span className="top-bar-btn-label">Grid</span>
             </button>
             <button
+              className={`top-bar-btn top-bar-btn--labeled ${viewMode === 'compare' ? 'active' : ''}`}
+              onClick={() => {
+                if (viewMode === 'compare') {
+                  exitCompareMode();
+                  return;
+                }
+                enterCompareMode();
+              }}
+              title={
+                canEnterCompareMode
+                  ? 'Compare view'
+                  : 'Compare view requires at least two images'
+              }
+              aria-label="Toggle compare view"
+              id="btn-compare"
+              disabled={!canEnterCompareMode}
+            >
+              <span className="top-bar-btn-icon">≡</span>
+              <span className="top-bar-btn-label">Compare</span>
+            </button>
+            <button
               className="top-bar-btn top-bar-btn--labeled"
               onClick={openSecondaryWindow}
               title="Open Projector Mode (Secondary Window)"
@@ -432,7 +456,9 @@ export function ViewerChrome({
               }}
               title={
                 cropDisabledByRotation
-                  ? 'Crop is unavailable while rotation preview is active'
+                  ? viewMode === 'compare'
+                    ? 'Crop is unavailable in compare view'
+                    : 'Crop is unavailable while rotation preview is active'
                   : 'Crop image'
               }
               aria-label="Toggle crop mode"

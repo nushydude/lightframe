@@ -136,4 +136,58 @@ describe('useKeyboardShortcuts', () => {
     expect(ratingEvent.defaultPrevented).toBe(true);
     expect(handlers.setRatingCurrent).toHaveBeenCalledWith(4);
   });
+
+  it('handles compare mode keyboard controls', () => {
+    useViewerStore.setState({
+      images: [
+        { path: 'c:/test/a.jpg', file_name: 'a', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: 'c:/test/b.jpg', file_name: 'b', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: 'c:/test/c.jpg', file_name: 'c', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 1,
+      currentImagePath: 'c:/test/b.jpg',
+    });
+    useViewerStore.getState().enterCompareMode();
+
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().compareFocusedPane).toBe('primary');
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(0);
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().compareFocusedPane).toBe('secondary');
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(2);
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+    expect(useViewerStore.getState().compareSecondaryIndex).toBe(0);
+    expect(useViewerStore.getState().compareFocusedPane).toBe('primary');
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
 });

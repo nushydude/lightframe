@@ -26,6 +26,7 @@ interface CreateViewerCommandsOptions {
   deleteCurrentImage: () => Promise<void>;
   enterCropMode: () => void;
   startSlideshow: () => void;
+  toggleCompareMode: () => void;
 }
 
 export function createViewerCommands(options: CreateViewerCommandsOptions): ViewerCommand[] {
@@ -152,6 +153,13 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       },
     },
     {
+      id: 'toggle-compare',
+      label: 'Toggle Compare View',
+      keywords: ['compare', 'side-by-side', 'review'],
+      isEnabled: (state) => state.images.length > 1 && Boolean(state.currentImagePath),
+      run: () => options.toggleCompareMode(),
+    },
+    {
       id: 'toggle-settings',
       label: 'Toggle Settings',
       keywords: ['settings', 'preferences'],
@@ -188,7 +196,8 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       id: 'crop-image',
       label: 'Crop Image',
       keywords: ['crop', 'edit', 'trim'],
-      isEnabled: (state) => Boolean(state.currentImagePath) && state.rotation === 0,
+      isEnabled: (state) =>
+        Boolean(state.currentImagePath) && state.rotation === 0 && state.viewMode !== 'compare',
       run: () => options.enterCropMode(),
     },
     {

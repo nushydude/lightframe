@@ -34,6 +34,7 @@ describe('createViewerCommands', () => {
       deleteCurrentImage,
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
     });
 
     const state = useViewerStore.getState();
@@ -80,11 +81,101 @@ describe('createViewerCommands', () => {
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
       enterCropMode,
       startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
     });
 
     const cropCommand = commands.find((command) => command.id === 'crop-image');
     expect(cropCommand?.isEnabled(useViewerStore.getState())).toBe(true);
     void cropCommand?.run();
     expect(enterCropMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the crop command while compare mode is active', () => {
+    useViewerStore.setState({
+      currentImagePath: 'c:/images/test.jpg',
+      rotation: 0,
+      viewMode: 'compare',
+    });
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
+    });
+
+    const cropCommand = commands.find((command) => command.id === 'crop-image');
+    expect(cropCommand?.isEnabled(useViewerStore.getState())).toBe(false);
+  });
+
+  it('enables compare command only when at least two images are available', () => {
+    const toggleCompareMode = vi.fn();
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode,
+    });
+
+    const compareCommand = commands.find((command) => command.id === 'toggle-compare');
+    expect(compareCommand).toBeDefined();
+
+    useViewerStore.setState({
+      currentImagePath: 'c:/images/only.jpg',
+      images: [
+        {
+          path: 'c:/images/only.jpg',
+          file_name: 'only.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: null,
+        },
+      ],
+    });
+    expect(compareCommand?.isEnabled(useViewerStore.getState())).toBe(false);
+
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'c:/images/only.jpg',
+          file_name: 'only.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: null,
+        },
+        {
+          path: 'c:/images/second.jpg',
+          file_name: 'second.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: null,
+        },
+      ],
+    });
+    expect(compareCommand?.isEnabled(useViewerStore.getState())).toBe(true);
+
+    void compareCommand?.run();
+    expect(toggleCompareMode).toHaveBeenCalledTimes(1);
   });
 });

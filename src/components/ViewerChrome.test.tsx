@@ -108,6 +108,25 @@ describe('ViewerChrome', () => {
     expect(defaultProps.onRefreshFolder).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a disabled compare button when fewer than two images are loaded', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo.jpg',
+      images: [
+        {
+          path: 'C:/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getByLabelText('Toggle compare view')).toBeDisabled();
+  });
+
   it('should toggle fullscreen when button is clicked', async () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg' });
     const mockWindow = getCurrentWindow();
