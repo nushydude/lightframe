@@ -127,6 +127,28 @@ describe('ViewerChrome', () => {
     expect(spyOut).toHaveBeenCalled();
   });
 
+  it('shows unsaved edit indicators when the current image has pending edits', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      pendingEditsByPath: {
+        'C:/Images/photo.jpg': {
+          rotationDegrees: 90,
+          cropRect: null,
+          pendingCropPreview: null,
+          updatedAt: 1,
+          history: [],
+        },
+      },
+      rotation: 90,
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getByText('Unsaved edits')).toBeInTheDocument();
+    expect(screen.getByLabelText('Reset pending edits')).toBeInTheDocument();
+    expect(screen.getByLabelText('Save pending edits')).toBeInTheDocument();
+  });
+
   it('does nothing when save cropped copy dialog is canceled', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
@@ -231,6 +253,87 @@ describe('ViewerChrome', () => {
       expect(tauriCommands.overwriteWithCrop).toHaveBeenCalledTimes(1);
       expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(2);
       expect(tauriCommands.getExifMetadata).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('keeps pending crop edits when save pending edits is canceled at confirmation', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      pendingEditsByPath: {
+        'C:/Images/photo.jpg': {
+          rotationDegrees: 0,
+          cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+          pendingCropPreview: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+          updatedAt: 1,
+          history: [],
+        },
+      },
+      cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+      pendingCropPreview: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+    });
+    vi.mocked(confirm).mockResolvedValue(false);
+    const overwriteSpy = vi.spyOn(tauriCommands, 'overwriteWithCrop');
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Save pending edits'));
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('photo.jpg'),
+      expect.objectContaining({
+        title: 'Overwrite Cropped Image',
+        kind: 'warning',
+      })
+    );
+    expect(overwriteSpy).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().pendingEditsByPath['C:/Images/photo.jpg']).toBeDefined();
+  });
+
+  it('commits pending crop edits after confirmation', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      pendingEditsByPath: {
+        'C:/Images/photo.jpg': {
+          rotationDegrees: 0,
+          cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+          pendingCropPreview: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+          updatedAt: 1,
+          history: [],
+        },
+      },
+      cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+      pendingCropPreview: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+    });
+    vi.mocked(confirm).mockResolvedValue(true);
+    vi.spyOn(tauriCommands, 'overwriteWithCrop').mockResolvedValue(undefined);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Save pending edits'));
+    });
+
+    await waitFor(() => {
+      expect(tauriCommands.overwriteWithCrop).toHaveBeenCalledTimes(1);
+      expect(useViewerStore.getState().pendingEditsByPath['C:/Images/photo.jpg']).toBeUndefined();
     });
   });
 });

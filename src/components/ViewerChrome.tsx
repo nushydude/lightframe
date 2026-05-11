@@ -57,8 +57,8 @@ export function ViewerChrome({
     isCropMode,
     cropRect,
     pendingCropPreview,
+    pendingEditsByPath,
     cropAspectRatio,
-    saveRotation,
     viewMode,
     setViewMode,
     enterCropMode,
@@ -67,6 +67,8 @@ export function ViewerChrome({
     resetCrop,
     applyCropPreview,
     clearCropPreview,
+    clearPendingEdits,
+    commitPendingEdits,
   } = useViewerStore();
 
   const [showExif, setShowExif] = useState(false);
@@ -87,6 +89,10 @@ export function ViewerChrome({
   const canSaveRotation = canSaveRotationForPath(currentImagePath);
   const cropDisabledByRotation = rotation !== 0;
   const canPreviewCrop = isCropMode && cropRect !== null;
+  const currentPendingEdit = currentImagePath ? pendingEditsByPath[currentImagePath] : undefined;
+  const hasPendingEdits = Boolean(currentPendingEdit);
+  const canCommitPendingEdits =
+    Boolean(currentPendingEdit?.cropRect) || (hasPendingEdits && canSaveRotation);
 
   const toggleFullscreen = async () => {
     try {
@@ -192,12 +198,8 @@ export function ViewerChrome({
       );
       invalidateImageAsset(currentImagePath);
       invalidateThumbnail(currentImagePath);
-      useViewerStore.setState({
-        isCropMode: false,
-        cropRect: null,
-        pendingCropPreview: null,
-        cacheBuster: Date.now(),
-      });
+      clearPendingEdits(currentImagePath);
+      useViewerStore.setState({ cacheBuster: Date.now() });
       setExifRefreshToken((value) => value + 1);
       await message('Original image updated with the cropped selection.', {
         title: 'Crop Saved',
@@ -234,6 +236,7 @@ export function ViewerChrome({
               {isFolderScanning && ' …'}
             </span>
           )}
+          {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
         <div className="top-bar-right">
@@ -507,13 +510,33 @@ export function ViewerChrome({
           ↻
         </button>
 
-        {rotation !== 0 && canSaveRotation && (
+        {hasPendingEdits && (
+          <button
+            className="control-btn"
+            onClick={() => {
+              if (currentImagePath) {
+                clearPendingEdits(currentImagePath);
+              }
+            }}
+            title="Reset pending edits"
+            aria-label="Reset pending edits"
+            id="btn-reset-edits"
+          >
+            Reset
+          </button>
+        )}
+
+        {canCommitPendingEdits && (
           <button
             className="control-btn active"
-            onClick={saveRotation}
-            title="Save rotation to file"
-            aria-label="Save rotation"
-            id="btn-save-rotation"
+            onClick={() => {
+              if (currentImagePath) {
+                void commitPendingEdits(currentImagePath);
+              }
+            }}
+            title="Save pending edits"
+            aria-label="Save pending edits"
+            id="btn-save-edits"
           >
             💾
           </button>

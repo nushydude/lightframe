@@ -6,6 +6,7 @@ import {
   clampNormalizedRect,
   type CropAspectRatioPreset,
   type NormalizedCropRect,
+  normalizedToIntegerPixelRect,
 } from '../services/cropMath';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
@@ -17,6 +18,57 @@ const DEFAULT_CROP_RECT: NormalizedCropRect = {
   height: 0.8,
 };
 
+function cloneCropRect(rect: NormalizedCropRect | null): NormalizedCropRect | null {
+  return rect ? { ...rect } : null;
+}
+
+function clonePendingSnapshot(snapshot: PendingImageEditSnapshot): PendingImageEditSnapshot {
+  return {
+    rotationDegrees: snapshot.rotationDegrees,
+    cropRect: cloneCropRect(snapshot.cropRect),
+    pendingCropPreview: cloneCropRect(snapshot.pendingCropPreview),
+  };
+}
+
+function hasPendingEdit(snapshot: PendingImageEditSnapshot): boolean {
+  return (
+    snapshot.rotationDegrees !== 0
+    || snapshot.cropRect !== null
+    || snapshot.pendingCropPreview !== null
+  );
+}
+
+function toPendingSnapshot(edit?: PendingImageEdit | null): PendingImageEditSnapshot {
+  return {
+    rotationDegrees: edit?.rotationDegrees ?? 0,
+    cropRect: cloneCropRect(edit?.cropRect ?? null),
+    pendingCropPreview: cloneCropRect(edit?.pendingCropPreview ?? null),
+  };
+}
+
+function getEditFieldsForPath(
+  path: string | null,
+  pendingEditsByPath: Record<string, PendingImageEdit>
+) {
+  const edit = path ? pendingEditsByPath[path] : undefined;
+  return {
+    rotation: edit?.rotationDegrees ?? 0,
+    cropRect: cloneCropRect(edit?.cropRect ?? null),
+    pendingCropPreview: cloneCropRect(edit?.pendingCropPreview ?? null),
+  };
+}
+
+export interface PendingImageEditSnapshot {
+  rotationDegrees: number;
+  cropRect: NormalizedCropRect | null;
+  pendingCropPreview: NormalizedCropRect | null;
+}
+
+export interface PendingImageEdit extends PendingImageEditSnapshot {
+  updatedAt: number;
+  history: PendingImageEditSnapshot[];
+}
+
 export interface ViewerState {
   // Image state
   currentImagePath: string | null;
@@ -26,6 +78,7 @@ export interface ViewerState {
   isFolderScanning: boolean;
   cacheBuster: number;
   loadGeneration: number;
+  pendingEditsByPath: Record<string, PendingImageEdit>;
 
   // Display state
   isFullscreen: boolean;
@@ -80,6 +133,10 @@ export interface ViewerState {
   resetCrop: () => void;
   applyCropPreview: () => void;
   clearCropPreview: () => void;
+  clearPendingEdits: (path: string) => void;
+  clearAllPendingEdits: () => void;
+  commitPendingEdits: (path: string) => Promise<void>;
+  undoLastEdit: (path: string) => void;
 
   startSlideshow: () => void;
   stopSlideshow: () => void;
@@ -101,6 +158,7 @@ const initialState = {
   images: [],
   currentIndex: -1,
   isFolderScanning: false,
+  pendingEditsByPath: {},
   isFullscreen: false,
   defaultZoomMode: 'fit' as ZoomMode,
   zoomMode: 'fit' as ZoomMode,
@@ -123,24 +181,68 @@ const initialState = {
   viewMode: 'viewer' as const,
 };
 
-export const useViewerStore = create<ViewerState>((set, get) => ({
+export const useViewerStore = create<ViewerState>((set, get) => {
+  const syncCurrentPendingEdit = (
+    recipe: (
+      draft: PendingImageEditSnapshot,
+      existing: PendingImageEdit | undefined
+    ) => PendingImageEditSnapshot,
+    pushHistory = false
+  ) => {
+    const { currentImagePath } = get();
+    if (!currentImagePath) {
+      return;
+    }
+
+    set((state) => {
+      const existing = state.pendingEditsByPath[currentImagePath];
+      const draft = recipe(toPendingSnapshot(existing), existing);
+      const nextPendingEdits = { ...state.pendingEditsByPath };
+
+      if (hasPendingEdit(draft)) {
+        nextPendingEdits[currentImagePath] = {
+          rotationDegrees: draft.rotationDegrees,
+          cropRect: cloneCropRect(draft.cropRect),
+          pendingCropPreview: cloneCropRect(draft.pendingCropPreview),
+          updatedAt: Date.now(),
+          history: pushHistory
+            ? [...(existing?.history ?? []), clonePendingSnapshot(toPendingSnapshot(existing))]
+            : existing?.history ?? [],
+        };
+      } else {
+        delete nextPendingEdits[currentImagePath];
+      }
+
+      return {
+        pendingEditsByPath: nextPendingEdits,
+        rotation: draft.rotationDegrees,
+        cropRect: cloneCropRect(draft.cropRect),
+        pendingCropPreview: cloneCropRect(draft.pendingCropPreview),
+      };
+    });
+  };
+
+  return ({
   ...initialState,
 
-  setCurrentImage: (path, index) =>
+  setCurrentImage: (path, index) => {
+    const { defaultZoomMode, pendingEditsByPath } = get();
+    const editFields = getEditFieldsForPath(path, pendingEditsByPath);
     set({
       currentImagePath: path,
       currentIndex: index,
-      zoomMode: get().defaultZoomMode,
+      zoomMode: defaultZoomMode,
       zoomLevel: 1,
       panX: 0,
       panY: 0,
-      rotation: 0,
+      rotation: editFields.rotation,
       isCropMode: false,
-      cropRect: null,
-      pendingCropPreview: null,
+      cropRect: editFields.cropRect,
+      pendingCropPreview: editFields.pendingCropPreview,
       cropAspectRatio: 'free',
       errorMessage: null,
-    }),
+    });
+  },
 
   setImages: (images) => set({ images }),
 
@@ -149,19 +251,21 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setFolderScanning: (scanning) => set({ isFolderScanning: scanning }),
 
   setCurrentIndex: (index: number) => {
-    const { images, defaultZoomMode } = get();
+    const { images, defaultZoomMode, pendingEditsByPath } = get();
     if (index < 0 || index >= images.length) return;
+    const path = images[index].path;
+    const editFields = getEditFieldsForPath(path, pendingEditsByPath);
     set({
       currentIndex: index,
-      currentImagePath: images[index].path,
+      currentImagePath: path,
       zoomMode: defaultZoomMode,
       zoomLevel: 1,
       panX: 0,
       panY: 0,
-      rotation: 0,
+      rotation: editFields.rotation,
       isCropMode: false,
-      cropRect: null,
-      pendingCropPreview: null,
+      cropRect: editFields.cropRect,
+      pendingCropPreview: editFields.pendingCropPreview,
       cropAspectRatio: 'free',
       errorMessage: null,
     });
@@ -210,14 +314,24 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   removeImage: (index) => {
     const { images, currentIndex } = get();
     if (index < 0 || index >= images.length) return;
-    
+
     const newImages = [...images];
     newImages.splice(index, 1);
-    
+    const removedPath = images[index]?.path;
+
     if (newImages.length === 0) {
       get().reset();
     } else {
-      set({ images: newImages });
+      set((state) => {
+        const nextPendingEdits = { ...state.pendingEditsByPath };
+        if (removedPath) {
+          delete nextPendingEdits[removedPath];
+        }
+        return {
+          images: newImages,
+          pendingEditsByPath: nextPendingEdits,
+        };
+      });
       // If we deleted the current or a previous image, update the current index
       if (currentIndex >= newImages.length) {
         get().setCurrentIndex(newImages.length - 1);
@@ -262,25 +376,31 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const newLevel = Math.max(0.1, zoomLevel / 1.25);
     set({ zoomLevel: newLevel, zoomMode: 'custom' });
   },
-  
+
   rotateClockwise: () => {
     const { rotation } = get();
-    set({
-      rotation: (rotation + 90) % 360,
-      isCropMode: false,
-      cropRect: null,
-      pendingCropPreview: null,
-    });
+    set({ isCropMode: false });
+    syncCurrentPendingEdit(
+      () => ({
+        rotationDegrees: (rotation + 90) % 360,
+        cropRect: null,
+        pendingCropPreview: null,
+      }),
+      true
+    );
   },
-  
+
   rotateCounterClockwise: () => {
     const { rotation } = get();
-    set({
-      rotation: (rotation - 90 + 360) % 360,
-      isCropMode: false,
-      cropRect: null,
-      pendingCropPreview: null,
-    });
+    set({ isCropMode: false });
+    syncCurrentPendingEdit(
+      () => ({
+        rotationDegrees: (rotation - 90 + 360) % 360,
+        cropRect: null,
+        pendingCropPreview: null,
+      }),
+      true
+    );
   },
 
   enterCropMode: () => {
@@ -294,26 +414,198 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   exitCropMode: () => set({ isCropMode: false, cropRect: null }),
 
-  updateCropRect: (rect) => set({ cropRect: rect ? clampNormalizedRect(rect) : null }),
+  updateCropRect: (rect) => {
+    const nextRect = rect ? clampNormalizedRect(rect) : null;
+    set({ cropRect: nextRect });
+    syncCurrentPendingEdit((draft) => ({
+      ...draft,
+      cropRect: cloneCropRect(nextRect),
+    }));
+  },
 
   setCropAspectRatio: (ratio) => set({ cropAspectRatio: ratio }),
 
-  resetCrop: () =>
+  resetCrop: () => {
+    const resetRect = clampNormalizedRect(DEFAULT_CROP_RECT);
     set({
-      cropRect: clampNormalizedRect(DEFAULT_CROP_RECT),
+      cropRect: resetRect,
       pendingCropPreview: null,
-    }),
+    });
+    syncCurrentPendingEdit((draft) => ({
+      ...draft,
+      cropRect: cloneCropRect(resetRect),
+      pendingCropPreview: null,
+    }));
+  },
 
   applyCropPreview: () => {
     const { cropRect } = get();
     if (!cropRect) return;
+    const previewRect = clampNormalizedRect(cropRect);
     set({
-      pendingCropPreview: clampNormalizedRect(cropRect),
+      pendingCropPreview: previewRect,
       isCropMode: false,
     });
+    syncCurrentPendingEdit(
+      (draft) => ({
+        ...draft,
+        cropRect: cloneCropRect(previewRect),
+        pendingCropPreview: cloneCropRect(previewRect),
+      }),
+      true
+    );
   },
 
-  clearCropPreview: () => set({ pendingCropPreview: null }),
+  clearCropPreview: () => {
+    set({ pendingCropPreview: null });
+    syncCurrentPendingEdit((draft) => ({
+      ...draft,
+      pendingCropPreview: null,
+    }));
+  },
+
+  clearPendingEdits: (path) =>
+    set((state) => {
+      const nextPendingEdits = { ...state.pendingEditsByPath };
+      delete nextPendingEdits[path];
+
+      if (state.currentImagePath !== path) {
+        return { pendingEditsByPath: nextPendingEdits };
+      }
+
+      return {
+        pendingEditsByPath: nextPendingEdits,
+        rotation: 0,
+        cropRect: null,
+        pendingCropPreview: null,
+        isCropMode: false,
+      };
+    }),
+
+  clearAllPendingEdits: () =>
+    set({
+      pendingEditsByPath: {},
+      rotation: 0,
+      cropRect: null,
+      pendingCropPreview: null,
+      isCropMode: false,
+    }),
+
+  commitPendingEdits: async (path) => {
+    const state = get();
+    const targetPath = path || state.currentImagePath;
+    if (!targetPath) return;
+
+    const pendingEdit = state.pendingEditsByPath[targetPath] ?? (
+      state.currentImagePath === targetPath
+        ? {
+            rotationDegrees: state.rotation,
+            cropRect: cloneCropRect(state.cropRect),
+            pendingCropPreview: cloneCropRect(state.pendingCropPreview),
+            updatedAt: Date.now(),
+            history: [],
+          }
+        : undefined
+    );
+    if (!pendingEdit || !hasPendingEdit(pendingEdit)) return;
+
+    try {
+      const { confirm } = await import('@tauri-apps/plugin-dialog');
+      const { overwriteWithCrop, saveRotatedImage } = await import('../services/tauriCommands');
+
+      if (pendingEdit.cropRect) {
+        const fileName = targetPath.replace(/\\/g, '/').split('/').pop() || targetPath;
+        const confirmed = await confirm(
+          `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
+          {
+            title: 'Overwrite Cropped Image',
+            kind: 'warning',
+          }
+        );
+        if (!confirmed) {
+          return;
+        }
+
+        const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+        const imageWidth = activeImage?.naturalWidth ?? activeImage?.width ?? 0;
+        const imageHeight = activeImage?.naturalHeight ?? activeImage?.height ?? 0;
+
+        if (imageWidth <= 0 || imageHeight <= 0) {
+          throw new Error('Unable to determine image dimensions for pending crop save.');
+        }
+
+        await overwriteWithCrop(
+          targetPath,
+          normalizedToIntegerPixelRect(pendingEdit.cropRect, imageWidth, imageHeight),
+          pendingEdit.rotationDegrees
+        );
+      } else if (pendingEdit.rotationDegrees !== 0) {
+        await saveRotatedImage(targetPath, pendingEdit.rotationDegrees);
+      }
+
+      invalidateImageAsset(targetPath);
+      invalidateThumbnail(targetPath);
+
+      set((currentState) => {
+        const nextPendingEdits = { ...currentState.pendingEditsByPath };
+        delete nextPendingEdits[targetPath];
+
+        if (currentState.currentImagePath !== targetPath) {
+          return {
+            pendingEditsByPath: nextPendingEdits,
+          };
+        }
+
+        return {
+          pendingEditsByPath: nextPendingEdits,
+          rotation: 0,
+          cropRect: null,
+          pendingCropPreview: null,
+          isCropMode: false,
+          cacheBuster: Date.now(),
+          errorMessage: null,
+        };
+      });
+    } catch (err) {
+      set({ errorMessage: `Failed to save edits: ${err}` });
+    }
+  },
+
+  undoLastEdit: (path) =>
+    set((state) => {
+      const existing = state.pendingEditsByPath[path];
+      if (!existing || existing.history.length === 0) {
+        return {};
+      }
+
+      const previousSnapshot = existing.history[existing.history.length - 1];
+      const remainingHistory = existing.history.slice(0, -1);
+      const nextPendingEdits = { ...state.pendingEditsByPath };
+
+      if (hasPendingEdit(previousSnapshot)) {
+        nextPendingEdits[path] = {
+          rotationDegrees: previousSnapshot.rotationDegrees,
+          cropRect: cloneCropRect(previousSnapshot.cropRect),
+          pendingCropPreview: cloneCropRect(previousSnapshot.pendingCropPreview),
+          updatedAt: Date.now(),
+          history: remainingHistory,
+        };
+      } else {
+        delete nextPendingEdits[path];
+      }
+
+      if (state.currentImagePath !== path) {
+        return { pendingEditsByPath: nextPendingEdits };
+      }
+
+      return {
+        pendingEditsByPath: nextPendingEdits,
+        rotation: previousSnapshot.rotationDegrees,
+        cropRect: cloneCropRect(previousSnapshot.cropRect),
+        pendingCropPreview: cloneCropRect(previousSnapshot.pendingCropPreview),
+        isCropMode: false,
+      };
+    }),
 
   startSlideshow: () =>
     set({ isSlideshowActive: true, isSlideshowPaused: false }),
@@ -330,28 +622,32 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setShowSettings: (show) => set({ showSettings: show }),
   setShowCommandPalette: (show) => set({ showCommandPalette: show }),
   setError: (msg) => set({ errorMessage: msg }),
-  
+
   saveRotation: async () => {
-    const { currentImagePath, rotation } = get();
-    if (!currentImagePath || rotation === 0) return;
-    
-    try {
-      const { saveRotatedImage } = await import('../services/tauriCommands');
-      await saveRotatedImage(currentImagePath, rotation);
-      invalidateImageAsset(currentImagePath);
-      invalidateThumbnail(currentImagePath);
-      set({ rotation: 0, cacheBuster: Date.now() });
-    } catch (err) {
-      set({ errorMessage: `Failed to save rotation: ${err}` });
-    }
+    const { currentImagePath } = get();
+    if (!currentImagePath) return;
+    await get().commitPendingEdits(currentImagePath);
   },
 
   setViewMode: (mode) =>
-    set({
-      viewMode: mode,
-      isCropMode: mode === 'grid' ? false : get().isCropMode,
-      cropRect: mode === 'grid' ? null : get().cropRect,
-      pendingCropPreview: mode === 'grid' ? null : get().pendingCropPreview,
+    set((state) => {
+      if (mode === 'grid') {
+        return {
+          viewMode: mode,
+          isCropMode: false,
+          cropRect: null,
+          pendingCropPreview: null,
+        };
+      }
+
+      const editFields = getEditFieldsForPath(state.currentImagePath, state.pendingEditsByPath);
+      return {
+        viewMode: mode,
+        isCropMode: false,
+        cropRect: editFields.cropRect,
+        pendingCropPreview: editFields.pendingCropPreview,
+        rotation: editFields.rotation,
+      };
     }),
 
   beginLoadGeneration: () => {
@@ -366,4 +662,5 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       defaultZoomMode: state.defaultZoomMode,
       loadGeneration: state.loadGeneration + 1,
     })),
-}));
+  });
+});

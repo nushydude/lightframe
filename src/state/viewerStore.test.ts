@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useViewerStore } from './viewerStore';
 
-const { saveRotatedImageMock, invalidateImageAssetMock, invalidateThumbnailMock } = vi.hoisted(() => ({
+const { saveRotatedImageMock, overwriteWithCropMock, invalidateImageAssetMock, invalidateThumbnailMock } = vi.hoisted(() => ({
   saveRotatedImageMock: vi.fn(),
+  overwriteWithCropMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
   invalidateThumbnailMock: vi.fn(),
 }));
 
 vi.mock('../services/tauriCommands', () => ({
   saveRotatedImage: saveRotatedImageMock,
+  overwriteWithCrop: overwriteWithCropMock,
 }));
 
 vi.mock('../services/imageAssetCache', () => ({
@@ -198,7 +200,7 @@ describe('viewerStore', () => {
     });
   });
 
-  it('clears crop state when navigating to a new image', () => {
+  it('restores per-image pending edits when navigating away and back', () => {
     useViewerStore.setState({
       images: [
         { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
@@ -208,14 +210,37 @@ describe('viewerStore', () => {
       currentImagePath: '1.jpg',
     });
 
+    useViewerStore.getState().rotateClockwise();
     useViewerStore.getState().enterCropMode();
+    useViewerStore.getState().updateCropRect({
+      x: 0.2,
+      y: 0.2,
+      width: 0.5,
+      height: 0.5,
+    });
     useViewerStore.getState().applyCropPreview();
     useViewerStore.getState().setCurrentIndex(1);
 
+    expect(useViewerStore.getState().rotation).toBe(0);
+    expect(useViewerStore.getState().pendingCropPreview).toBeNull();
+
+    useViewerStore.getState().setCurrentIndex(0);
+
     const state = useViewerStore.getState();
+    expect(state.rotation).toBe(90);
     expect(state.isCropMode).toBe(false);
-    expect(state.cropRect).toBeNull();
-    expect(state.pendingCropPreview).toBeNull();
+    expect(state.cropRect).toEqual({
+      x: 0.2,
+      y: 0.2,
+      width: 0.5,
+      height: 0.5,
+    });
+    expect(state.pendingCropPreview).toEqual({
+      x: 0.2,
+      y: 0.2,
+      width: 0.5,
+      height: 0.5,
+    });
   });
 
   it('clears crop state when switching to grid mode', () => {
@@ -227,5 +252,58 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().isCropMode).toBe(false);
     expect(useViewerStore.getState().cropRect).toBeNull();
     expect(useViewerStore.getState().pendingCropPreview).toBeNull();
+  });
+
+  it('clears current-image edits separately from clearing all pending edits', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+    });
+
+    useViewerStore.getState().rotateClockwise();
+    useViewerStore.getState().setCurrentIndex(1);
+    useViewerStore.getState().rotateClockwise();
+
+    useViewerStore.getState().clearPendingEdits('1.jpg');
+    expect(useViewerStore.getState().pendingEditsByPath['1.jpg']).toBeUndefined();
+    expect(useViewerStore.getState().pendingEditsByPath['2.jpg']).toBeDefined();
+
+    useViewerStore.getState().clearAllPendingEdits();
+    expect(useViewerStore.getState().pendingEditsByPath).toEqual({});
+    expect(useViewerStore.getState().rotation).toBe(0);
+  });
+
+  it('clears pending edits after a successful commit and keeps them after a failure', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(9999);
+    useViewerStore.setState({
+      currentImagePath: 'test.jpg',
+      currentIndex: 0,
+      images: [{ path: 'test.jpg', file_name: 'test', extension: 'jpg', size_bytes: 0, modified_at: null }],
+    });
+    useViewerStore.getState().rotateClockwise();
+
+    try {
+      saveRotatedImageMock.mockResolvedValueOnce(undefined);
+      await useViewerStore.getState().commitPendingEdits('test.jpg');
+
+      expect(saveRotatedImageMock).toHaveBeenCalledWith('test.jpg', 90);
+      expect(useViewerStore.getState().pendingEditsByPath['test.jpg']).toBeUndefined();
+      expect(useViewerStore.getState().rotation).toBe(0);
+      expect(useViewerStore.getState().cacheBuster).toBe(9999);
+
+      useViewerStore.getState().rotateClockwise();
+      saveRotatedImageMock.mockRejectedValueOnce(new Error('nope'));
+      await useViewerStore.getState().commitPendingEdits('test.jpg');
+
+      expect(useViewerStore.getState().pendingEditsByPath['test.jpg']).toBeDefined();
+      expect(useViewerStore.getState().rotation).toBe(90);
+      expect(useViewerStore.getState().errorMessage).toContain('Failed to save edits');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
