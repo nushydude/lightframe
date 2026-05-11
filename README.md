@@ -39,6 +39,7 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 - **Overwrite crop support**: Add explicit overwrite flow with confirmation, cache invalidation, and metadata preservation where possible.
 - **Lossless JPEG rotation**: Prefer metadata or lossless transforms when available instead of always re-encoding pixels.
 - **Edit history per image**: Track pending rotate/crop changes before committing them to disk.
+- **Open in external editor**: Launch the current image in a configured editor such as Paint.NET for deeper edits outside LightFrame.
 
 ### Organization & Review
 
