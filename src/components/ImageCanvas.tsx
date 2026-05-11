@@ -37,6 +37,18 @@ type ImageCanvasProps = {
   onWheelPrev?: () => void;
 };
 
+type ImageStyleOptions = {
+  zoomMode: ZoomMode;
+  panX: number;
+  panY: number;
+  rotation: number;
+  zoomLevel: number;
+  isFullResolutionReady: boolean;
+  metadata: ImageMetadata | null;
+  pendingCropPreview: ReturnType<typeof useViewerStore.getState>['pendingCropPreview'];
+  isCropMode: boolean;
+};
+
 function getHotWindowIndices(currentIndex: number, imageCount: number): number[] {
   const start = Math.max(0, currentIndex - NAVIGATION_CACHE_PREVIOUS_IMAGES);
   const end = Math.min(imageCount - 1, currentIndex + NAVIGATION_CACHE_NEXT_IMAGES);
@@ -45,6 +57,60 @@ function getHotWindowIndices(currentIndex: number, imageCount: number): number[]
     indices.push(index);
   }
   return indices;
+}
+
+function getImageStyle({
+  zoomMode,
+  panX,
+  panY,
+  rotation,
+  zoomLevel,
+  isFullResolutionReady,
+  metadata,
+  pendingCropPreview,
+  isCropMode,
+}: ImageStyleOptions): CSSProperties {
+  const style: CSSProperties = {};
+  const rotationStr = rotation !== 0 ? `rotate(${rotation}deg)` : '';
+
+  if (zoomMode === 'actual') {
+    style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
+    style.maxWidth = 'none';
+    style.maxHeight = 'none';
+  } else if (zoomMode === 'custom') {
+    style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
+    style.maxWidth = 'none';
+    style.maxHeight = 'none';
+  } else if (zoomMode === 'fill') {
+    style.width = '100%';
+    style.height = '100%';
+    style.objectFit = 'cover';
+    style.transform = rotationStr;
+  } else {
+    style.transform = rotationStr;
+
+    if (rotation === 90 || rotation === 270) {
+      style.maxWidth = '100vh';
+      style.maxHeight = '100vw';
+    }
+  }
+
+  if (
+    !isFullResolutionReady &&
+    metadata?.width != null &&
+    metadata?.height != null &&
+    (zoomMode === 'actual' || zoomMode === 'custom')
+  ) {
+    style.width = `${metadata.width}px`;
+    style.height = `${metadata.height}px`;
+  }
+
+  if (pendingCropPreview && !isCropMode) {
+    style.clipPath = getPreviewClipPath(pendingCropPreview);
+    style.transformOrigin = 'center center';
+  }
+
+  return style;
 }
 
 /** Main image display canvas with zoom/pan support */
@@ -407,64 +473,6 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     isCropMode,
   ]);
 
-  // Compute image transform
-  const getImageStyle = useCallback((): CSSProperties => {
-    const style: CSSProperties = {};
-    const rotationStr = rotation !== 0 ? `rotate(${rotation}deg)` : '';
-
-    if (zoomMode === 'actual') {
-      style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
-      style.maxWidth = 'none';
-      style.maxHeight = 'none';
-    } else if (zoomMode === 'custom') {
-      style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
-      style.maxWidth = 'none';
-      style.maxHeight = 'none';
-    } else if (zoomMode === 'fill') {
-      style.width = '100%';
-      style.height = '100%';
-      style.objectFit = 'cover';
-      style.transform = rotationStr;
-    } else {
-      // 'fit' mode
-      style.transform = rotationStr;
-
-      // If rotated 90 or 270, we need to make sure it still fits
-      if (rotation === 90 || rotation === 270) {
-        style.maxWidth = '100vh';
-        style.maxHeight = '100vw';
-      }
-    }
-
-    if (
-      !isFullResolutionReady &&
-      metadata?.width != null &&
-      metadata?.height != null &&
-      (zoomMode === 'actual' || zoomMode === 'custom')
-    ) {
-      style.width = `${metadata.width}px`;
-      style.height = `${metadata.height}px`;
-    }
-
-    if (pendingCropPreview && !isCropMode) {
-      style.clipPath = getPreviewClipPath(pendingCropPreview);
-      style.transformOrigin = 'center center';
-    }
-
-    return style;
-  }, [
-    isCropMode,
-    isFullResolutionReady,
-    metadata?.height,
-    metadata?.width,
-    panX,
-    panY,
-    pendingCropPreview,
-    rotation,
-    zoomLevel,
-    zoomMode,
-  ]);
-
   const containerClasses = [
     'image-canvas',
     isDragging ? 'dragging' : '',
@@ -472,6 +480,17 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   ]
     .filter(Boolean)
     .join(' ');
+  const imageStyle = getImageStyle({
+    zoomMode,
+    panX,
+    panY,
+    rotation,
+    zoomLevel,
+    isFullResolutionReady,
+    metadata,
+    pendingCropPreview,
+    isCropMode,
+  });
 
   if (!currentImagePath) return null;
 
@@ -490,7 +509,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           src={imageSrc}
           alt=""
           className={`${zoomMode} ${isImageLoading ? 'loading' : ''}`}
-          style={getImageStyle()}
+          style={imageStyle}
           onLoad={(event) => {
             handleImageLoad(event);
             updateImageBounds();
