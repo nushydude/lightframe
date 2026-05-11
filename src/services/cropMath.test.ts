@@ -20,11 +20,7 @@ describe('cropMath', () => {
 
   it('rounds normalized rectangles to in-bounds integer pixel rectangles', () => {
     expect(
-      normalizedToIntegerPixelRect(
-        { x: 0.3333, y: 0.1, width: 0.6667, height: 0.9 },
-        301,
-        199
-      )
+      normalizedToIntegerPixelRect({ x: 0.3333, y: 0.1, width: 0.6667, height: 0.9 }, 301, 199)
     ).toEqual({
       x: 100,
       y: 19,
@@ -34,9 +30,7 @@ describe('cropMath', () => {
   });
 
   it('clamps rectangles within image bounds', () => {
-    expect(
-      clampNormalizedRect({ x: -0.2, y: 0.95, width: 1.3, height: 0.2 })
-    ).toEqual({
+    expect(clampNormalizedRect({ x: -0.2, y: 0.95, width: 1.3, height: 0.2 })).toEqual({
       x: 0,
       y: 0.8,
       width: 1,

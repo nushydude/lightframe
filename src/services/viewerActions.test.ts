@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  copyCurrentImage,
-  deleteCurrentImage,
-  revealCurrentImage,
-} from './viewerActions';
+import { copyCurrentImage, deleteCurrentImage, revealCurrentImage } from './viewerActions';
 
 const {
   confirmMock,

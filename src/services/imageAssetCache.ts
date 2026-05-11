@@ -192,11 +192,7 @@ export async function getPreviewAsset(
   }
 
   const current = previewImageAssetCache.get(path);
-  if (
-    current &&
-    current.version >= entry.version &&
-    current.maxDimension === entry.maxDimension
-  ) {
+  if (current && current.version >= entry.version && current.maxDimension === entry.maxDimension) {
     current.lastUsedAt = Date.now();
     return current.dataUrl;
   }

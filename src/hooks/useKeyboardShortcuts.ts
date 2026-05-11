@@ -37,7 +37,6 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     resetZoom,
     zoomMode,
     setZoomMode,
-    stopSlideshow,
     updateCropRect,
     applyCropPreview,
     exitCropMode,
@@ -49,7 +48,11 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     async (e: KeyboardEvent) => {
       // Don't handle shortcuts when typing in inputs
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT'
+      ) {
         return;
       }
 
@@ -75,8 +78,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       }
 
       // Ctrl + K / Ctrl + Shift + P: Open command palette
-      if ((e.ctrlKey && !e.shiftKey && (e.key === 'k' || e.key === 'K'))
-        || (e.ctrlKey && e.shiftKey && (e.key === 'p' || e.key === 'P'))) {
+      if (
+        (e.ctrlKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) ||
+        (e.ctrlKey && e.shiftKey && (e.key === 'p' || e.key === 'P'))
+      ) {
         e.preventDefault();
         if (!showCommandPalette) {
           handlers.openCommandPalette();
@@ -307,7 +312,6 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       zoomIn,
       zoomOut,
       resetZoom,
-      stopSlideshow,
       updateCropRect,
       applyCropPreview,
       exitCropMode,

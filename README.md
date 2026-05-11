@@ -79,6 +79,18 @@ To compile the application into a standalone binary/installer:
 pnpm tauri build
 ```
 
+## Quality Gates
+
+Before pushing broad changes, run the same guardrails used by CI:
+
+```bash
+pnpm run ci:local
+```
+
+For scoped work, use `pnpm run ci:frontend` for React/TypeScript changes and `pnpm run ci:rust` for
+Tauri/Rust changes. `pnpm run quality:audit` runs Fallow on changed code and blocks newly introduced
+dead code, complexity, and duplication regressions.
+
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests to us.

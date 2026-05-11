@@ -16,18 +16,11 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 import { createViewerCommands } from './services/commandRegistry';
-import {
-  copyCurrentImage,
-  deleteCurrentImage,
-  revealCurrentImage,
-} from './services/viewerActions';
+import { copyCurrentImage, deleteCurrentImage, revealCurrentImage } from './services/viewerActions';
 
 import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
-import {
-  hasCompleteWindowBounds,
-  persistWindowBoundsSafely,
-} from './services/windowBounds';
+import { hasCompleteWindowBounds, persistWindowBoundsSafely } from './services/windowBounds';
 
 function App() {
   const {
@@ -165,9 +158,13 @@ function App() {
     void init();
 
     // Still listen in case another instance sends a message (future single-instance support)
-    listen<string>('open-file', async (event) => {
+    void listen<string>('open-file', async (event) => {
       await openImage(event.payload);
-    }).then((fn) => { unlisten = fn; });
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => console.error('Failed to listen for open-file:', err));
 
     return () => {
       isCancelled = true;
@@ -228,29 +225,35 @@ function App() {
       }, 500);
     };
 
-    appWindowRef.current.onMoved(() => {
-      scheduleWindowBoundsPersist();
-    }).then((unlisten) => {
-      if (isUnmounted) {
-        unlisten();
-      } else {
-        unlistenMoved = unlisten;
-      }
-    }).catch((err) => {
-      console.error('Failed to attach window move listener:', err);
-    });
+    appWindowRef.current
+      .onMoved(() => {
+        scheduleWindowBoundsPersist();
+      })
+      .then((unlisten) => {
+        if (isUnmounted) {
+          unlisten();
+        } else {
+          unlistenMoved = unlisten;
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to attach window move listener:', err);
+      });
 
-    appWindowRef.current.onResized(() => {
-      scheduleWindowBoundsPersist();
-    }).then((unlisten) => {
-      if (isUnmounted) {
-        unlisten();
-      } else {
-        unlistenResized = unlisten;
-      }
-    }).catch((err) => {
-      console.error('Failed to attach window resize listener:', err);
-    });
+    appWindowRef.current
+      .onResized(() => {
+        scheduleWindowBoundsPersist();
+      })
+      .then((unlisten) => {
+        if (isUnmounted) {
+          unlisten();
+        } else {
+          unlistenResized = unlisten;
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to attach window resize listener:', err);
+      });
 
     return () => {
       isUnmounted = true;
@@ -272,13 +275,13 @@ function App() {
         try {
           const isDir = await isDirectory(paths[0]);
           if (isDir) {
-            openFolder(paths[0]);
+            await openFolder(paths[0]);
           } else {
-            openImage(paths[0]);
+            await openImage(paths[0]);
           }
         } catch (err) {
           console.error('Failed to stat dragged file:', err);
-          openImage(paths[0]); // fallback
+          await openImage(paths[0]); // fallback
         }
       }
     });
@@ -292,11 +295,11 @@ function App() {
     });
 
     return () => {
-      unlistenDrag.then((fn) => fn());
-      unlistenDragEnter.then((fn) => fn());
-      unlistenDragLeave.then((fn) => fn());
+      void unlistenDrag.then((fn) => fn());
+      void unlistenDragEnter.then((fn) => fn());
+      void unlistenDragLeave.then((fn) => fn());
     };
-  }, [openImage]);
+  }, [openFolder, openImage]);
 
   // Auto-hide controls in fullscreen
   const handleMouseMove = useCallback(() => {
@@ -312,20 +315,28 @@ function App() {
   }, [isFullscreen, setShowControls]);
 
   // Double-click to toggle fullscreen
-  const handleDoubleClick = useCallback(async (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('button') || target.closest('.settings-panel') || target.closest('.top-bar') || target.closest('.bottom-controls')) {
-      return;
-    }
-    if (!currentImagePath) return;
-    try {
-      const newFs = !isFullscreen;
-      await appWindowRef.current.setFullscreen(newFs);
-      setFullscreen(newFs);
-    } catch (err) {
-      console.error('Failed to toggle fullscreen:', err);
-    }
-  }, [currentImagePath, isFullscreen, setFullscreen]);
+  const handleDoubleClick = useCallback(
+    async (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.closest('button') ||
+        target.closest('.settings-panel') ||
+        target.closest('.top-bar') ||
+        target.closest('.bottom-controls')
+      ) {
+        return;
+      }
+      if (!currentImagePath) return;
+      try {
+        const newFs = !isFullscreen;
+        await appWindowRef.current.setFullscreen(newFs);
+        setFullscreen(newFs);
+      } catch (err) {
+        console.error('Failed to toggle fullscreen:', err);
+      }
+    },
+    [currentImagePath, isFullscreen, setFullscreen]
+  );
 
   const handleGoHome = useCallback(async () => {
     try {
@@ -355,8 +366,12 @@ function App() {
       createViewerCommands({
         openFilePicker,
         openFolderPicker,
-        goNext: () => { goNext(); },
-        goPrev: () => { goPrev(); },
+        goNext: () => {
+          goNext();
+        },
+        goPrev: () => {
+          goPrev();
+        },
         goFirst,
         goLast,
         toggleFullscreen: handleToggleFullscreen,
@@ -419,13 +434,13 @@ function App() {
 
     const unlisten = listen<{ imagePath: string | null }>('state-sync', (event) => {
       if (event.payload.imagePath) {
-        openImage(event.payload.imagePath);
+        void openImage(event.payload.imagePath);
       }
     });
     requestStateSync().catch((err) => console.error('Failed to request projector state:', err));
 
     return () => {
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn());
     };
   }, [isSecondary, openImage]);
 
@@ -435,29 +450,37 @@ function App() {
 
     const unlisten = listen('state-sync-request', () => {
       if (currentImagePath) {
-        emitStateSync(currentImagePath).catch((err) => console.error('Failed to sync projector state:', err));
+        emitStateSync(currentImagePath).catch((err) =>
+          console.error('Failed to sync projector state:', err)
+        );
       }
     });
 
     return () => {
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn());
     };
   }, [currentImagePath, isSecondary]);
 
   // Emit sync events when the image changes in the main window
   useEffect(() => {
     if (isSecondary || !currentImagePath) return;
-    emitStateSync(currentImagePath).catch((err) => console.error('Failed to sync projector state:', err));
+    void emitStateSync(currentImagePath).catch((err) =>
+      console.error('Failed to sync projector state:', err)
+    );
   }, [currentImagePath, isSecondary]);
 
   const containerClasses = [
     'app-container',
     isFullscreen ? 'fullscreen' : '',
     showControls ? 'controls-visible' : '',
-    settings.showThumbnails && currentImagePath && viewMode === 'viewer' && !isSecondary ? 'with-thumbnails' : '',
+    settings.showThumbnails && currentImagePath && viewMode === 'viewer' && !isSecondary
+      ? 'with-thumbnails'
+      : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
     isSecondary ? 'secondary-window' : '',
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div
@@ -506,10 +529,20 @@ function App() {
       {errorMessage && (
         <div className="error-banner" role="alert">
           <span>{errorMessage}</span>
-          <button onClick={() => { goNext(); setError(null); }}>
+          <button
+            onClick={() => {
+              goNext();
+              setError(null);
+            }}
+          >
             Try next
           </button>
-          <button onClick={() => { openFilePicker(); setError(null); }}>
+          <button
+            onClick={() => {
+              void openFilePicker();
+              setError(null);
+            }}
+          >
             Open file
           </button>
           <button onClick={() => setError(null)}>✕</button>

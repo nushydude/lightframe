@@ -3,32 +3,35 @@ name: lightframe-test-matrix-runner
 description: Select the smallest responsible validation commands based on changed scope.
 ---
 
-# lightframe Test Matrix Runner
+# LightFrame Test Matrix Runner
 
-Use this workflow to run efficient and compliant verification.
+Use this workflow to choose fast iteration checks and the final push-readiness gate.
 
 ## Selection Rules
 
 1. Identify changed areas:
-   - `apps/web` -> frontend behavior checks
-   - `apps/api` -> API/backend checks
-   - `packages/shared` -> shared build and downstream checks
-   - broad/high-risk -> cross-cutting checks
-2. Choose minimum required commands from `docs/TESTING_MATRIX.md`.
-3. Prefer fast commands first for iteration:
-   - `npm run lint:changed`
-   - `npm run type-check:fast:web`
-   - `npm run type-check:fast:api`
-   - `npm run test:changed:web`
-   - `npm run test:changed:api`
-4. Before push readiness, run `npm run ci:local:silent` (or `npm run ci:local` when detail is
-   needed).
+   - `src/**/*.ts` or `src/**/*.tsx`: frontend behavior, React state, hooks, services, or tests.
+   - `src-tauri/**`: Rust/Tauri commands, permissions, packaging, or native image processing.
+   - `.github/**`, `package.json`, `pnpm-lock.yaml`, `.fallowrc.json`, `eslint.config.js`: quality
+     or CI infrastructure.
+   - broad/high-risk: cross-cutting changes touching multiple areas.
+2. Prefer fast commands while iterating:
+   - `pnpm run lint`
+   - `pnpm run typecheck`
+   - `pnpm run test:run`
+   - `pnpm run quality:audit`
+3. Before push readiness:
+   - frontend-only: `pnpm run ci:frontend`
+   - Rust/Tauri-only: `pnpm run ci:rust`
+   - broad/high-risk: `pnpm run ci:local`
 
-## Execution Rules
+## Quality Backlog Commands
 
-- Trust exit code 0 for successful runs.
-- Expand to broader test scope when changes are cross-cutting.
-- For barrel/re-export refactors in high-stakes modules, require barrel smoke tests.
+These commands intentionally surface existing debt and may fail until cleanup work is planned:
+
+- `pnpm run quality:dead-code`
+- `pnpm run quality:dupes`
+- `pnpm run quality:health`
 
 ## Output Contract
 
@@ -36,4 +39,4 @@ Report commands and outcomes in this format:
 
 - `<command>`: passed/failed
 - `skips`: explicit reason
-- `next required check`: command
+- `next required check`: command or `none`

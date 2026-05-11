@@ -1,0 +1,14 @@
+.fallow
+.agent/archives
+.agent/orchestration
+.agent/roadmap
+coverage
+dist
+node_modules
+src-tauri/gen
+src-tauri/target
+
+*.log
+*.tsbuildinfo
+fallow-audit.sarif
+pnpm-lock.yaml

@@ -71,10 +71,34 @@ describe('ImageCanvas', () => {
       currentImagePath: 'C:/images/current.jpg',
       currentIndex: 1,
       images: [
-        { path: 'C:/images/prev.jpg', file_name: 'prev.jpg', extension: 'jpg', size_bytes: 1, modified_at: '1' },
-        { path: 'C:/images/current.jpg', file_name: 'current.jpg', extension: 'jpg', size_bytes: 1, modified_at: '1' },
-        { path: 'C:/images/next.jpg', file_name: 'next.jpg', extension: 'jpg', size_bytes: 1, modified_at: '1' },
-        { path: 'C:/images/next2.jpg', file_name: 'next2.jpg', extension: 'jpg', size_bytes: 1, modified_at: '1' },
+        {
+          path: 'C:/images/prev.jpg',
+          file_name: 'prev.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next2.jpg',
+          file_name: 'next2.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
       ],
     });
 
@@ -102,19 +126,21 @@ describe('ImageCanvas', () => {
     const oldCanStoreGuards: Array<() => boolean> = [];
     let phase: 'old' | 'new' = 'old';
 
-    preloadPreviewAssetMock.mockImplementation(
-      (async (_path: string, _maxDimension: number, options?: { canStore?: () => boolean }) => {
-        if (phase === 'old') {
-          if (options?.canStore) {
-            oldCanStoreGuards.push(options.canStore);
-          }
-          await new Promise<void>((resolve) => {
-            oldDeferredResolves.push(resolve);
-          });
-          return;
+    preloadPreviewAssetMock.mockImplementation((async (
+      _path: string,
+      _maxDimension: number,
+      options?: { canStore?: () => boolean }
+    ) => {
+      if (phase === 'old') {
+        if (options?.canStore) {
+          oldCanStoreGuards.push(options.canStore);
         }
-      }) as unknown as () => Promise<undefined>
-    );
+        await new Promise<void>((resolve) => {
+          oldDeferredResolves.push(resolve);
+        });
+        return;
+      }
+    }) as unknown as () => Promise<undefined>);
 
     useViewerStore.setState({
       currentImagePath: images[1].path,
@@ -198,7 +224,13 @@ describe('ImageCanvas', () => {
       currentImagePath: 'C:/images/current.jpg',
       currentIndex: 0,
       images: [
-        { path: 'C:/images/current.jpg', file_name: 'current.jpg', extension: 'jpg', size_bytes: 1, modified_at: '1' },
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
       ],
     });
 
@@ -218,7 +250,7 @@ describe('ImageCanvas', () => {
     });
 
     const unmountedWarning = consoleErrorSpy.mock.calls.some(([firstArg]) =>
-      String(firstArg).includes("state update on an unmounted component")
+      String(firstArg).includes('state update on an unmounted component')
     );
     expect(unmountedWarning).toBe(false);
 

@@ -79,7 +79,9 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
     const updateMetrics = () => {
       const availableWidth = Math.min(1400, content.clientWidth);
-      setColumns(Math.max(1, Math.floor((availableWidth + GRID_GAP) / (GRID_ITEM_SIZE + GRID_GAP))));
+      setColumns(
+        Math.max(1, Math.floor((availableWidth + GRID_GAP) / (GRID_ITEM_SIZE + GRID_GAP)))
+      );
       setViewportHeight(content.clientHeight);
       setScrollTop(content.scrollTop);
     };

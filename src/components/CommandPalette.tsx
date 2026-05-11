@@ -74,7 +74,9 @@ export function CommandPalette({ commands, isOpen, onClose }: CommandPaletteProp
         return;
       }
 
-      setActiveIndex((current) => (current - 1 + filteredCommands.length) % filteredCommands.length);
+      setActiveIndex(
+        (current) => (current - 1 + filteredCommands.length) % filteredCommands.length
+      );
       return;
     }
 

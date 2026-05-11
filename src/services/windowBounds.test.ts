@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS } from '../types/settings';
-import { hasCompleteWindowBounds, persistWindowBoundsSafely, shouldPersistWindowBounds } from './windowBounds';
+import {
+  hasCompleteWindowBounds,
+  persistWindowBoundsSafely,
+  shouldPersistWindowBounds,
+} from './windowBounds';
 
 describe('hasCompleteWindowBounds', () => {
   it('returns true when all bounds are finite numbers', () => {

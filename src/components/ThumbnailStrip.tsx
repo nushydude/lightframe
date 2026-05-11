@@ -115,10 +115,7 @@ export function ThumbnailStrip() {
     <div className="thumbnail-strip-container" ref={containerRef}>
       <div className="thumbnail-strip">
         {startIndex > 0 && (
-          <div
-            className="thumbnail-spacer"
-            style={{ width: startIndex * THUMBNAIL_ITEM_WIDTH }}
-          />
+          <div className="thumbnail-spacer" style={{ width: startIndex * THUMBNAIL_ITEM_WIDTH }} />
         )}
         {visibleImages.map((image, visibleIndex) => {
           const index = startIndex + visibleIndex;
@@ -138,11 +135,7 @@ export function ThumbnailStrip() {
               title={image.file_name}
             >
               {url ? (
-                <img
-                  src={url}
-                  alt=""
-                  draggable={false}
-                />
+                <img src={url} alt="" draggable={false} />
               ) : (
                 <div className="thumbnail-placeholder" />
               )}

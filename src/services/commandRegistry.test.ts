@@ -84,7 +84,7 @@ describe('createViewerCommands', () => {
 
     const cropCommand = commands.find((command) => command.id === 'crop-image');
     expect(cropCommand?.isEnabled(useViewerStore.getState())).toBe(true);
-    cropCommand?.run();
+    void cropCommand?.run();
     expect(enterCropMode).toHaveBeenCalledTimes(1);
   });
 });

@@ -27,7 +27,12 @@ describe('useKeyboardShortcuts', () => {
   it('refreshes current folder on Ctrl+R and prevents browser reload', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
 
-    const event = new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent('keydown', {
+      key: 'r',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
     act(() => {
       window.dispatchEvent(event);
     });
@@ -51,7 +56,12 @@ describe('useKeyboardShortcuts', () => {
   it('opens command palette on Ctrl+K', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
 
-    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent('keydown', {
+      key: 'k',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
     act(() => {
       window.dispatchEvent(event);
     });
@@ -77,14 +87,21 @@ describe('useKeyboardShortcuts', () => {
 
     act(() => {
       window.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true, cancelable: true })
+        new KeyboardEvent('keydown', {
+          key: 'ArrowRight',
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
       );
     });
 
     expect(useViewerStore.getState().cropRect!.x).toBeGreaterThan(before.x);
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      );
     });
 
     expect(useViewerStore.getState().isCropMode).toBe(false);

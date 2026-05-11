@@ -60,13 +60,7 @@ export function useZoomPan(
         onWheelPrev?.();
       }
     },
-    [
-      zoomLevel,
-      settings.mouseWheelBehavior,
-      setZoomLevel,
-      onWheelNext,
-      onWheelPrev,
-    ]
+    [zoomLevel, settings.mouseWheelBehavior, setZoomLevel, onWheelNext, onWheelPrev]
   );
 
   /** Start panning */

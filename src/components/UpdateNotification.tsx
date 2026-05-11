@@ -23,8 +23,8 @@ export function UpdateNotification() {
     }
 
     // Check on mount
-    checkForUpdates();
-    
+    void checkForUpdates();
+
     // Check every 4 hours
     const interval = setInterval(checkForUpdates, 1000 * 60 * 60 * 4);
     return () => clearInterval(interval);
@@ -75,14 +75,20 @@ export function UpdateNotification() {
         ) : status === 'error' ? (
           <>
             <span className="update-title">Update failed</span>
-            <button className="update-btn" onClick={() => setStatus('idle')}>Dismiss</button>
+            <button className="update-btn" onClick={() => setStatus('idle')}>
+              Dismiss
+            </button>
           </>
         ) : (
           <>
             <span className="update-title">New version available: v{updateInfo?.version}</span>
             <div className="update-actions">
-              <button className="update-btn primary" onClick={handleUpdate}>Update & Relaunch</button>
-              <button className="update-btn" onClick={() => setUpdateInfo(null)}>Later</button>
+              <button className="update-btn primary" onClick={handleUpdate}>
+                Update & Relaunch
+              </button>
+              <button className="update-btn" onClick={() => setUpdateInfo(null)}>
+                Later
+              </button>
             </div>
           </>
         )}

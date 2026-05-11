@@ -1,0 +1,51 @@
+{
+  "entry": ["src/main.tsx", "vite.config.ts"],
+  "ignorePatterns": [".fallow/**", "coverage/**", "dist/**", "node_modules/**", "src-tauri/**"],
+  "framework": [
+    {
+      "name": "lightframe-tooling",
+      "detection": {
+        "type": "fileExists",
+        "pattern": "vite.config.ts"
+      },
+      "entryPoints": ["src/main.tsx"],
+      "alwaysUsed": ["eslint.config.js", "src/test/setup.ts", "vite.config.ts"],
+      "toolingDependencies": [
+        "@eslint/js",
+        "@tauri-apps/cli",
+        "@vitejs/plugin-react",
+        "@vitest/eslint-plugin",
+        "eslint",
+        "eslint-config-prettier",
+        "eslint-plugin-react-hooks",
+        "eslint-plugin-react-refresh",
+        "fallow",
+        "globals",
+        "jsdom",
+        "prettier",
+        "typescript",
+        "typescript-eslint",
+        "vite",
+        "vitest"
+      ]
+    }
+  ],
+  "duplicates": {
+    "enabled": true,
+    "mode": "mild",
+    "minTokens": 70,
+    "minLines": 8,
+    "threshold": 8,
+    "ignore": ["**/*.test.ts", "**/*.test.tsx"],
+    "ignoreImports": true
+  },
+  "health": {
+    "maxCyclomatic": 20,
+    "maxCognitive": 15,
+    "maxCrap": 30,
+    "ignore": ["**/*.test.ts", "**/*.test.tsx"]
+  },
+  "audit": {
+    "gate": "new-only"
+  }
+}

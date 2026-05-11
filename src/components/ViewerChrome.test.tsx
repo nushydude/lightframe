@@ -33,8 +33,20 @@ describe('ViewerChrome', () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       images: [
-        { path: 'C:/Images/photo.jpg', file_name: 'photo.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1' },
-        { path: 'C:/Images/other.jpg', file_name: 'other.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2' },
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/other.jpg',
+          file_name: 'other.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
       ],
       currentIndex: 0,
     });
@@ -49,8 +61,20 @@ describe('ViewerChrome', () => {
     useViewerStore.setState({
       currentImagePath: 'C:/photo.jpg',
       images: [
-        { path: 'C:/photo1.jpg', file_name: 'photo1.jpg', extension: 'jpg', size_bytes: 100, modified_at: '1' },
-        { path: 'C:/photo2.jpg', file_name: 'photo2.jpg', extension: 'jpg', size_bytes: 200, modified_at: '2' },
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
       ],
     });
 

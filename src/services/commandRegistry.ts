@@ -137,8 +137,7 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       id: 'save-rotation',
       label: 'Save Rotation',
       keywords: ['rotate', 'save'],
-      isEnabled: (state) =>
-        state.rotation !== 0 && canSaveRotationForPath(state.currentImagePath),
+      isEnabled: (state) => state.rotation !== 0 && canSaveRotationForPath(state.currentImagePath),
       run: () => options.saveRotation(),
     },
     {

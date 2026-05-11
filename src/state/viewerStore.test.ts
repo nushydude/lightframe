@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useViewerStore } from './viewerStore';
 
-const { saveRotatedImageMock, overwriteWithCropMock, invalidateImageAssetMock, invalidateThumbnailMock } = vi.hoisted(() => ({
+const {
+  saveRotatedImageMock,
+  overwriteWithCropMock,
+  invalidateImageAssetMock,
+  invalidateThumbnailMock,
+} = vi.hoisted(() => ({
   saveRotatedImageMock: vi.fn(),
   overwriteWithCropMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
@@ -30,7 +35,7 @@ describe('viewerStore', () => {
 
   it('should set current image and reset display state', () => {
     useViewerStore.getState().setCurrentImage('test.jpg', 5);
-    
+
     const state = useViewerStore.getState();
     expect(state.currentImagePath).toBe('test.jpg');
     expect(state.currentIndex).toBe(5);
@@ -68,7 +73,7 @@ describe('viewerStore', () => {
     expect(state.zoomMode).toBe('actual');
   });
 
-  it("reset preserves defaultZoomMode for next image open", () => {
+  it('reset preserves defaultZoomMode for next image open', () => {
     useViewerStore.getState().setDefaultZoomMode('fill');
     useViewerStore.getState().reset();
     useViewerStore.getState().setCurrentImage('after-reset.jpg', 0);
@@ -122,7 +127,7 @@ describe('viewerStore', () => {
 
   it('should zoom in and out with clamping', () => {
     useViewerStore.getState().setZoomLevel(1);
-    
+
     useViewerStore.getState().zoomIn();
     expect(useViewerStore.getState().zoomLevel).toBe(1.25);
     expect(useViewerStore.getState().zoomMode).toBe('custom');
@@ -146,7 +151,7 @@ describe('viewerStore', () => {
     const previousGeneration = useViewerStore.getState().loadGeneration;
 
     useViewerStore.getState().reset();
-    
+
     const state = useViewerStore.getState();
     expect(state.currentImagePath).toBeNull();
     expect(state.currentIndex).toBe(-1);
@@ -282,7 +287,9 @@ describe('viewerStore', () => {
     useViewerStore.setState({
       currentImagePath: 'test.jpg',
       currentIndex: 0,
-      images: [{ path: 'test.jpg', file_name: 'test', extension: 'jpg', size_bytes: 0, modified_at: null }],
+      images: [
+        { path: 'test.jpg', file_name: 'test', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
     });
     useViewerStore.getState().rotateClockwise();
 

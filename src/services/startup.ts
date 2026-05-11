@@ -7,7 +7,9 @@ export interface StartupDecision {
   mode: 'open-image' | 'empty';
 }
 
-export function resolveStartupDecision(fileArg: StartupCliFileArg | null | undefined): StartupDecision {
+export function resolveStartupDecision(
+  fileArg: StartupCliFileArg | null | undefined
+): StartupDecision {
   if (fileArg && typeof fileArg.value === 'string') {
     const filePath = fileArg.value.trim();
     if (filePath.length > 0) {

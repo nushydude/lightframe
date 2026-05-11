@@ -122,11 +122,9 @@ export async function openSecondaryWindow(): Promise<void> {
       center: true,
     });
 
-    webview.once('tauri://created', () => {
-      console.log('Secondary window created');
-    });
+    void webview.once('tauri://created', () => {});
 
-    webview.once('tauri://error', (e) => {
+    void webview.once('tauri://error', (e) => {
       console.error('Failed to create secondary window:', e);
     });
   } catch (err) {

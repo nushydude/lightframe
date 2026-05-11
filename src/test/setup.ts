@@ -1,4 +1,4 @@
-import "@testing-library/jest-dom";
+import '@testing-library/jest-dom';
 import { vi } from 'vitest';
 
 // Mock Tauri Core APIs
@@ -36,7 +36,7 @@ global.window.AudioContext = vi.fn().mockImplementation(() => ({
     connect: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
-    type: 'sine'
+    type: 'sine',
   })),
   createGain: vi.fn(() => ({
     gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },

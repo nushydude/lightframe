@@ -14,15 +14,7 @@ export type PixelRect = {
   height: number;
 };
 
-export type ResizeHandle =
-  | 'n'
-  | 's'
-  | 'e'
-  | 'w'
-  | 'ne'
-  | 'nw'
-  | 'se'
-  | 'sw';
+export type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 export const MIN_NORMALIZED_SIZE = 0.02;
 export const MIN_PIXEL_SIZE = 12;
@@ -36,7 +28,11 @@ export function getAspectRatioValue(preset: CropAspectRatioPreset): number | nul
   return w / h;
 }
 
-export function normalizedToPixelRect(rect: NormalizedCropRect, width: number, height: number): PixelRect {
+export function normalizedToPixelRect(
+  rect: NormalizedCropRect,
+  width: number,
+  height: number
+): PixelRect {
   return {
     x: rect.x * width,
     y: rect.y * height,
@@ -63,7 +59,11 @@ export function normalizedToIntegerPixelRect(
   };
 }
 
-export function pixelToNormalizedRect(rect: PixelRect, width: number, height: number): NormalizedCropRect {
+export function pixelToNormalizedRect(
+  rect: PixelRect,
+  width: number,
+  height: number
+): NormalizedCropRect {
   return clampNormalizedRect({
     x: rect.x / width,
     y: rect.y / height,
@@ -72,7 +72,10 @@ export function pixelToNormalizedRect(rect: PixelRect, width: number, height: nu
   });
 }
 
-export function clampNormalizedRect(rect: NormalizedCropRect, minSize = MIN_NORMALIZED_SIZE): NormalizedCropRect {
+export function clampNormalizedRect(
+  rect: NormalizedCropRect,
+  minSize = MIN_NORMALIZED_SIZE
+): NormalizedCropRect {
   const width = clamp(rect.width, minSize, 1);
   const height = clamp(rect.height, minSize, 1);
   const x = clamp(rect.x, 0, 1 - width);
@@ -80,7 +83,12 @@ export function clampNormalizedRect(rect: NormalizedCropRect, minSize = MIN_NORM
   return { x, y, width, height };
 }
 
-export function clampPixelRect(rect: PixelRect, boundsWidth: number, boundsHeight: number, minSize = MIN_PIXEL_SIZE): PixelRect {
+export function clampPixelRect(
+  rect: PixelRect,
+  boundsWidth: number,
+  boundsHeight: number,
+  minSize = MIN_PIXEL_SIZE
+): PixelRect {
   const width = clamp(rect.width, minSize, boundsWidth);
   const height = clamp(rect.height, minSize, boundsHeight);
   const x = clamp(rect.x, 0, boundsWidth - width);
@@ -190,16 +198,12 @@ export function resizeRectWithHandle(
       height = Math.max(MIN_PIXEL_SIZE, desiredHeight);
       if (handle.includes('n')) {
         top = bottom - height;
-      } else {
-        bottom = top + height;
       }
     } else {
       const desiredWidth = height * aspectRatio;
       width = Math.max(MIN_PIXEL_SIZE, desiredWidth);
       if (handle.includes('w')) {
         left = right - width;
-      } else {
-        right = left + width;
       }
     }
     left = clamp(left, 0, boundsWidth - width);

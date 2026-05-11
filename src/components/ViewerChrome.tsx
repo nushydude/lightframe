@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, message, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
-import { getFileName, openSecondaryWindow, overwriteWithCrop, saveCroppedCopy } from '../services/tauriCommands';
+import {
+  getFileName,
+  openSecondaryWindow,
+  overwriteWithCrop,
+  saveCroppedCopy,
+} from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
 import {
   canSaveRotationForPath,
@@ -384,7 +389,11 @@ export function ViewerChrome({
                 }
                 enterCropMode();
               }}
-              title={cropDisabledByRotation ? 'Crop is unavailable while rotation preview is active' : 'Crop image'}
+              title={
+                cropDisabledByRotation
+                  ? 'Crop is unavailable while rotation preview is active'
+                  : 'Crop image'
+              }
               aria-label="Toggle crop mode"
               id="btn-crop"
               disabled={cropDisabledByRotation}
@@ -406,10 +415,20 @@ export function ViewerChrome({
 
       {images.length > 1 && (
         <>
-          <button className="nav-arrow left" onClick={onPrev} aria-label="Previous image" id="btn-prev">
+          <button
+            className="nav-arrow left"
+            onClick={onPrev}
+            aria-label="Previous image"
+            id="btn-prev"
+          >
             ‹
           </button>
-          <button className="nav-arrow right" onClick={onNext} aria-label="Next image" id="btn-next">
+          <button
+            className="nav-arrow right"
+            onClick={onNext}
+            aria-label="Next image"
+            id="btn-next"
+          >
             ›
           </button>
         </>

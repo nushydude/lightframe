@@ -69,6 +69,9 @@ export function useImageNavigation() {
     if (images.length === 0 || settings.sortOrder === 'name') return;
 
     const sorted = sortImages([...images], settings.sortOrder);
+    const hasOrderChanged = sorted.some((image, index) => image.path !== images[index]?.path);
+    if (!hasOrderChanged) return;
+
     const currentPath = images[currentIndex]?.path;
     setImages(sorted);
 
@@ -78,7 +81,7 @@ export function useImageNavigation() {
         setCurrentIndex(newIndex);
       }
     }
-  }, [settings.sortOrder]);
+  }, [currentIndex, images, setCurrentIndex, setImages, settings.sortOrder]);
 
   const scanFolderForImage = useCallback(
     async (loadGeneration: number, filePath: string, parentFolder: string) => {
@@ -112,7 +115,14 @@ export function useImageNavigation() {
         }
       }
     },
-    [isCurrentGeneration, setCurrentIndex, setError, setFolderScanning, setImages, settings.sortOrder]
+    [
+      isCurrentGeneration,
+      setCurrentIndex,
+      setError,
+      setFolderScanning,
+      setImages,
+      settings.sortOrder,
+    ]
   );
 
   /** Open and display a specific image file */
@@ -144,6 +154,7 @@ export function useImageNavigation() {
       scanFolderForImage,
       setCurrentImage,
       setError,
+      setFolderScanning,
       setFolderPath,
     ]
   );
@@ -190,7 +201,20 @@ export function useImageNavigation() {
         filters: [
           {
             name: 'Images',
-            extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif', 'svg'],
+            extensions: [
+              'jpg',
+              'jpeg',
+              'png',
+              'webp',
+              'gif',
+              'bmp',
+              'tiff',
+              'tif',
+              'heic',
+              'heif',
+              'avif',
+              'svg',
+            ],
           },
         ],
       });
@@ -311,7 +335,9 @@ export function useImageNavigation() {
       }
 
       if (previousImagePath) {
-        const previousPathIndex = refreshedImages.findIndex((image) => image.path === previousImagePath);
+        const previousPathIndex = refreshedImages.findIndex(
+          (image) => image.path === previousImagePath
+        );
         if (previousPathIndex >= 0) {
           setCurrentIndex(previousPathIndex);
           return;

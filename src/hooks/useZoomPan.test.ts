@@ -3,7 +3,7 @@ import { useZoomPan } from './useZoomPan';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import React from 'react';
+import type React from 'react';
 
 describe('useZoomPan', () => {
   let containerRef: React.RefObject<HTMLDivElement>;
@@ -17,7 +17,9 @@ describe('useZoomPan', () => {
 
   it('should handle wheel zoom in zoom mode', () => {
     act(() => {
-      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'zoom' } });
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'zoom' },
+      });
     });
 
     renderHook(() => useZoomPan(containerRef));
@@ -38,7 +40,9 @@ describe('useZoomPan', () => {
     vi.setSystemTime(new Date('2026-05-07T00:00:00.000Z'));
 
     act(() => {
-      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' } });
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' },
+      });
     });
 
     renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
@@ -60,7 +64,9 @@ describe('useZoomPan', () => {
     const onWheelPrev = vi.fn();
 
     act(() => {
-      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' } });
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' },
+      });
     });
 
     renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
@@ -79,7 +85,9 @@ describe('useZoomPan', () => {
     vi.setSystemTime(new Date('2026-05-07T00:00:00.000Z'));
 
     act(() => {
-      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' } });
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'navigate' },
+      });
     });
 
     renderHook(() => useZoomPan(containerRef, { onWheelNext }));
@@ -106,7 +114,11 @@ describe('useZoomPan', () => {
 
     // Start drag
     act(() => {
-      result.current.handleMouseDown({ clientX: 100, clientY: 100, preventDefault: vi.fn() } as any);
+      result.current.handleMouseDown({
+        clientX: 100,
+        clientY: 100,
+        preventDefault: vi.fn(),
+      } as any);
     });
     expect(result.current.isDragging).toBe(true);
 
@@ -132,7 +144,11 @@ describe('useZoomPan', () => {
     const { result } = renderHook(() => useZoomPan(containerRef));
 
     act(() => {
-      result.current.handleMouseDown({ clientX: 100, clientY: 100, preventDefault: vi.fn() } as any);
+      result.current.handleMouseDown({
+        clientX: 100,
+        clientY: 100,
+        preventDefault: vi.fn(),
+      } as any);
     });
     expect(result.current.isDragging).toBe(false);
   });

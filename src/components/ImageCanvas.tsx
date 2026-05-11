@@ -22,7 +22,8 @@ import {
   shouldLoadFullResolutionImmediately,
   shouldRequestFullResolution,
 } from './imagePreviewStrategy';
-import { CropOverlay, getPreviewClipPath } from './CropOverlay';
+import { CropOverlay } from './CropOverlay';
+import { getPreviewClipPath } from './cropPreview';
 
 type ImageCanvasProps = {
   onWheelNext?: () => void;
@@ -51,7 +52,12 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomMode: 'fit',
     zoomLevel: 1,
   });
-  const [imageBounds, setImageBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [imageBounds, setImageBounds] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const {
     currentImagePath,
     zoomMode,
@@ -62,17 +68,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     isCropMode,
     cropRect,
     pendingCropPreview,
-  } =
-    useViewerStore();
-  const {
-    zoomLevel,
-    panX,
-    panY,
-    isDragging,
-    handleMouseDown,
-    handleMouseMove,
-    handleMouseUp,
-  } = useZoomPan(containerRef, { onWheelNext, onWheelPrev });
+  } = useViewerStore();
+  const { zoomLevel, panX, panY, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } =
+    useZoomPan(containerRef, { onWheelNext, onWheelPrev });
 
   const [previewSrc, setPreviewSrc] = useState('');
   const [fullSrc, setFullSrc] = useState('');
@@ -163,8 +161,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
         }
-      } catch {
-        imageMetadata = null;
+      } catch (err) {
+        console.warn('Failed to read image metadata:', err);
       }
 
       try {
@@ -195,7 +193,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       }
     };
 
-    loadImage();
+    void loadImage();
 
     return () => {
       cancelled = true;
@@ -298,7 +296,17 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     updateImageBounds();
     window.addEventListener('resize', updateImageBounds);
     return () => window.removeEventListener('resize', updateImageBounds);
-  }, [updateImageBounds, currentImagePath, zoomMode, zoomLevel, panX, panY, rotation, pendingCropPreview, isCropMode]);
+  }, [
+    updateImageBounds,
+    currentImagePath,
+    zoomMode,
+    zoomLevel,
+    panX,
+    panY,
+    rotation,
+    pendingCropPreview,
+    isCropMode,
+  ]);
 
   // Compute image transform
   const getImageStyle = useCallback((): CSSProperties => {
@@ -321,7 +329,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     } else {
       // 'fit' mode
       style.transform = rotationStr;
-      
+
       // If rotated 90 or 270, we need to make sure it still fits
       if (rotation === 90 || rotation === 270) {
         style.maxWidth = '100vh';
@@ -361,8 +369,10 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const containerClasses = [
     'image-canvas',
     isDragging ? 'dragging' : '',
-    (zoomMode === 'actual' || zoomMode === 'custom') ? 'zoomable' : '',
-  ].filter(Boolean).join(' ');
+    zoomMode === 'actual' || zoomMode === 'custom' ? 'zoomable' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const imageSrc = isFullResolutionReady ? fullSrc : previewSrc || fullSrc;
   const isImageLoading = isLoading && !previewSrc && !isFullResolutionReady;
