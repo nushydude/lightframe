@@ -11,4 +11,9 @@ export interface ImageMetadata {
   height: number | null;
   file_size_bytes: number;
   format: string;
+  browser_renderable?: boolean;
+  rust_decode_supported?: boolean;
+  metadata_supported?: boolean;
+  thumbnail_supported?: boolean;
+  support_note?: string | null;
 }

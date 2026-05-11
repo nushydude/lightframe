@@ -91,6 +91,9 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
         imageMetadata.file_size_bytes >= 0
           ? { label: 'File Size', value: formatFileSize(imageMetadata.file_size_bytes) }
           : null,
+        imageMetadata.support_note
+          ? { label: 'Support', value: imageMetadata.support_note }
+          : null,
       ].filter(Boolean) as ExifRow[])
     : [];
 
