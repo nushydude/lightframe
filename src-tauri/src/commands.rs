@@ -29,6 +29,14 @@ pub struct ImageMetadata {
     pub format: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct CropRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
     pub theme: String,
@@ -422,6 +430,125 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
     .map_err(|err| format!("Rotation worker failed: {}", err))?
 }
 
+fn validate_crop_rect(
+    crop_rect: CropRect,
+    image_width: u32,
+    image_height: u32,
+) -> Result<(), String> {
+    if crop_rect.width == 0 || crop_rect.height == 0 {
+        return Err("Crop rectangle must have non-zero width and height".to_string());
+    }
+
+    let right = crop_rect
+        .x
+        .checked_add(crop_rect.width)
+        .ok_or_else(|| "Crop rectangle exceeds image bounds".to_string())?;
+    let bottom = crop_rect
+        .y
+        .checked_add(crop_rect.height)
+        .ok_or_else(|| "Crop rectangle exceeds image bounds".to_string())?;
+
+    if right > image_width || bottom > image_height {
+        return Err("Crop rectangle is outside the image bounds".to_string());
+    }
+
+    Ok(())
+}
+
+fn apply_rotation(
+    img: image::DynamicImage,
+    rotation_degrees: i32,
+) -> Result<image::DynamicImage, String> {
+    let normalized = rotation_degrees.rem_euclid(360);
+    let rotated = match normalized {
+        0 => img,
+        90 => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _ => return Err(format!("Unsupported rotation degrees: {}", rotation_degrees)),
+    };
+
+    Ok(rotated)
+}
+
+fn save_cropped_copy_blocking(
+    file_path: String,
+    crop_rect: CropRect,
+    output_path: String,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    let input_path = Path::new(&file_path);
+    if !input_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let output_path_ref = Path::new(&output_path);
+    let parent_dir = output_path_ref
+        .parent()
+        .ok_or_else(|| "Output path must include a parent directory".to_string())?;
+    if !parent_dir.exists() {
+        return Err("Output directory does not exist".to_string());
+    }
+
+    let input_canonical = fs::canonicalize(input_path)
+        .map_err(|e| format!("Failed to resolve source path: {}", e))?;
+    let output_candidate = if output_path_ref.exists() {
+        fs::canonicalize(output_path_ref)
+            .map_err(|e| format!("Failed to resolve output path: {}", e))?
+    } else if output_path_ref.is_absolute() {
+        output_path_ref.to_path_buf()
+    } else {
+        fs::canonicalize(parent_dir)
+            .map_err(|e| format!("Failed to resolve output directory: {}", e))?
+            .join(
+                output_path_ref
+                    .file_name()
+                    .ok_or_else(|| "Output file name is missing".to_string())?,
+            )
+    };
+
+    if input_canonical == output_candidate {
+        return Err("Output path must not match the original image".to_string());
+    }
+    if output_path_ref.exists() {
+        return Err("Output path already exists; choose a new file name".to_string());
+    }
+
+    let img =
+        image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
+    let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
+    let (image_width, image_height) = rotated.dimensions();
+
+    validate_crop_rect(crop_rect, image_width, image_height)?;
+
+    let cropped = image::imageops::crop_imm(
+        &rotated,
+        crop_rect.x,
+        crop_rect.y,
+        crop_rect.width,
+        crop_rect.height,
+    )
+    .to_image();
+
+    cropped.save(output_path_ref).map_err(|e| format!("Failed to save cropped copy: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_cropped_copy(
+    file_path: String,
+    crop_rect: CropRect,
+    output_path: String,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_cropped_copy_blocking(file_path, crop_rect, output_path, rotation_degrees)
+    })
+    .await
+    .map_err(|err| format!("Crop copy worker failed: {}", err))?
+}
+
 /// Generate a small base64 thumbnail for high-performance navigation
 fn get_thumbnail_blocking(
     file_path: String,
@@ -671,6 +798,123 @@ mod tests {
 
         assert_eq!(width, 640);
         assert_eq!(height, 360);
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_writes_new_image_with_expected_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-cropped.png");
+
+        image::RgbaImage::from_pixel(100, 80, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 10, y: 5, width: 40, height: 30 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap();
+
+        let cropped = image::open(&output_path).unwrap();
+        let original = image::open(&input_path).unwrap();
+
+        assert_eq!(cropped.dimensions(), (40, 30));
+        assert_eq!(original.dimensions(), (100, 80));
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_out_of_bounds_crop() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-cropped.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 50, y: 50, width: 20, height: 20 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("outside the image bounds"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_zero_sized_crop() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-cropped.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 0, height: 20 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("non-zero width and height"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_same_path_as_source() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let original = image::open(&input_path).unwrap();
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 20, height: 20 },
+            input_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("must not match the original image"));
+        assert_eq!(image::open(&input_path).unwrap().dimensions(), original.dimensions());
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_existing_output_file() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("existing.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+        image::RgbaImage::from_pixel(10, 10, image::Rgba([255, 0, 0, 255]))
+            .save(&output_path)
+            .unwrap();
+
+        let existing = image::open(&output_path).unwrap();
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 20, height: 20 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("already exists"));
+        assert_eq!(image::open(&output_path).unwrap().dimensions(), existing.dimensions());
     }
 
     #[test]

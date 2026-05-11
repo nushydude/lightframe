@@ -24,6 +24,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 // Mock Tauri Dialog APIs
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
+  save: vi.fn(),
+  confirm: vi.fn(),
   message: vi.fn(),
 }));
 

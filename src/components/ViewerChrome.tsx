@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { message, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
-import { openSecondaryWindow } from '../services/tauriCommands';
+import { getFileName, openSecondaryWindow, saveCroppedCopy } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
 import {
   canSaveRotationForPath,
@@ -9,6 +10,7 @@ import {
   deleteCurrentImage,
   revealCurrentImage,
 } from '../services/viewerActions';
+import { normalizedToIntegerPixelRect } from '../services/cropMath';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -104,6 +106,51 @@ export function ViewerChrome({
 
   const handleReveal = async () => {
     await revealCurrentImage(currentImagePath);
+  };
+
+  const handleSaveCroppedCopy = async () => {
+    if (!currentImagePath || !cropRect) {
+      return;
+    }
+
+    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const imageWidth = activeImage?.naturalWidth ?? 0;
+    const imageHeight = activeImage?.naturalHeight ?? 0;
+
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      await message('Unable to determine image dimensions for crop export.', {
+        title: 'Error',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const pixelCropRect = normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight);
+    const originalName = getFileName(currentImagePath);
+    const dotIndex = originalName.lastIndexOf('.');
+    const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
+    const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
+    const outputPath = await save({
+      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),
+    });
+
+    if (!outputPath) {
+      return;
+    }
+
+    try {
+      await saveCroppedCopy(currentImagePath, pixelCropRect, outputPath, rotation);
+      await message(`Saved cropped copy to:\n${outputPath}`, {
+        title: 'Cropped Copy Saved',
+        kind: 'info',
+      });
+    } catch (err) {
+      console.error('Failed to save cropped copy:', err);
+      await message(`Failed to save cropped copy: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
   };
 
   const getZoomDisplay = () => {
@@ -478,6 +525,18 @@ export function ViewerChrome({
                 id="btn-crop-clear-preview"
               >
                 Clear
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn active"
+                onClick={() => void handleSaveCroppedCopy()}
+                title="Save cropped copy"
+                aria-label="Save cropped copy"
+                id="btn-crop-save-copy"
+                disabled={!cropRect}
+              >
+                Save Copy
               </button>
             )}
           </>

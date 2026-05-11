@@ -45,6 +45,24 @@ export function normalizedToPixelRect(rect: NormalizedCropRect, width: number, h
   };
 }
 
+export function normalizedToIntegerPixelRect(
+  rect: NormalizedCropRect,
+  width: number,
+  height: number
+): PixelRect {
+  const left = Math.max(0, Math.min(width - 1, Math.floor(rect.x * width)));
+  const top = Math.max(0, Math.min(height - 1, Math.floor(rect.y * height)));
+  const right = Math.max(left + 1, Math.min(width, Math.ceil((rect.x + rect.width) * width)));
+  const bottom = Math.max(top + 1, Math.min(height, Math.ceil((rect.y + rect.height) * height)));
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
 export function pixelToNormalizedRect(rect: PixelRect, width: number, height: number): NormalizedCropRect {
   return clampNormalizedRect({
     x: rect.x / width,

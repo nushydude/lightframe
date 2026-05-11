@@ -15,6 +15,13 @@ export interface ExifData {
   raw: Record<string, string>;
 }
 
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });
@@ -64,6 +71,16 @@ export async function getExifMetadata(filePath: string): Promise<ExifData> {
 /** Rotate an image file on disk and save it */
 export async function saveRotatedImage(filePath: string, rotationDegrees: number): Promise<void> {
   return invoke('save_rotated_image', { filePath, rotationDegrees });
+}
+
+/** Save a cropped copy of an image without overwriting the original */
+export async function saveCroppedCopy(
+  filePath: string,
+  cropRect: CropRect,
+  outputPath: string,
+  rotationDegrees?: number
+): Promise<void> {
+  return invoke('save_cropped_copy', { filePath, cropRect, outputPath, rotationDegrees });
 }
 
 /** Get a small base64 thumbnail for an image */
