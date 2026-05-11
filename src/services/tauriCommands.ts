@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ImageFile, ImageMetadata } from '../types/image';
+import type { ImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
 import { settingsFromRust, settingsToRust } from '../types/settings';
 
@@ -51,6 +52,25 @@ export async function readSettings(): Promise<AppSettings> {
 /** Write application settings to disk */
 export async function writeSettings(settings: AppSettings): Promise<void> {
   return invoke('write_settings', { settings: settingsToRust(settings) });
+}
+
+/** Read persisted curation metadata (favorite + rating) for scanned images */
+export async function readCurationMetadata(): Promise<Record<string, ImageCuration>> {
+  return invoke<Record<string, ImageCuration>>('read_curation_metadata');
+}
+
+/** Write favorite/rating metadata for a single image path */
+export async function writeImageCuration(
+  filePath: string,
+  favorite: boolean,
+  rating: number
+): Promise<void> {
+  return invoke('write_image_curation', { filePath, favorite, rating });
+}
+
+/** Remove curation metadata for a single image path */
+export async function clearImageCuration(filePath: string): Promise<void> {
+  return invoke('clear_image_curation', { filePath });
 }
 
 /** Move a file to the OS trash / recycle bin */

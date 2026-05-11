@@ -16,6 +16,8 @@ interface KeyboardHandlers {
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
   openCommandPalette: () => void;
+  toggleFavoriteCurrent: () => void;
+  setRatingCurrent: (rating: number) => void;
 }
 
 /** Hook for handling all keyboard shortcuts */
@@ -198,6 +200,24 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if ((e.key === 'g' || e.key === 'G') && currentImagePath) {
         e.preventDefault();
         setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer');
+        return;
+      }
+
+      // F: Toggle favorite
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        if (currentImagePath) {
+          handlers.toggleFavoriteCurrent();
+        }
+        return;
+      }
+
+      // Alt + 0..5: Set image rating
+      if (!e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && /^[0-5]$/.test(e.key)) {
+        e.preventDefault();
+        if (currentImagePath) {
+          handlers.setRatingCurrent(Number(e.key));
+        }
         return;
       }
 

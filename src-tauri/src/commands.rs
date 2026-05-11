@@ -5,8 +5,10 @@ use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 /// Supported image extensions for the viewer
@@ -66,6 +68,14 @@ pub struct AppSettings {
     pub sort_order: String,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImageCuration {
+    pub path: String,
+    pub favorite: bool,
+    pub rating: u8,
+    pub updated_at: u64,
 }
 
 fn default_show_thumbnails() -> bool {
@@ -412,6 +422,110 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir.join("settings.json"))
 }
 
+fn curation_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let config_dir =
+        app.path().app_config_dir().map_err(|e| format!("Failed to get config dir: {}", e))?;
+    fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    Ok(config_dir.join("curation.json"))
+}
+
+fn clamp_rating(rating: i32) -> u8 {
+    rating.clamp(0, 5) as u8
+}
+
+fn unix_timestamp_seconds() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+fn normalize_curation_metadata(
+    metadata: HashMap<String, ImageCuration>,
+) -> HashMap<String, ImageCuration> {
+    let mut normalized = HashMap::new();
+
+    for (key, mut value) in metadata {
+        let normalized_path = if value.path.trim().is_empty() {
+            key.trim().to_string()
+        } else {
+            value.path.trim().to_string()
+        };
+
+        if normalized_path.is_empty() {
+            continue;
+        }
+
+        value.path = normalized_path.clone();
+        value.rating = value.rating.min(5);
+
+        if !value.favorite && value.rating == 0 {
+            continue;
+        }
+
+        normalized.insert(normalized_path, value);
+    }
+
+    normalized
+}
+
+fn read_curation_metadata_from_path(path: &Path) -> HashMap<String, ImageCuration> {
+    if !path.exists() {
+        return HashMap::new();
+    }
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            eprintln!(
+                "Failed to read curation metadata from '{}': {}. Falling back to empty state.",
+                path.display(),
+                err
+            );
+            return HashMap::new();
+        }
+    };
+
+    let parsed = match serde_json::from_str::<HashMap<String, ImageCuration>>(&content) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!(
+                "Failed to parse curation metadata from '{}': {}. Falling back to empty state.",
+                path.display(),
+                err
+            );
+            return HashMap::new();
+        }
+    };
+
+    normalize_curation_metadata(parsed)
+}
+
+fn write_curation_metadata_to_path(
+    path: &Path,
+    metadata: &HashMap<String, ImageCuration>,
+) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(metadata)
+        .map_err(|e| format!("Failed to serialize curation metadata: {}", e))?;
+    fs::write(path, content).map_err(|e| format!("Failed to write curation metadata: {}", e))
+}
+
+fn apply_curation_update(
+    metadata: &mut HashMap<String, ImageCuration>,
+    file_path: String,
+    favorite: bool,
+    rating: i32,
+    updated_at: u64,
+) {
+    let clamped_rating = clamp_rating(rating);
+    if !favorite && clamped_rating == 0 {
+        metadata.remove(&file_path);
+        return;
+    }
+
+    metadata.insert(
+        file_path.clone(),
+        ImageCuration { path: file_path, favorite, rating: clamped_rating, updated_at },
+    );
+}
+
 /// Read application settings
 #[tauri::command]
 pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
@@ -432,6 +546,51 @@ pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(),
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     fs::write(&path, content).map_err(|e| format!("Failed to write settings: {}", e))
+}
+
+#[tauri::command]
+pub async fn read_curation_metadata(
+    app: AppHandle,
+) -> Result<HashMap<String, ImageCuration>, String> {
+    let path = curation_path(&app)?;
+    Ok(read_curation_metadata_from_path(&path))
+}
+
+#[tauri::command]
+pub async fn write_image_curation(
+    app: AppHandle,
+    file_path: String,
+    favorite: bool,
+    rating: i32,
+) -> Result<(), String> {
+    let normalized_path = file_path.trim().to_string();
+    if normalized_path.is_empty() {
+        return Err("file_path must not be empty".to_string());
+    }
+
+    let path = curation_path(&app)?;
+    let mut metadata = read_curation_metadata_from_path(&path);
+    apply_curation_update(
+        &mut metadata,
+        normalized_path,
+        favorite,
+        rating,
+        unix_timestamp_seconds(),
+    );
+    write_curation_metadata_to_path(&path, &metadata)
+}
+
+#[tauri::command]
+pub async fn clear_image_curation(app: AppHandle, file_path: String) -> Result<(), String> {
+    let normalized_path = file_path.trim().to_string();
+    if normalized_path.is_empty() {
+        return Err("file_path must not be empty".to_string());
+    }
+
+    let path = curation_path(&app)?;
+    let mut metadata = read_curation_metadata_from_path(&path);
+    metadata.remove(&normalized_path);
+    write_curation_metadata_to_path(&path, &metadata)
 }
 
 /// Move a file to the OS trash / recycle bin
@@ -944,6 +1103,101 @@ mod tests {
         }
 
         compress(&pixels, width, height, PixelFormat::Rgb, 90, subsampling).unwrap()
+    }
+
+    #[test]
+    fn test_apply_curation_update_clamps_rating_to_five() {
+        let mut metadata = std::collections::HashMap::new();
+
+        apply_curation_update(&mut metadata, "C:/images/photo.jpg".to_string(), true, 9, 42);
+
+        let entry = metadata.get("C:/images/photo.jpg").unwrap();
+        assert_eq!(entry.path, "C:/images/photo.jpg");
+        assert!(entry.favorite);
+        assert_eq!(entry.rating, 5);
+        assert_eq!(entry.updated_at, 42);
+    }
+
+    #[test]
+    fn test_apply_curation_update_removes_default_state_entries() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "C:/images/photo.jpg".to_string(),
+            ImageCuration {
+                path: "C:/images/photo.jpg".to_string(),
+                favorite: true,
+                rating: 3,
+                updated_at: 10,
+            },
+        );
+
+        apply_curation_update(&mut metadata, "C:/images/photo.jpg".to_string(), false, 0, 44);
+
+        assert!(!metadata.contains_key("C:/images/photo.jpg"));
+    }
+
+    #[test]
+    fn test_read_curation_metadata_from_path_returns_empty_for_corrupt_json() {
+        let dir = tempdir().unwrap();
+        let curation_path = dir.path().join("curation.json");
+        fs::write(&curation_path, "{not-valid-json").unwrap();
+
+        let metadata = read_curation_metadata_from_path(&curation_path);
+        assert!(metadata.is_empty());
+    }
+
+    #[test]
+    fn test_read_curation_metadata_from_path_normalizes_invalid_entries() {
+        let dir = tempdir().unwrap();
+        let curation_path = dir.path().join("curation.json");
+        fs::write(
+            &curation_path,
+            r#"{
+                "C:/images/one.jpg": {
+                    "path": "",
+                    "favorite": true,
+                    "rating": 7,
+                    "updated_at": 1
+                },
+                "C:/images/two.jpg": {
+                    "path": "C:/images/two.jpg",
+                    "favorite": false,
+                    "rating": 0,
+                    "updated_at": 2
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let metadata = read_curation_metadata_from_path(&curation_path);
+        let one = metadata.get("C:/images/one.jpg").unwrap();
+        assert_eq!(one.path, "C:/images/one.jpg");
+        assert_eq!(one.rating, 5);
+        assert_eq!(metadata.len(), 1);
+    }
+
+    #[test]
+    fn test_write_curation_metadata_to_path_persists_entries() {
+        let dir = tempdir().unwrap();
+        let curation_path = dir.path().join("curation.json");
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "C:/images/photo.jpg".to_string(),
+            ImageCuration {
+                path: "C:/images/photo.jpg".to_string(),
+                favorite: true,
+                rating: 4,
+                updated_at: 77,
+            },
+        );
+
+        write_curation_metadata_to_path(&curation_path, &metadata).unwrap();
+
+        let reloaded = read_curation_metadata_from_path(&curation_path);
+        let entry = reloaded.get("C:/images/photo.jpg").unwrap();
+        assert!(entry.favorite);
+        assert_eq!(entry.rating, 4);
+        assert_eq!(entry.updated_at, 77);
     }
 
     #[test]

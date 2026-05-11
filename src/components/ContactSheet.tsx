@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { useViewerStore } from '../state/viewerStore';
+import { useCurationStore } from '../state/curationStore';
 import {
   evictThumbnailsExcept,
   getCachedThumbnail,
@@ -24,6 +25,7 @@ interface ContactSheetProps {
  */
 export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const { images, currentIndex, setCurrentIndex, setViewMode } = useViewerStore();
+  const curationByPath = useCurationStore((state) => state.curationByPath);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [columns, setColumns] = useState(1);
@@ -219,6 +221,9 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
               sizeBytes: image.size_bytes,
               modifiedAt: image.modified_at,
             });
+            const curation = curationByPath[image.path];
+            const isFavorite = Boolean(curation?.favorite);
+            const rating = curation?.rating ?? 0;
 
             return (
               <div
@@ -228,6 +233,12 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
                 title={image.file_name}
               >
                 <div className="grid-thumbnail-wrapper">
+                  {(isFavorite || rating > 0) && (
+                    <div className="grid-curation-badges" aria-hidden="true">
+                      {isFavorite && <span className="grid-curation-badge favorite">★</span>}
+                      {rating > 0 && <span className="grid-curation-badge rating">{rating}</span>}
+                    </div>
+                  )}
                   {url ? (
                     <img src={url} alt="" draggable={false} />
                   ) : (

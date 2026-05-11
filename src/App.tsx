@@ -15,6 +15,7 @@ import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
+import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
 import { copyCurrentImage, deleteCurrentImage, revealCurrentImage } from './services/viewerActions';
 
@@ -39,6 +40,9 @@ function App() {
   } = useViewerStore();
 
   const { settings, isLoaded, loadSettings, updateSettings } = useSettingsStore();
+  const loadCuration = useCurationStore((state) => state.loadCuration);
+  const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
+  const setRating = useCurationStore((state) => state.setRating);
 
   const {
     openImage,
@@ -114,7 +118,7 @@ function App() {
 
     async function init() {
       // Ensure persisted settings are loaded before startup image open.
-      await loadSettings();
+      await Promise.all([loadSettings(), loadCuration()]);
       if (!isCancelled) {
         const loadedSettings = useSettingsStore.getState().settings;
         const loadedDefaultFitMode = loadedSettings.defaultFitMode;
@@ -170,7 +174,7 @@ function App() {
       isCancelled = true;
       if (unlisten) unlisten();
     };
-  }, [loadSettings, openImage, openImageForStartup, setError]);
+  }, [loadCuration, loadSettings, openImage, openImageForStartup, setError]);
 
   useEffect(() => {
     if (!hasStartupResolved || startupShowAttempted) return;
@@ -417,6 +421,18 @@ function App() {
     stopSlideshow,
     toggleSlideshowPause,
     openCommandPalette: () => setShowCommandPalette(true),
+    toggleFavoriteCurrent: () => {
+      const path = useViewerStore.getState().currentImagePath;
+      if (path) {
+        void toggleFavorite(path);
+      }
+    },
+    setRatingCurrent: (rating) => {
+      const path = useViewerStore.getState().currentImagePath;
+      if (path) {
+        void setRating(path, rating);
+      }
+    },
   });
 
   const { showControls } = useViewerStore();
