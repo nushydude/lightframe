@@ -1,8 +1,3 @@
-export interface ContactSheetSelectionState {
-  selectedPaths: string[];
-  lastSelectedIndex: number | null;
-}
-
 export function toggleSelectionPath(selectedPaths: string[], path: string): string[] {
   return selectedPaths.includes(path)
     ? selectedPaths.filter((value) => value !== path)

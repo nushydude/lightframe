@@ -10,8 +10,8 @@ import {
 } from '../services/cropMath';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
-export type ViewMode = 'viewer' | 'grid' | 'compare';
-export type CompareFocusedPane = 'primary' | 'secondary';
+type ViewMode = 'viewer' | 'grid' | 'compare';
+type CompareFocusedPane = 'primary' | 'secondary';
 
 const DEFAULT_CROP_RECT: NormalizedCropRect = {
   x: 0.1,
