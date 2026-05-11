@@ -915,12 +915,12 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           state.comparePrimaryIndex,
           state.compareSecondaryIndex
         );
-        const nextCurrentIndex =
-          isValidImageIndex(primaryIndex, state.images.length) ? primaryIndex : state.currentIndex;
-        const nextCurrentPath =
-          isValidImageIndex(nextCurrentIndex, state.images.length)
-            ? state.images[nextCurrentIndex].path
-            : null;
+        const nextCurrentIndex = isValidImageIndex(primaryIndex, state.images.length)
+          ? primaryIndex
+          : state.currentIndex;
+        const nextCurrentPath = isValidImageIndex(nextCurrentIndex, state.images.length)
+          ? state.images[nextCurrentIndex].path
+          : null;
         const editFields = getEditFieldsForPath(nextCurrentPath, state.pendingEditsByPath);
         return {
           viewMode: 'viewer',
@@ -956,7 +956,9 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       }
 
       const focusedIsPrimary = state.compareFocusedPane === 'primary';
-      const focusedIndex = focusedIsPrimary ? state.comparePrimaryIndex : state.compareSecondaryIndex;
+      const focusedIndex = focusedIsPrimary
+        ? state.comparePrimaryIndex
+        : state.compareSecondaryIndex;
       const otherIndex = focusedIsPrimary ? state.compareSecondaryIndex : state.comparePrimaryIndex;
 
       if (!isValidImageIndex(focusedIndex, state.images.length)) {
@@ -998,7 +1000,9 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       }
 
       const focusedIndex =
-        state.compareFocusedPane === 'primary' ? state.comparePrimaryIndex : state.compareSecondaryIndex;
+        state.compareFocusedPane === 'primary'
+          ? state.comparePrimaryIndex
+          : state.compareSecondaryIndex;
       if (!isValidImageIndex(focusedIndex, state.images.length)) {
         return false;
       }

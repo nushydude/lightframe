@@ -401,9 +401,11 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().comparePrimaryIndex).toBe(1);
     expect(useViewerStore.getState().compareSecondaryIndex).toBe(0);
 
-    useViewerStore.getState().setImages([
-      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
-    ]);
+    useViewerStore
+      .getState()
+      .setImages([
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ]);
     expect(useViewerStore.getState().viewMode).toBe('viewer');
     expect(useViewerStore.getState().compareSecondaryIndex).toBe(-1);
   });

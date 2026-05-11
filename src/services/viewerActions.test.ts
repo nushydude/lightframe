@@ -146,9 +146,7 @@ describe('viewerActions', () => {
     expect(result.successes).toEqual([
       { sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/test-1.jpg' },
     ]);
-    expect(result.failures).toEqual([
-      { sourcePath: 'c:/images/two.jpg', error: 'disk full' },
-    ]);
+    expect(result.failures).toEqual([{ sourcePath: 'c:/images/two.jpg', error: 'disk full' }]);
   });
 
   it('shows a warning message when a quick transfer partially fails', async () => {

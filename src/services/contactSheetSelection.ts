@@ -24,4 +24,3 @@ export function selectRangePaths(
   const rangePaths = images.slice(start, end + 1).map((image) => image.path);
   return Array.from(new Set([...selectedPaths, ...rangePaths]));
 }
-

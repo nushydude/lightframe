@@ -158,9 +158,27 @@ describe('useKeyboardShortcuts', () => {
   it('handles compare mode keyboard controls', () => {
     useViewerStore.setState({
       images: [
-        { path: 'c:/test/a.jpg', file_name: 'a', extension: 'jpg', size_bytes: 0, modified_at: null },
-        { path: 'c:/test/b.jpg', file_name: 'b', extension: 'jpg', size_bytes: 0, modified_at: null },
-        { path: 'c:/test/c.jpg', file_name: 'c', extension: 'jpg', size_bytes: 0, modified_at: null },
+        {
+          path: 'c:/test/a.jpg',
+          file_name: 'a',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+        {
+          path: 'c:/test/b.jpg',
+          file_name: 'b',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+        {
+          path: 'c:/test/c.jpg',
+          file_name: 'c',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
       ],
       currentIndex: 1,
       currentImagePath: 'c:/test/b.jpg',

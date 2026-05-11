@@ -10,14 +10,8 @@ import {
 } from '../services/thumbnailCache';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 import { invalidateImageAsset } from '../services/imageAssetCache';
-import {
-  selectRangePaths,
-  toggleSelectionPath,
-} from '../services/contactSheetSelection';
-import {
-  showTransferResultMessage,
-  transferImagesToDestination,
-} from '../services/viewerActions';
+import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
+import { showTransferResultMessage, transferImagesToDestination } from '../services/viewerActions';
 import type { QuickDestination } from '../types/settings';
 
 const GRID_ITEM_SIZE = 140;
@@ -203,7 +197,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
   const handleBulkTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
     const targetPaths =
-      selectedPaths.length > 0 ? selectedPaths : currentIndex >= 0 ? [images[currentIndex].path] : [];
+      selectedPaths.length > 0
+        ? selectedPaths
+        : currentIndex >= 0
+          ? [images[currentIndex].path]
+          : [];
     if (targetPaths.length === 0) {
       return;
     }

@@ -509,9 +509,7 @@ export function ViewerChrome({
                 enterCompareMode();
               }}
               title={
-                canEnterCompareMode
-                  ? 'Compare view'
-                  : 'Compare view requires at least two images'
+                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'
               }
               aria-label="Toggle compare view"
               id="btn-compare"

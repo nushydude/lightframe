@@ -78,7 +78,8 @@ function ComparePane({ roleLabel, isFocused, imagePath, index, imageCount }: Com
 }
 
 export function CompareView() {
-  const { images, comparePrimaryIndex, compareSecondaryIndex, compareFocusedPane } = useViewerStore();
+  const { images, comparePrimaryIndex, compareSecondaryIndex, compareFocusedPane } =
+    useViewerStore();
   const primaryImage = images[comparePrimaryIndex];
   const secondaryImage = images[compareSecondaryIndex];
 

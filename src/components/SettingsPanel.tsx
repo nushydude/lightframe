@@ -275,7 +275,9 @@ export function SettingsPanel() {
               </button>
             </div>
             {settings.quickDestinations.length === 0 ? (
-              <p className="setting-help">Add a folder here to enable quick copy and move actions.</p>
+              <p className="setting-help">
+                Add a folder here to enable quick copy and move actions.
+              </p>
             ) : (
               <div className="quick-destination-list">
                 {settings.quickDestinations.map((destination) => (
@@ -328,10 +330,7 @@ export function SettingsPanel() {
                     <div className="quick-destination-label">
                       {settings.externalEditorLabel || 'External Editor'}
                     </div>
-                    <div
-                      className="quick-destination-path"
-                      title={settings.externalEditorPath}
-                    >
+                    <div className="quick-destination-path" title={settings.externalEditorPath}>
                       {settings.externalEditorPath}
                     </div>
                   </div>
