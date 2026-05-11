@@ -1357,6 +1357,12 @@ body,
   line-height: 1.4;
 }
 
+.setting-button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* Toggle Switch */
 .toggle-switch {
   position: relative;

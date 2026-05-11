@@ -6,6 +6,7 @@ import { useViewerStore } from '../state/viewerStore';
 describe('useKeyboardShortcuts', () => {
   const handlers = {
     openFilePicker: vi.fn(),
+    openCurrentImageInEditor: vi.fn(),
     goNext: vi.fn(() => true),
     goPrev: vi.fn(() => true),
     goFirst: vi.fn(),
@@ -70,6 +71,23 @@ describe('useKeyboardShortcuts', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(handlers.openCommandPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the configured external editor on Ctrl+E', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'e',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.openCurrentImageInEditor).toHaveBeenCalledTimes(1);
   });
 
   it('nudges crop rect and previews it with keyboard while crop mode is active', () => {

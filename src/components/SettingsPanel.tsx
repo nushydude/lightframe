@@ -55,6 +55,36 @@ export function SettingsPanel() {
     });
   };
 
+  const handleChooseExternalEditor = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: 'Applications', extensions: ['exe', 'bat', 'cmd', 'com'] }],
+    });
+    if (!selected || typeof selected !== 'string') {
+      return;
+    }
+
+    const normalizedPath = selected.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    const fileName = normalizedPath.replace(/\\/g, '/').split('/').pop() || normalizedPath;
+    const label = fileName.replace(/\.[^.]+$/, '') || fileName;
+    await updateSettings({
+      externalEditorPath: normalizedPath,
+      externalEditorLabel: label,
+    });
+  };
+
+  const handleClearExternalEditor = async () => {
+    await updateSettings({
+      externalEditorPath: undefined,
+      externalEditorLabel: undefined,
+    });
+  };
+
   return (
     <div className="settings-overlay" onClick={handleOverlayClick}>
       <div className="settings-panel" role="dialog" aria-label="Settings">
@@ -265,6 +295,53 @@ export function SettingsPanel() {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          <div className="settings-group">
+            <div className="settings-group-title">External Editor</div>
+            <div className="setting-row setting-row-stack">
+              <span className="setting-label">Configured app</span>
+              <div className="setting-button-row">
+                <button
+                  className="setting-button-secondary"
+                  onClick={() => void handleChooseExternalEditor()}
+                  id="btn-choose-external-editor"
+                >
+                  {settings.externalEditorPath ? 'Change app' : 'Choose app'}
+                </button>
+                {settings.externalEditorPath && (
+                  <button
+                    className="setting-button-secondary"
+                    onClick={() => void handleClearExternalEditor()}
+                    id="btn-clear-external-editor"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+            {settings.externalEditorPath ? (
+              <div className="quick-destination-list">
+                <div className="quick-destination-item">
+                  <div className="quick-destination-meta">
+                    <div className="quick-destination-label">
+                      {settings.externalEditorLabel || 'External Editor'}
+                    </div>
+                    <div
+                      className="quick-destination-path"
+                      title={settings.externalEditorPath}
+                    >
+                      {settings.externalEditorPath}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="setting-help">
+                Choose an editor executable to enable Edit. LightFrame will open the current image
+                path in that app.
+              </p>
             )}
           </div>
 

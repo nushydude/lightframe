@@ -18,7 +18,12 @@ import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
-import { copyCurrentImage, deleteCurrentImage, revealCurrentImage } from './services/viewerActions';
+import {
+  copyCurrentImage,
+  deleteCurrentImage,
+  openCurrentImageInEditor,
+  revealCurrentImage,
+} from './services/viewerActions';
 
 import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
@@ -382,6 +387,8 @@ function App() {
         toggleFullscreen: handleToggleFullscreen,
         saveRotation: () => useViewerStore.getState().saveRotation(),
         revealCurrentImage: () => revealCurrentImage(useViewerStore.getState().currentImagePath),
+        openCurrentImageInEditor: () =>
+          openCurrentImageInEditor(useViewerStore.getState().currentImagePath),
         copyCurrentImage: () => copyCurrentImage(useViewerStore.getState().currentImagePath),
         deleteCurrentImage: () =>
           deleteCurrentImage({
@@ -421,6 +428,8 @@ function App() {
   // Register keyboard shortcuts
   useKeyboardShortcuts({
     openFilePicker,
+    openCurrentImageInEditor: () =>
+      openCurrentImageInEditor(useViewerStore.getState().currentImagePath),
     goNext,
     goPrev,
     goFirst,
