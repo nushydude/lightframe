@@ -174,4 +174,58 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().rotation).toBe(0);
     expect(useViewerStore.getState().cacheBuster).toBe(5678);
   });
+
+  it('manages crop mode and preview state', () => {
+    useViewerStore.getState().enterCropMode();
+    expect(useViewerStore.getState().isCropMode).toBe(true);
+    expect(useViewerStore.getState().cropRect).not.toBeNull();
+
+    useViewerStore.getState().updateCropRect({
+      x: 0.2,
+      y: 0.2,
+      width: 0.5,
+      height: 0.5,
+    });
+    useViewerStore.getState().applyCropPreview();
+
+    const state = useViewerStore.getState();
+    expect(state.isCropMode).toBe(false);
+    expect(state.pendingCropPreview).toEqual({
+      x: 0.2,
+      y: 0.2,
+      width: 0.5,
+      height: 0.5,
+    });
+  });
+
+  it('clears crop state when navigating to a new image', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+    });
+
+    useViewerStore.getState().enterCropMode();
+    useViewerStore.getState().applyCropPreview();
+    useViewerStore.getState().setCurrentIndex(1);
+
+    const state = useViewerStore.getState();
+    expect(state.isCropMode).toBe(false);
+    expect(state.cropRect).toBeNull();
+    expect(state.pendingCropPreview).toBeNull();
+  });
+
+  it('clears crop state when switching to grid mode', () => {
+    useViewerStore.getState().enterCropMode();
+    useViewerStore.getState().applyCropPreview();
+
+    useViewerStore.getState().setViewMode('grid');
+
+    expect(useViewerStore.getState().isCropMode).toBe(false);
+    expect(useViewerStore.getState().cropRect).toBeNull();
+    expect(useViewerStore.getState().pendingCropPreview).toBeNull();
+  });
 });

@@ -32,6 +32,7 @@ describe('createViewerCommands', () => {
       revealCurrentImage,
       copyCurrentImage,
       deleteCurrentImage,
+      enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
     });
 
@@ -55,5 +56,35 @@ describe('createViewerCommands', () => {
     expect(revealCurrentImage).toHaveBeenCalledTimes(1);
     expect(copyCurrentImage).toHaveBeenCalledTimes(1);
     expect(deleteCurrentImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes a crop command when rotation preview is clear', () => {
+    const enterCropMode = vi.fn();
+
+    useViewerStore.setState({
+      currentImagePath: 'c:/images/test.jpg',
+      rotation: 0,
+    });
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      enterCropMode,
+      startSlideshow: vi.fn(),
+    });
+
+    const cropCommand = commands.find((command) => command.id === 'crop-image');
+    expect(cropCommand?.isEnabled(useViewerStore.getState())).toBe(true);
+    cropCommand?.run();
+    expect(enterCropMode).toHaveBeenCalledTimes(1);
   });
 });

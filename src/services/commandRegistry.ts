@@ -24,6 +24,7 @@ interface CreateViewerCommandsOptions {
   revealCurrentImage: () => Promise<void>;
   copyCurrentImage: () => Promise<void>;
   deleteCurrentImage: () => Promise<void>;
+  enterCropMode: () => void;
   startSlideshow: () => void;
 }
 
@@ -183,6 +184,13 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       keywords: ['delete', 'trash', 'recycle'],
       isEnabled: (state) => Boolean(state.currentImagePath),
       run: () => options.deleteCurrentImage(),
+    },
+    {
+      id: 'crop-image',
+      label: 'Crop Image',
+      keywords: ['crop', 'edit', 'trim'],
+      isEnabled: (state) => Boolean(state.currentImagePath) && state.rotation === 0,
+      run: () => options.enterCropMode(),
     },
     {
       id: 'start-slideshow',

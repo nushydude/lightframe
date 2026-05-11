@@ -369,6 +369,13 @@ function App() {
             currentIndex: useViewerStore.getState().currentIndex,
             removeImage: useViewerStore.getState().removeImage,
           }),
+        enterCropMode: () => {
+          const state = useViewerStore.getState();
+          if (state.viewMode === 'grid') {
+            state.setViewMode('viewer');
+          }
+          state.enterCropMode();
+        },
         startSlideshow,
       }),
     [
