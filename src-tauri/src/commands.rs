@@ -1,6 +1,7 @@
 use crate::thumbnails;
 use base64::Engine;
 use image::GenericImageView;
+use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,13 @@ pub struct CropRect {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RotationSaveStrategy {
+    Unsupported,
+    Reencode,
+    LosslessJpegThenFallback,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -253,6 +261,96 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
     Ok(ImageMetadata { width, height, file_size_bytes, format })
 }
 
+fn rotation_save_strategy(extension: &str, rotation_degrees: i32) -> Option<RotationSaveStrategy> {
+    let normalized = rotation_degrees.rem_euclid(360);
+    if normalized == 0 {
+        return None;
+    }
+
+    if !matches!(normalized, 90 | 180 | 270) {
+        return None;
+    }
+
+    Some(match extension {
+        "jpg" | "jpeg" => RotationSaveStrategy::LosslessJpegThenFallback,
+        "bmp" | "png" | "webp" => RotationSaveStrategy::Reencode,
+        _ => RotationSaveStrategy::Unsupported,
+    })
+}
+
+fn rotation_transform_op(rotation_degrees: i32) -> Option<TransformOp> {
+    match rotation_degrees.rem_euclid(360) {
+        90 => Some(TransformOp::Rot90),
+        180 => Some(TransformOp::Rot180),
+        270 => Some(TransformOp::Rot270),
+        _ => None,
+    }
+}
+
+fn write_dynamic_image(
+    image: &image::DynamicImage,
+    output_path: &Path,
+    error_prefix: &str,
+) -> Result<(), String> {
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    let write_result = if matches!(extension.as_str(), "jpg" | "jpeg") {
+        image::DynamicImage::ImageRgb8(image.to_rgb8()).save(output_path)
+    } else {
+        image.save(output_path)
+    };
+
+    write_result.map_err(|e| format!("{}: {}", error_prefix, e))
+}
+
+fn restore_normal_orientation(
+    source_path: &Path,
+    output_path: &Path,
+    context: &str,
+) -> Result<(), String> {
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        return Ok(());
+    }
+
+    if let Ok(mut metadata) = Metadata::new_from_path(source_path) {
+        metadata.set_tag(ExifTag::Orientation(vec![1]));
+        metadata
+            .write_to_file(output_path)
+            .map_err(|e| format!("Failed to write image metadata after {}: {}", context, e))?;
+    }
+
+    Ok(())
+}
+
+fn try_lossless_jpeg_rotation_bytes(
+    jpeg_bytes: &[u8],
+    rotation_degrees: i32,
+) -> Result<Vec<u8>, String> {
+    let transform = rotation_transform_op(rotation_degrees)
+        .ok_or_else(|| format!("Unsupported rotation degrees: {}", rotation_degrees))?;
+
+    libjpeg_turbo_rs::transform_jpeg_with_options(
+        jpeg_bytes,
+        &TransformOptions {
+            op: transform,
+            perfect: true,
+            copy_markers: MarkerCopyMode::All,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("Lossless JPEG transform failed: {}", e))
+}
+
 /// Get image metadata (dimensions, format, file size)
 #[tauri::command]
 pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, String> {
@@ -378,46 +476,26 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
 
-    if !matches!(extension.as_str(), "bmp" | "jpg" | "jpeg" | "png" | "webp") {
-        return Err(format!(
-            "Saving rotation is not supported for {} files",
-            extension.to_uppercase()
-        ));
-    }
-
-    // Load the image
-    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
-
-    // Rotate based on degrees
-    let rotated = match rotation_degrees % 360 {
-        90 | -270 => img.rotate90(),
-        180 | -180 => img.rotate180(),
-        270 | -90 => img.rotate270(),
-        _ => return Ok(()), // No rotation needed
-    };
-
-    // For JPEG, PNG, and WebP, try to preserve metadata
-    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
-        // Read metadata before overwriting
-        let metadata = Metadata::new_from_path(path).ok();
-
-        // Save rotated pixels
-        rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
-
-        // Write metadata back if it was successfully read
-        if let Some(mut m) = metadata {
-            // We physically rotated the pixels, so we must reset orientation tag to 1 (Normal)
-            // otherwise software will rotate it a second time.
-            m.set_tag(ExifTag::Orientation(vec![1]));
-            m.write_to_file(path)
-                .map_err(|e| format!("Failed to write image metadata after rotation: {}", e))?;
+    match rotation_save_strategy(&extension, rotation_degrees) {
+        None => Ok(()),
+        Some(RotationSaveStrategy::Unsupported) => {
+            Err(format!("Saving rotation is not supported for {} files", extension.to_uppercase()))
         }
-    } else {
-        // For formats like BMP (no metadata), just save
-        rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+        Some(RotationSaveStrategy::Reencode) => {
+            save_rotated_image_by_reencoding(path, rotation_degrees, "rotation")
+        }
+        Some(RotationSaveStrategy::LosslessJpegThenFallback) => {
+            if let Err(lossless_error) = save_lossless_jpeg_rotation(path, rotation_degrees) {
+                eprintln!(
+                    "Lossless JPEG rotation failed for '{}': {}. Falling back to pixel re-encode.",
+                    file_path, lossless_error
+                );
+                save_rotated_image_by_reencoding(path, rotation_degrees, "rotation")
+            } else {
+                Ok(())
+            }
+        }
     }
-
-    Ok(())
 }
 
 /// Rotate an image file on disk and save it
@@ -428,6 +506,52 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
     })
     .await
     .map_err(|err| format!("Rotation worker failed: {}", err))?
+}
+
+fn save_lossless_jpeg_rotation(path: &Path, rotation_degrees: i32) -> Result<(), String> {
+    let jpeg_bytes =
+        fs::read(path).map_err(|e| format!("Failed to read JPEG for rotation: {}", e))?;
+    let rotated_bytes = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, rotation_degrees)?;
+    let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
+
+    fs::write(&temp_path, rotated_bytes)
+        .map_err(|e| format!("Failed to write temporary rotated JPEG: {}", e))?;
+
+    if let Err(err) = restore_normal_orientation(path, &temp_path, "lossless rotation") {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = replace_file_safely(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn save_rotated_image_by_reencoding(
+    path: &Path,
+    rotation_degrees: i32,
+    context_label: &str,
+) -> Result<(), String> {
+    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
+    let rotated = apply_rotation(img, rotation_degrees)?;
+    let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
+
+    write_dynamic_image(&rotated, &temp_path, "Failed to save rotated image")?;
+
+    if let Err(err) = restore_normal_orientation(path, &temp_path, context_label) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = replace_file_safely(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    Ok(())
 }
 
 fn validate_crop_rect(
@@ -476,20 +600,11 @@ fn write_cropped_image(
     output_path: &Path,
     error_prefix: &str,
 ) -> Result<(), String> {
-    let extension = output_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_lowercase())
-        .unwrap_or_default();
-
-    let write_result = if matches!(extension.as_str(), "jpg" | "jpeg") {
-        image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(cropped.clone()).to_rgb8())
-            .save(output_path)
-    } else {
-        cropped.save(output_path)
-    };
-
-    write_result.map_err(|e| format!("{}: {}", error_prefix, e))
+    write_dynamic_image(
+        &image::DynamicImage::ImageRgba8(cropped.clone()),
+        output_path,
+        error_prefix,
+    )
 }
 
 fn save_cropped_copy_blocking(
@@ -813,8 +928,23 @@ pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
 mod tests {
     use super::*;
     use image::GenericImageView;
+    use libjpeg_turbo_rs::{compress, PixelFormat, Subsampling};
     use std::fs::File;
     use tempfile::tempdir;
+
+    fn make_test_jpeg(width: usize, height: usize, subsampling: Subsampling) -> Vec<u8> {
+        let mut pixels = vec![0_u8; width * height * 3];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) * 3;
+                pixels[offset] = (x % 256) as u8;
+                pixels[offset + 1] = (y % 256) as u8;
+                pixels[offset + 2] = ((x + y) % 256) as u8;
+            }
+        }
+
+        compress(&pixels, width, height, PixelFormat::Rgb, 90, subsampling).unwrap()
+    }
 
     #[test]
     fn test_natural_sort_key() {
@@ -902,6 +1032,61 @@ mod tests {
         assert_eq!(metadata.height, Some(3));
         assert_eq!(metadata.format, "PNG");
         assert_eq!(metadata.file_size_bytes, expected_size);
+    }
+
+    #[test]
+    fn test_rotation_save_strategy_uses_lossless_attempt_for_jpeg_right_angles() {
+        assert_eq!(
+            rotation_save_strategy("jpg", 90),
+            Some(RotationSaveStrategy::LosslessJpegThenFallback)
+        );
+        assert_eq!(
+            rotation_save_strategy("jpeg", 180),
+            Some(RotationSaveStrategy::LosslessJpegThenFallback)
+        );
+        assert_eq!(
+            rotation_save_strategy("jpeg", 270),
+            Some(RotationSaveStrategy::LosslessJpegThenFallback)
+        );
+    }
+
+    #[test]
+    fn test_rotation_save_strategy_uses_reencode_for_png() {
+        assert_eq!(rotation_save_strategy("png", 90), Some(RotationSaveStrategy::Reencode));
+    }
+
+    #[test]
+    fn test_rotation_save_strategy_rejects_unsupported_extensions() {
+        assert_eq!(rotation_save_strategy("gif", 90), Some(RotationSaveStrategy::Unsupported));
+    }
+
+    #[test]
+    fn test_try_lossless_jpeg_rotation_bytes_succeeds_for_aligned_jpeg() {
+        let jpeg_bytes = make_test_jpeg(64, 48, Subsampling::S420);
+        let rotated = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, 90).unwrap();
+        let rotated_image = image::load_from_memory(&rotated).unwrap();
+
+        assert_eq!(rotated_image.dimensions(), (48, 64));
+    }
+
+    #[test]
+    fn test_try_lossless_jpeg_rotation_bytes_fails_for_partial_mcu_jpeg() {
+        let jpeg_bytes = make_test_jpeg(30, 30, Subsampling::S420);
+        let error = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, 90).unwrap_err();
+
+        assert!(error.contains("not iMCU-aligned"));
+    }
+
+    #[test]
+    fn test_save_rotated_image_blocking_falls_back_for_partial_mcu_jpeg() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("partial.jpg");
+        fs::write(&image_path, make_test_jpeg(30, 46, Subsampling::S420)).unwrap();
+
+        save_rotated_image_blocking(image_path.to_string_lossy().to_string(), 90).unwrap();
+
+        let rotated = image::open(&image_path).unwrap();
+        assert_eq!(rotated.dimensions(), (46, 30));
     }
 
     fn decode_data_url(data_url: &str) -> Vec<u8> {
