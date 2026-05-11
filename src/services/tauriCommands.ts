@@ -156,7 +156,7 @@ export async function openUrlExternal(url: string): Promise<void> {
 import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';
 
 /** Convert a local file path to a Tauri asset protocol URL */
-export async function convertFileSrc(path: string): Promise<string> {
+export function convertFileSrc(path: string): string {
   return tauriConvertFileSrc(path);
 }
 

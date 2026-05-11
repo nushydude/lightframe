@@ -56,6 +56,7 @@ export function useImageNavigation() {
     navigateLast,
     setError,
     beginLoadGeneration,
+    setViewMode,
   } = useViewerStore();
 
   const settings = useSettingsStore((state) => state.settings);
@@ -133,6 +134,7 @@ export function useImageNavigation() {
         const parentFolder = getParentFolder(filePath);
         setFolderPath(parentFolder);
         setCurrentImage(filePath, 0);
+        setViewMode('viewer');
 
         const appWindow = getCurrentWindow();
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
@@ -160,6 +162,7 @@ export function useImageNavigation() {
       setError,
       setFolderScanning,
       setFolderPath,
+      setViewMode,
     ]
   );
 
@@ -221,6 +224,7 @@ export function useImageNavigation() {
       try {
         setFolderPath(nextFolderPath);
         setFolderScanning(true);
+        setViewMode('viewer');
 
         let folderImages = await scanFolder(nextFolderPath);
         if (!isCurrentGeneration(loadGeneration)) return;
@@ -260,6 +264,7 @@ export function useImageNavigation() {
       setError,
       setFolderPath,
       setFolderScanning,
+      setViewMode,
       setImages,
       settings.sortOrder,
     ]

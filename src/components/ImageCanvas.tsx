@@ -1,4 +1,11 @@
-import { useRef, useState, useCallback, useEffect, type CSSProperties } from 'react';
+import {
+  useRef,
+  useState,
+  useCallback,
+  useEffect,
+  type CSSProperties,
+  type SyntheticEvent,
+} from 'react';
 import { useViewerStore, type ZoomMode } from '../state/viewerStore';
 import {
   getFullAsset,
@@ -30,6 +37,18 @@ type ImageCanvasProps = {
   onWheelPrev?: () => void;
 };
 
+type ImageStyleOptions = {
+  zoomMode: ZoomMode;
+  panX: number;
+  panY: number;
+  rotation: number;
+  zoomLevel: number;
+  isFullResolutionReady: boolean;
+  metadata: ImageMetadata | null;
+  pendingCropPreview: ReturnType<typeof useViewerStore.getState>['pendingCropPreview'];
+  isCropMode: boolean;
+};
+
 function getHotWindowIndices(currentIndex: number, imageCount: number): number[] {
   const start = Math.max(0, currentIndex - NAVIGATION_CACHE_PREVIOUS_IMAGES);
   const end = Math.min(imageCount - 1, currentIndex + NAVIGATION_CACHE_NEXT_IMAGES);
@@ -40,6 +59,60 @@ function getHotWindowIndices(currentIndex: number, imageCount: number): number[]
   return indices;
 }
 
+function getImageStyle({
+  zoomMode,
+  panX,
+  panY,
+  rotation,
+  zoomLevel,
+  isFullResolutionReady,
+  metadata,
+  pendingCropPreview,
+  isCropMode,
+}: ImageStyleOptions): CSSProperties {
+  const style: CSSProperties = {};
+  const rotationStr = rotation !== 0 ? `rotate(${rotation}deg)` : '';
+
+  if (zoomMode === 'actual') {
+    style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
+    style.maxWidth = 'none';
+    style.maxHeight = 'none';
+  } else if (zoomMode === 'custom') {
+    style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
+    style.maxWidth = 'none';
+    style.maxHeight = 'none';
+  } else if (zoomMode === 'fill') {
+    style.width = '100%';
+    style.height = '100%';
+    style.objectFit = 'cover';
+    style.transform = rotationStr;
+  } else {
+    style.transform = rotationStr;
+
+    if (rotation === 90 || rotation === 270) {
+      style.maxWidth = '100vh';
+      style.maxHeight = '100vw';
+    }
+  }
+
+  if (
+    !isFullResolutionReady &&
+    metadata?.width != null &&
+    metadata?.height != null &&
+    (zoomMode === 'actual' || zoomMode === 'custom')
+  ) {
+    style.width = `${metadata.width}px`;
+    style.height = `${metadata.height}px`;
+  }
+
+  if (pendingCropPreview && !isCropMode) {
+    style.clipPath = getPreviewClipPath(pendingCropPreview);
+    style.transformOrigin = 'center center';
+  }
+
+  return style;
+}
+
 /** Main image display canvas with zoom/pan support */
 export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,6 +120,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const isMountedRef = useRef(true);
   const activeRequestIdRef = useRef(0);
   const fullLoadKeyRef = useRef<string | null>(null);
+  const imageDisplayErrorRef = useRef<string | null>(null);
   const metadataByPathRef = useRef(new Map<string, ImageMetadata>());
   const zoomStateRef = useRef<{ zoomMode: ZoomMode; zoomLevel: number }>({
     zoomMode: 'fit',
@@ -68,6 +142,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     isCropMode,
     cropRect,
     pendingCropPreview,
+    setError,
   } = useViewerStore();
   const { zoomLevel, panX, panY, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } =
     useZoomPan(containerRef, { onWheelNext, onWheelPrev });
@@ -77,6 +152,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [isFullResolutionReady, setIsFullResolutionReady] = useState(false);
   const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [fullLoadFailed, setFullLoadFailed] = useState(false);
+  const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
 
   const images = useViewerStore((s) => s.images);
 
@@ -84,7 +161,25 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomStateRef.current = { zoomMode, zoomLevel };
   }, [zoomLevel, zoomMode]);
 
+  const setImageDisplayError = useCallback(
+    (message: string) => {
+      imageDisplayErrorRef.current = message;
+      setError(message);
+    },
+    [setError]
+  );
+
+  const clearImageDisplayError = useCallback(() => {
+    if (!imageDisplayErrorRef.current) {
+      return;
+    }
+
+    imageDisplayErrorRef.current = null;
+    setError(null);
+  }, [setError]);
+
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       activeRequestIdRef.current += 1;
@@ -92,44 +187,34 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     };
   }, []);
 
-  const ensureFullResolutionLoaded = useCallback((path: string, requestId: number) => {
-    const loadKey = `${path}::${requestId}`;
-    if (fullLoadKeyRef.current === loadKey) {
-      return;
-    }
-    fullLoadKeyRef.current = loadKey;
+  const ensureFullResolutionLoaded = useCallback(
+    (path: string, requestId: number) => {
+      const loadKey = `${path}::${requestId}`;
+      if (fullLoadKeyRef.current === loadKey) {
+        return;
+      }
+      fullLoadKeyRef.current = loadKey;
 
-    void getFullAsset(path)
-      .then((url) => {
+      try {
+        const url = getFullAsset(path);
         if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
           return;
         }
 
-        const preloader = new Image();
-        preloader.onload = () => {
-          if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
-            return;
-          }
-          setFullSrc(url);
-          setIsFullResolutionReady(true);
-          setIsLoading(false);
-        };
-        preloader.onerror = () => {
-          if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
-            return;
-          }
-          setIsLoading(false);
-        };
-        preloader.src = url;
-      })
-      .catch((err) => {
+        setFullSrc(url);
+        setFullLoadFailed(false);
+      } catch (err) {
         if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
           return;
         }
         console.error('Failed to load full-resolution image:', err);
         setIsLoading(false);
-      });
-  }, []);
+        setFullLoadFailed(true);
+        setImageDisplayError(`Could not create image URL: ${path}`);
+      }
+    },
+    [setImageDisplayError]
+  );
 
   // Load preview first, then full-resolution pixels on demand.
   useEffect(() => {
@@ -138,7 +223,10 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       setFullSrc('');
       setMetadata(null);
       setIsFullResolutionReady(false);
+      setFullLoadFailed(false);
+      setPreviewDisplayFailed(false);
       setIsLoading(false);
+      imageDisplayErrorRef.current = null;
       return;
     }
 
@@ -151,7 +239,12 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setFullSrc('');
     setMetadata(null);
     setIsFullResolutionReady(false);
+    setFullLoadFailed(false);
+    setPreviewDisplayFailed(false);
     setIsLoading(true);
+    imageDisplayErrorRef.current = null;
+
+    ensureFullResolutionLoaded(currentImagePath, requestId);
 
     const loadImage = async () => {
       let imageMetadata: ImageMetadata | null = null;
@@ -270,9 +363,81 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     };
   }, [currentImagePath, currentIndex, images, loadGeneration]);
 
-  const handleImageLoad = useCallback(() => {
+  const fullFallbackSrc = fullLoadFailed ? '' : fullSrc;
+  const imageSrc = isFullResolutionReady ? fullSrc : previewSrc || fullFallbackSrc;
+  const isImageLoading = isLoading && !previewSrc && !isFullResolutionReady;
+
+  const handleFullResolutionLoad = useCallback(() => {
+    setFullLoadFailed(false);
+    setIsFullResolutionReady(true);
     setIsLoading(false);
-  }, []);
+    clearImageDisplayError();
+  }, [clearImageDisplayError]);
+
+  const handleFullResolutionError = useCallback(() => {
+    setFullLoadFailed(true);
+    setIsFullResolutionReady(false);
+    setIsLoading(false);
+
+    if ((!previewSrc || previewDisplayFailed) && currentImagePath) {
+      setImageDisplayError(`Could not display image: ${currentImagePath}`);
+    }
+  }, [currentImagePath, previewDisplayFailed, previewSrc, setImageDisplayError]);
+
+  const handleImageLoad = useCallback(
+    (event: SyntheticEvent<HTMLImageElement>) => {
+      if (fullSrc && event.currentTarget.getAttribute('src') === fullSrc) {
+        handleFullResolutionLoad();
+        return;
+      }
+
+      setIsLoading(false);
+      setPreviewDisplayFailed(false);
+      clearImageDisplayError();
+    },
+    [clearImageDisplayError, fullSrc, handleFullResolutionLoad]
+  );
+
+  const handleImageError = useCallback(
+    (event: SyntheticEvent<HTMLImageElement>) => {
+      if (fullSrc && event.currentTarget.getAttribute('src') === fullSrc) {
+        handleFullResolutionError();
+        return;
+      }
+
+      if (currentImagePath && fullSrc && !fullLoadFailed) {
+        setPreviewDisplayFailed(true);
+        setIsLoading(true);
+        return;
+      }
+
+      if (currentImagePath && previewSrc && !isFullResolutionReady && !fullLoadFailed) {
+        setPreviewDisplayFailed(true);
+        setIsLoading(true);
+        ensureFullResolutionLoaded(currentImagePath, activeRequestIdRef.current);
+        return;
+      }
+
+      setIsLoading(false);
+      setPreviewDisplayFailed(true);
+      if (currentImagePath) {
+        setImageDisplayError(`Could not display image: ${currentImagePath}`);
+      }
+    },
+    [
+      currentImagePath,
+      ensureFullResolutionLoaded,
+      fullLoadFailed,
+      fullSrc,
+      handleFullResolutionError,
+      isFullResolutionReady,
+      previewSrc,
+      setImageDisplayError,
+    ]
+  );
+
+  const shouldPreloadFullImage =
+    Boolean(fullSrc) && Boolean(previewSrc) && !isFullResolutionReady && !fullLoadFailed;
 
   const updateImageBounds = useCallback(() => {
     const container = containerRef.current;
@@ -308,64 +473,6 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     isCropMode,
   ]);
 
-  // Compute image transform
-  const getImageStyle = useCallback((): CSSProperties => {
-    const style: CSSProperties = {};
-    const rotationStr = rotation !== 0 ? `rotate(${rotation}deg)` : '';
-
-    if (zoomMode === 'actual') {
-      style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
-      style.maxWidth = 'none';
-      style.maxHeight = 'none';
-    } else if (zoomMode === 'custom') {
-      style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
-      style.maxWidth = 'none';
-      style.maxHeight = 'none';
-    } else if (zoomMode === 'fill') {
-      style.width = '100%';
-      style.height = '100%';
-      style.objectFit = 'cover';
-      style.transform = rotationStr;
-    } else {
-      // 'fit' mode
-      style.transform = rotationStr;
-
-      // If rotated 90 or 270, we need to make sure it still fits
-      if (rotation === 90 || rotation === 270) {
-        style.maxWidth = '100vh';
-        style.maxHeight = '100vw';
-      }
-    }
-
-    if (
-      !isFullResolutionReady &&
-      metadata?.width != null &&
-      metadata?.height != null &&
-      (zoomMode === 'actual' || zoomMode === 'custom')
-    ) {
-      style.width = `${metadata.width}px`;
-      style.height = `${metadata.height}px`;
-    }
-
-    if (pendingCropPreview && !isCropMode) {
-      style.clipPath = getPreviewClipPath(pendingCropPreview);
-      style.transformOrigin = 'center center';
-    }
-
-    return style;
-  }, [
-    isCropMode,
-    isFullResolutionReady,
-    metadata?.height,
-    metadata?.width,
-    panX,
-    panY,
-    pendingCropPreview,
-    rotation,
-    zoomLevel,
-    zoomMode,
-  ]);
-
   const containerClasses = [
     'image-canvas',
     isDragging ? 'dragging' : '',
@@ -373,9 +480,17 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   ]
     .filter(Boolean)
     .join(' ');
-
-  const imageSrc = isFullResolutionReady ? fullSrc : previewSrc || fullSrc;
-  const isImageLoading = isLoading && !previewSrc && !isFullResolutionReady;
+  const imageStyle = getImageStyle({
+    zoomMode,
+    panX,
+    panY,
+    rotation,
+    zoomLevel,
+    isFullResolutionReady,
+    metadata,
+    pendingCropPreview,
+    isCropMode,
+  });
 
   if (!currentImagePath) return null;
 
@@ -394,11 +509,23 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           src={imageSrc}
           alt=""
           className={`${zoomMode} ${isImageLoading ? 'loading' : ''}`}
-          style={getImageStyle()}
-          onLoad={() => {
-            handleImageLoad();
+          style={imageStyle}
+          onLoad={(event) => {
+            handleImageLoad(event);
             updateImageBounds();
           }}
+          onError={handleImageError}
+          draggable={false}
+        />
+      )}
+      {shouldPreloadFullImage && (
+        <img
+          src={fullSrc}
+          alt=""
+          className="image-full-loader"
+          onLoad={handleFullResolutionLoad}
+          onError={handleFullResolutionError}
+          aria-hidden="true"
           draggable={false}
         />
       )}

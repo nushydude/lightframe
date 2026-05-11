@@ -91,6 +91,33 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
   });
 
+  it('returns to viewer mode when opening an image from grid mode', async () => {
+    const mockImages = [
+      {
+        path: 'c:/test/img1.jpg',
+        file_name: 'img1.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+    ];
+    (getParentFolder as any).mockReturnValue('c:/test');
+    (scanFolder as any).mockResolvedValue(mockImages);
+
+    act(() => {
+      useViewerStore.getState().setViewMode('grid');
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openImage('c:/test/img1.jpg');
+    });
+
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
+  });
+
   it('should resolve startup image open before folder scan finishes', async () => {
     const deferredImages = [
       {
@@ -164,6 +191,32 @@ describe('useImageNavigation', () => {
     await waitFor(() => {
       expect(useViewerStore.getState().isFolderScanning).toBe(false);
     });
+  });
+
+  it('returns to viewer mode when opening a folder from grid mode', async () => {
+    const mockImages = [
+      {
+        path: 'c:/test/img1.jpg',
+        file_name: 'img1.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+    ];
+    (scanFolder as any).mockResolvedValue(mockImages);
+
+    act(() => {
+      useViewerStore.getState().setViewMode('grid');
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
   });
 
   it('should navigate next and previous', async () => {

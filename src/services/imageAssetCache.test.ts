@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const convertFileSrcMock = vi.fn(async (path: string) => `asset://localhost/${path}`);
+const convertFileSrcMock = vi.fn((path: string) => `asset://localhost/${path}`);
 const getPreviewImageMock = vi.fn(
   async (path: string, maxDimension: number) =>
     `data:image/jpeg;base64,preview-${maxDimension}-${path}`
@@ -70,72 +70,6 @@ describe('imageAssetCache', () => {
 
     expect(url).toContain('v=1767225609000');
     expect(convertFileSrcMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps invalidation version when invalidated during in-flight first read', async () => {
-    const { getFullAsset, invalidateImageAsset } = await loadCacheModule();
-    const path = 'C:/images/race.jpg';
-
-    let resolveConvert: ((url: string) => void) | undefined;
-    convertFileSrcMock.mockImplementationOnce(
-      () =>
-        new Promise<string>((resolve) => {
-          resolveConvert = resolve;
-        })
-    );
-
-    const pendingUrl = getFullAsset(path);
-
-    vi.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));
-    const invalidationVersion = Date.now();
-    invalidateImageAsset(path);
-
-    resolveConvert?.(`asset://localhost/${path}`);
-    const url = await pendingUrl;
-
-    expect(url).toContain(`v=${invalidationVersion}`);
-  });
-
-  it('does not let older concurrent first read overwrite a newer versioned cache entry', async () => {
-    const { getFullAsset, invalidateImageAsset } = await loadCacheModule();
-    const path = 'C:/images/concurrent-race.jpg';
-
-    let resolveA: ((url: string) => void) | undefined;
-    let resolveB: ((url: string) => void) | undefined;
-
-    convertFileSrcMock
-      .mockImplementationOnce(
-        () =>
-          new Promise<string>((resolve) => {
-            resolveA = resolve;
-          })
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise<string>((resolve) => {
-            resolveB = resolve;
-          })
-      );
-
-    const firstRead = getFullAsset(path);
-
-    vi.setSystemTime(new Date('2026-01-01T00:00:11.000Z'));
-    const invalidationVersion = Date.now();
-    invalidateImageAsset(path);
-
-    const secondRead = getFullAsset(path);
-
-    resolveB?.(`asset://localhost/${path}`);
-    const versionedUrl = await secondRead;
-    expect(versionedUrl).toContain(`v=${invalidationVersion}`);
-
-    resolveA?.(`asset://localhost/${path}`);
-    const olderResolvedUrl = await firstRead;
-    expect(olderResolvedUrl).toBe(versionedUrl);
-
-    const subsequentUrl = await getFullAsset(path);
-    expect(subsequentUrl).toBe(versionedUrl);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
   });
 
   it('preserves invalidation version across trim eviction for future reads', async () => {
@@ -241,21 +175,14 @@ describe('imageAssetCache', () => {
     const { getFullAsset, preloadFullAsset } = await loadCacheModule();
     const path = 'C:/images/stale-preload-full.jpg';
 
-    let resolveConvert: ((url: string) => void) | undefined;
-    convertFileSrcMock.mockImplementationOnce(
-      () =>
-        new Promise<string>((resolve) => {
-          resolveConvert = resolve;
-        })
-    );
-
-    let isCurrentGeneration = true;
+    let guardCalls = 0;
     const pendingPreload = preloadFullAsset(path, {
-      canStore: () => isCurrentGeneration,
+      canStore: () => {
+        guardCalls += 1;
+        return guardCalls === 1;
+      },
     });
 
-    isCurrentGeneration = false;
-    resolveConvert?.(`asset://localhost/${path}`);
     await pendingPreload;
 
     await getFullAsset(path);
