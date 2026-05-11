@@ -22,6 +22,8 @@ import {
   shouldLoadFullResolutionImmediately,
   shouldRequestFullResolution,
 } from './imagePreviewStrategy';
+import { CropOverlay } from './CropOverlay';
+import { getPreviewClipPath } from './cropPreview';
 
 type ImageCanvasProps = {
   onWheelNext?: () => void;
@@ -50,17 +52,25 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomMode: 'fit',
     zoomLevel: 1,
   });
-  const { currentImagePath, zoomMode, currentIndex, rotation, cacheBuster, loadGeneration } =
-    useViewerStore();
+  const [imageBounds, setImageBounds] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const {
-    zoomLevel,
-    panX,
-    panY,
-    isDragging,
-    handleMouseDown,
-    handleMouseMove,
-    handleMouseUp,
-  } = useZoomPan(containerRef, { onWheelNext, onWheelPrev });
+    currentImagePath,
+    zoomMode,
+    currentIndex,
+    rotation,
+    cacheBuster,
+    loadGeneration,
+    isCropMode,
+    cropRect,
+    pendingCropPreview,
+  } = useViewerStore();
+  const { zoomLevel, panX, panY, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } =
+    useZoomPan(containerRef, { onWheelNext, onWheelPrev });
 
   const [previewSrc, setPreviewSrc] = useState('');
   const [fullSrc, setFullSrc] = useState('');
@@ -151,8 +161,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
         }
-      } catch {
-        imageMetadata = null;
+      } catch (err) {
+        console.warn('Failed to read image metadata:', err);
       }
 
       try {
@@ -183,7 +193,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       }
     };
 
-    loadImage();
+    void loadImage();
 
     return () => {
       cancelled = true;
@@ -264,6 +274,40 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setIsLoading(false);
   }, []);
 
+  const updateImageBounds = useCallback(() => {
+    const container = containerRef.current;
+    const image = imgRef.current;
+    if (!container || !image) {
+      setImageBounds(null);
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const imageRect = image.getBoundingClientRect();
+    setImageBounds({
+      left: imageRect.left - containerRect.left,
+      top: imageRect.top - containerRect.top,
+      width: imageRect.width,
+      height: imageRect.height,
+    });
+  }, []);
+
+  useEffect(() => {
+    updateImageBounds();
+    window.addEventListener('resize', updateImageBounds);
+    return () => window.removeEventListener('resize', updateImageBounds);
+  }, [
+    updateImageBounds,
+    currentImagePath,
+    zoomMode,
+    zoomLevel,
+    panX,
+    panY,
+    rotation,
+    pendingCropPreview,
+    isCropMode,
+  ]);
+
   // Compute image transform
   const getImageStyle = useCallback((): CSSProperties => {
     const style: CSSProperties = {};
@@ -285,7 +329,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     } else {
       // 'fit' mode
       style.transform = rotationStr;
-      
+
       // If rotated 90 or 270, we need to make sure it still fits
       if (rotation === 90 || rotation === 270) {
         style.maxWidth = '100vh';
@@ -303,14 +347,32 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       style.height = `${metadata.height}px`;
     }
 
+    if (pendingCropPreview && !isCropMode) {
+      style.clipPath = getPreviewClipPath(pendingCropPreview);
+      style.transformOrigin = 'center center';
+    }
+
     return style;
-  }, [isFullResolutionReady, metadata?.height, metadata?.width, panX, panY, rotation, zoomLevel, zoomMode]);
+  }, [
+    isCropMode,
+    isFullResolutionReady,
+    metadata?.height,
+    metadata?.width,
+    panX,
+    panY,
+    pendingCropPreview,
+    rotation,
+    zoomLevel,
+    zoomMode,
+  ]);
 
   const containerClasses = [
     'image-canvas',
     isDragging ? 'dragging' : '',
-    (zoomMode === 'actual' || zoomMode === 'custom') ? 'zoomable' : '',
-  ].filter(Boolean).join(' ');
+    zoomMode === 'actual' || zoomMode === 'custom' ? 'zoomable' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const imageSrc = isFullResolutionReady ? fullSrc : previewSrc || fullSrc;
   const isImageLoading = isLoading && !previewSrc && !isFullResolutionReady;
@@ -333,9 +395,15 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           alt=""
           className={`${zoomMode} ${isImageLoading ? 'loading' : ''}`}
           style={getImageStyle()}
-          onLoad={handleImageLoad}
+          onLoad={() => {
+            handleImageLoad();
+            updateImageBounds();
+          }}
           draggable={false}
         />
+      )}
+      {isCropMode && cropRect && rotation === 0 && imageBounds && (
+        <CropOverlay imageBounds={imageBounds} cropRect={cropRect} />
       )}
     </div>
   );

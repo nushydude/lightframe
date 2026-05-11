@@ -1,6 +1,7 @@
 use crate::thumbnails;
 use base64::Engine;
 use image::GenericImageView;
+use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,21 @@ pub struct ImageMetadata {
     pub height: Option<u32>,
     pub file_size_bytes: u64,
     pub format: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct CropRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RotationSaveStrategy {
+    Unsupported,
+    Reencode,
+    LosslessJpegThenFallback,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -245,6 +261,96 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
     Ok(ImageMetadata { width, height, file_size_bytes, format })
 }
 
+fn rotation_save_strategy(extension: &str, rotation_degrees: i32) -> Option<RotationSaveStrategy> {
+    let normalized = rotation_degrees.rem_euclid(360);
+    if normalized == 0 {
+        return None;
+    }
+
+    if !matches!(normalized, 90 | 180 | 270) {
+        return None;
+    }
+
+    Some(match extension {
+        "jpg" | "jpeg" => RotationSaveStrategy::LosslessJpegThenFallback,
+        "bmp" | "png" | "webp" => RotationSaveStrategy::Reencode,
+        _ => RotationSaveStrategy::Unsupported,
+    })
+}
+
+fn rotation_transform_op(rotation_degrees: i32) -> Option<TransformOp> {
+    match rotation_degrees.rem_euclid(360) {
+        90 => Some(TransformOp::Rot90),
+        180 => Some(TransformOp::Rot180),
+        270 => Some(TransformOp::Rot270),
+        _ => None,
+    }
+}
+
+fn write_dynamic_image(
+    image: &image::DynamicImage,
+    output_path: &Path,
+    error_prefix: &str,
+) -> Result<(), String> {
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    let write_result = if matches!(extension.as_str(), "jpg" | "jpeg") {
+        image::DynamicImage::ImageRgb8(image.to_rgb8()).save(output_path)
+    } else {
+        image.save(output_path)
+    };
+
+    write_result.map_err(|e| format!("{}: {}", error_prefix, e))
+}
+
+fn restore_normal_orientation(
+    source_path: &Path,
+    output_path: &Path,
+    context: &str,
+) -> Result<(), String> {
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        return Ok(());
+    }
+
+    if let Ok(mut metadata) = Metadata::new_from_path(source_path) {
+        metadata.set_tag(ExifTag::Orientation(vec![1]));
+        metadata
+            .write_to_file(output_path)
+            .map_err(|e| format!("Failed to write image metadata after {}: {}", context, e))?;
+    }
+
+    Ok(())
+}
+
+fn try_lossless_jpeg_rotation_bytes(
+    jpeg_bytes: &[u8],
+    rotation_degrees: i32,
+) -> Result<Vec<u8>, String> {
+    let transform = rotation_transform_op(rotation_degrees)
+        .ok_or_else(|| format!("Unsupported rotation degrees: {}", rotation_degrees))?;
+
+    libjpeg_turbo_rs::transform_jpeg_with_options(
+        jpeg_bytes,
+        &TransformOptions {
+            op: transform,
+            perfect: true,
+            copy_markers: MarkerCopyMode::All,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("Lossless JPEG transform failed: {}", e))
+}
+
 /// Get image metadata (dimensions, format, file size)
 #[tauri::command]
 pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, String> {
@@ -370,46 +476,26 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
 
-    if !matches!(extension.as_str(), "bmp" | "jpg" | "jpeg" | "png" | "webp") {
-        return Err(format!(
-            "Saving rotation is not supported for {} files",
-            extension.to_uppercase()
-        ));
-    }
-
-    // Load the image
-    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
-
-    // Rotate based on degrees
-    let rotated = match rotation_degrees % 360 {
-        90 | -270 => img.rotate90(),
-        180 | -180 => img.rotate180(),
-        270 | -90 => img.rotate270(),
-        _ => return Ok(()), // No rotation needed
-    };
-
-    // For JPEG, PNG, and WebP, try to preserve metadata
-    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
-        // Read metadata before overwriting
-        let metadata = Metadata::new_from_path(path).ok();
-
-        // Save rotated pixels
-        rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
-
-        // Write metadata back if it was successfully read
-        if let Some(mut m) = metadata {
-            // We physically rotated the pixels, so we must reset orientation tag to 1 (Normal)
-            // otherwise software will rotate it a second time.
-            m.set_tag(ExifTag::Orientation(vec![1]));
-            m.write_to_file(path)
-                .map_err(|e| format!("Failed to write image metadata after rotation: {}", e))?;
+    match rotation_save_strategy(&extension, rotation_degrees) {
+        None => Ok(()),
+        Some(RotationSaveStrategy::Unsupported) => {
+            Err(format!("Saving rotation is not supported for {} files", extension.to_uppercase()))
         }
-    } else {
-        // For formats like BMP (no metadata), just save
-        rotated.save(path).map_err(|e| format!("Failed to save rotated image: {}", e))?;
+        Some(RotationSaveStrategy::Reencode) => {
+            save_rotated_image_by_reencoding(path, rotation_degrees, "rotation")
+        }
+        Some(RotationSaveStrategy::LosslessJpegThenFallback) => {
+            if let Err(lossless_error) = save_lossless_jpeg_rotation(path, rotation_degrees) {
+                eprintln!(
+                    "Lossless JPEG rotation failed for '{}': {}. Falling back to pixel re-encode.",
+                    file_path, lossless_error
+                );
+                save_rotated_image_by_reencoding(path, rotation_degrees, "rotation")
+            } else {
+                Ok(())
+            }
+        }
     }
-
-    Ok(())
 }
 
 /// Rotate an image file on disk and save it
@@ -420,6 +506,311 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
     })
     .await
     .map_err(|err| format!("Rotation worker failed: {}", err))?
+}
+
+fn save_lossless_jpeg_rotation(path: &Path, rotation_degrees: i32) -> Result<(), String> {
+    let jpeg_bytes =
+        fs::read(path).map_err(|e| format!("Failed to read JPEG for rotation: {}", e))?;
+    let rotated_bytes = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, rotation_degrees)?;
+    let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
+
+    fs::write(&temp_path, rotated_bytes)
+        .map_err(|e| format!("Failed to write temporary rotated JPEG: {}", e))?;
+
+    if let Err(err) = restore_normal_orientation(path, &temp_path, "lossless rotation") {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = replace_file_safely(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn save_rotated_image_by_reencoding(
+    path: &Path,
+    rotation_degrees: i32,
+    context_label: &str,
+) -> Result<(), String> {
+    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
+    let rotated = apply_rotation(img, rotation_degrees)?;
+    let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
+
+    write_dynamic_image(&rotated, &temp_path, "Failed to save rotated image")?;
+
+    if let Err(err) = restore_normal_orientation(path, &temp_path, context_label) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = replace_file_safely(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn validate_crop_rect(
+    crop_rect: CropRect,
+    image_width: u32,
+    image_height: u32,
+) -> Result<(), String> {
+    if crop_rect.width == 0 || crop_rect.height == 0 {
+        return Err("Crop rectangle must have non-zero width and height".to_string());
+    }
+
+    let right = crop_rect
+        .x
+        .checked_add(crop_rect.width)
+        .ok_or_else(|| "Crop rectangle exceeds image bounds".to_string())?;
+    let bottom = crop_rect
+        .y
+        .checked_add(crop_rect.height)
+        .ok_or_else(|| "Crop rectangle exceeds image bounds".to_string())?;
+
+    if right > image_width || bottom > image_height {
+        return Err("Crop rectangle is outside the image bounds".to_string());
+    }
+
+    Ok(())
+}
+
+fn apply_rotation(
+    img: image::DynamicImage,
+    rotation_degrees: i32,
+) -> Result<image::DynamicImage, String> {
+    let normalized = rotation_degrees.rem_euclid(360);
+    let rotated = match normalized {
+        0 => img,
+        90 => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _ => return Err(format!("Unsupported rotation degrees: {}", rotation_degrees)),
+    };
+
+    Ok(rotated)
+}
+
+fn write_cropped_image(
+    cropped: &image::RgbaImage,
+    output_path: &Path,
+    error_prefix: &str,
+) -> Result<(), String> {
+    write_dynamic_image(
+        &image::DynamicImage::ImageRgba8(cropped.clone()),
+        output_path,
+        error_prefix,
+    )
+}
+
+fn save_cropped_copy_blocking(
+    file_path: String,
+    crop_rect: CropRect,
+    output_path: String,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    let input_path = Path::new(&file_path);
+    if !input_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let output_path_ref = Path::new(&output_path);
+    let parent_dir = output_path_ref
+        .parent()
+        .ok_or_else(|| "Output path must include a parent directory".to_string())?;
+    if !parent_dir.exists() {
+        return Err("Output directory does not exist".to_string());
+    }
+
+    let input_canonical = fs::canonicalize(input_path)
+        .map_err(|e| format!("Failed to resolve source path: {}", e))?;
+    let output_candidate = if output_path_ref.exists() {
+        fs::canonicalize(output_path_ref)
+            .map_err(|e| format!("Failed to resolve output path: {}", e))?
+    } else if output_path_ref.is_absolute() {
+        output_path_ref.to_path_buf()
+    } else {
+        fs::canonicalize(parent_dir)
+            .map_err(|e| format!("Failed to resolve output directory: {}", e))?
+            .join(
+                output_path_ref
+                    .file_name()
+                    .ok_or_else(|| "Output file name is missing".to_string())?,
+            )
+    };
+
+    if input_canonical == output_candidate {
+        return Err("Output path must not match the original image".to_string());
+    }
+    if output_path_ref.exists() {
+        return Err("Output path already exists; choose a new file name".to_string());
+    }
+
+    let img =
+        image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
+    let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
+    let (image_width, image_height) = rotated.dimensions();
+
+    validate_crop_rect(crop_rect, image_width, image_height)?;
+
+    let cropped = image::imageops::crop_imm(
+        &rotated,
+        crop_rect.x,
+        crop_rect.y,
+        crop_rect.width,
+        crop_rect.height,
+    )
+    .to_image();
+
+    write_cropped_image(&cropped, output_path_ref, "Failed to save cropped copy")?;
+
+    Ok(())
+}
+
+fn build_crop_temp_path(source_path: &Path) -> Result<PathBuf, String> {
+    build_unique_sibling_path(source_path, "lightframe-crop")
+}
+
+fn build_unique_sibling_path(source_path: &Path, label: &str) -> Result<PathBuf, String> {
+    let parent_dir = source_path
+        .parent()
+        .ok_or_else(|| "Source path must include a parent directory".to_string())?;
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Source file name is invalid".to_string())?;
+    let extension = source_path.extension().and_then(|value| value.to_str()).unwrap_or("img");
+    let unique_suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    let mut attempt = 0_u32;
+    loop {
+        let candidate = parent_dir
+            .join(format!("{}.{}-{}-{}.{}", stem, label, unique_suffix, attempt, extension));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        attempt = attempt.saturating_add(1);
+    }
+}
+
+fn replace_file_safely(temp_path: &Path, destination_path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let backup_path = build_unique_sibling_path(destination_path, "lightframe-backup")?;
+
+        fs::rename(destination_path, &backup_path)
+            .map_err(|e| format!("Failed to stage original file for replacement: {}", e))?;
+
+        match fs::rename(temp_path, destination_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup_path);
+                Ok(())
+            }
+            Err(err) => {
+                let _ = fs::rename(&backup_path, destination_path);
+                let _ = fs::remove_file(temp_path);
+                Err(format!("Failed to replace original image: {}", err))
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::rename(temp_path, destination_path)
+            .map_err(|e| format!("Failed to replace original image: {}", e))
+    }
+}
+
+fn overwrite_with_crop_blocking(
+    file_path: String,
+    crop_rect: CropRect,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    let input_path = Path::new(&file_path);
+    if !input_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let extension = input_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    let img =
+        image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
+    let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
+    let (image_width, image_height) = rotated.dimensions();
+    validate_crop_rect(crop_rect, image_width, image_height)?;
+
+    let cropped = image::imageops::crop_imm(
+        &rotated,
+        crop_rect.x,
+        crop_rect.y,
+        crop_rect.width,
+        crop_rect.height,
+    )
+    .to_image();
+
+    let temp_path = build_crop_temp_path(input_path)?;
+    let metadata = Metadata::new_from_path(input_path).ok();
+
+    if let Err(err) =
+        write_cropped_image(&cropped, &temp_path, "Failed to write temporary cropped image")
+    {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        if let Some(mut current_metadata) = metadata {
+            current_metadata.set_tag(ExifTag::Orientation(vec![1]));
+            if let Err(err) = current_metadata.write_to_file(&temp_path) {
+                eprintln!("Failed to preserve metadata for cropped overwrite: {}", err);
+            }
+        }
+    }
+
+    if let Err(err) = replace_file_safely(&temp_path, input_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_cropped_copy(
+    file_path: String,
+    crop_rect: CropRect,
+    output_path: String,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_cropped_copy_blocking(file_path, crop_rect, output_path, rotation_degrees)
+    })
+    .await
+    .map_err(|err| format!("Crop copy worker failed: {}", err))?
+}
+
+#[tauri::command]
+pub async fn overwrite_with_crop(
+    file_path: String,
+    crop_rect: CropRect,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        overwrite_with_crop_blocking(file_path, crop_rect, rotation_degrees)
+    })
+    .await
+    .map_err(|err| format!("Crop overwrite worker failed: {}", err))?
 }
 
 /// Generate a small base64 thumbnail for high-performance navigation
@@ -537,8 +928,23 @@ pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
 mod tests {
     use super::*;
     use image::GenericImageView;
+    use libjpeg_turbo_rs::{compress, PixelFormat, Subsampling};
     use std::fs::File;
     use tempfile::tempdir;
+
+    fn make_test_jpeg(width: usize, height: usize, subsampling: Subsampling) -> Vec<u8> {
+        let mut pixels = vec![0_u8; width * height * 3];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) * 3;
+                pixels[offset] = (x % 256) as u8;
+                pixels[offset + 1] = (y % 256) as u8;
+                pixels[offset + 2] = ((x + y) % 256) as u8;
+            }
+        }
+
+        compress(&pixels, width, height, PixelFormat::Rgb, 90, subsampling).unwrap()
+    }
 
     #[test]
     fn test_natural_sort_key() {
@@ -628,6 +1034,61 @@ mod tests {
         assert_eq!(metadata.file_size_bytes, expected_size);
     }
 
+    #[test]
+    fn test_rotation_save_strategy_uses_lossless_attempt_for_jpeg_right_angles() {
+        assert_eq!(
+            rotation_save_strategy("jpg", 90),
+            Some(RotationSaveStrategy::LosslessJpegThenFallback)
+        );
+        assert_eq!(
+            rotation_save_strategy("jpeg", 180),
+            Some(RotationSaveStrategy::LosslessJpegThenFallback)
+        );
+        assert_eq!(
+            rotation_save_strategy("jpeg", 270),
+            Some(RotationSaveStrategy::LosslessJpegThenFallback)
+        );
+    }
+
+    #[test]
+    fn test_rotation_save_strategy_uses_reencode_for_png() {
+        assert_eq!(rotation_save_strategy("png", 90), Some(RotationSaveStrategy::Reencode));
+    }
+
+    #[test]
+    fn test_rotation_save_strategy_rejects_unsupported_extensions() {
+        assert_eq!(rotation_save_strategy("gif", 90), Some(RotationSaveStrategy::Unsupported));
+    }
+
+    #[test]
+    fn test_try_lossless_jpeg_rotation_bytes_succeeds_for_aligned_jpeg() {
+        let jpeg_bytes = make_test_jpeg(64, 48, Subsampling::S420);
+        let rotated = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, 90).unwrap();
+        let rotated_image = image::load_from_memory(&rotated).unwrap();
+
+        assert_eq!(rotated_image.dimensions(), (48, 64));
+    }
+
+    #[test]
+    fn test_try_lossless_jpeg_rotation_bytes_fails_for_partial_mcu_jpeg() {
+        let jpeg_bytes = make_test_jpeg(30, 30, Subsampling::S420);
+        let error = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, 90).unwrap_err();
+
+        assert!(error.contains("not iMCU-aligned"));
+    }
+
+    #[test]
+    fn test_save_rotated_image_blocking_falls_back_for_partial_mcu_jpeg() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("partial.jpg");
+        fs::write(&image_path, make_test_jpeg(30, 46, Subsampling::S420)).unwrap();
+
+        save_rotated_image_blocking(image_path.to_string_lossy().to_string(), 90).unwrap();
+
+        let rotated = image::open(&image_path).unwrap();
+        assert_eq!(rotated.dimensions(), (46, 30));
+    }
+
     fn decode_data_url(data_url: &str) -> Vec<u8> {
         let (_, payload) = data_url.split_once(',').unwrap();
         base64::engine::general_purpose::STANDARD.decode(payload).unwrap()
@@ -671,6 +1132,186 @@ mod tests {
 
         assert_eq!(width, 640);
         assert_eq!(height, 360);
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_writes_new_image_with_expected_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-cropped.png");
+
+        image::RgbaImage::from_pixel(100, 80, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 10, y: 5, width: 40, height: 30 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap();
+
+        let cropped = image::open(&output_path).unwrap();
+        let original = image::open(&input_path).unwrap();
+
+        assert_eq!(cropped.dimensions(), (40, 30));
+        assert_eq!(original.dimensions(), (100, 80));
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_out_of_bounds_crop() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-cropped.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 50, y: 50, width: 20, height: 20 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("outside the image bounds"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_zero_sized_crop() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-cropped.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 0, height: 20 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("non-zero width and height"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_same_path_as_source() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let original = image::open(&input_path).unwrap();
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 20, height: 20 },
+            input_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("must not match the original image"));
+        assert_eq!(image::open(&input_path).unwrap().dimensions(), original.dimensions());
+    }
+
+    #[test]
+    fn test_save_cropped_copy_blocking_rejects_existing_output_file() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("existing.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+        image::RgbaImage::from_pixel(10, 10, image::Rgba([255, 0, 0, 255]))
+            .save(&output_path)
+            .unwrap();
+
+        let existing = image::open(&output_path).unwrap();
+        let error = save_cropped_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 20, height: 20 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("already exists"));
+        assert_eq!(image::open(&output_path).unwrap().dimensions(), existing.dimensions());
+    }
+
+    #[test]
+    fn test_overwrite_with_crop_blocking_replaces_original_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+
+        image::RgbaImage::from_pixel(120, 90, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        overwrite_with_crop_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 10, y: 15, width: 50, height: 40 },
+            None,
+        )
+        .unwrap();
+
+        let overwritten = image::open(&input_path).unwrap();
+        assert_eq!(overwritten.dimensions(), (50, 40));
+    }
+
+    #[test]
+    fn test_overwrite_with_crop_blocking_invalid_crop_keeps_original_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+
+        image::RgbaImage::from_pixel(120, 90, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let before = image::open(&input_path).unwrap();
+        let error = overwrite_with_crop_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 110, y: 80, width: 20, height: 20 },
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("outside the image bounds"));
+        assert_eq!(image::open(&input_path).unwrap().dimensions(), before.dimensions());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_overwrite_with_crop_blocking_preserves_unrelated_backup_named_file() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("photo.jpg");
+        let unrelated_backup_path = dir.path().join("photo.lightframe-backup");
+        let sentinel = b"keep-this-backup-file";
+
+        image::RgbImage::from_pixel(120, 90, image::Rgb([10, 20, 30])).save(&input_path).unwrap();
+        fs::write(&unrelated_backup_path, sentinel).unwrap();
+
+        overwrite_with_crop_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 10, y: 15, width: 50, height: 40 },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(image::open(&input_path).unwrap().dimensions(), (50, 40));
+        assert_eq!(fs::read(&unrelated_backup_path).unwrap(), sentinel);
     }
 
     #[test]

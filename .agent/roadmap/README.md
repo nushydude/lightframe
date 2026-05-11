@@ -30,6 +30,15 @@ Use this order unless the user explicitly reprioritizes work:
 20. `tasks/20-quick-copy-move-workflows.md`
 21. `tasks/21-improved-format-fallbacks.md`
 22. `tasks/22-refresh-current-folder.md`
+23. `tasks/23-open-in-external-editor.md`
+24. `tasks/24-performance-telemetry-overlay.md`
+25. `tasks/25-binary-preview-thumbnail-pipeline.md`
+26. `tasks/26-priority-cancellable-image-work-scheduler.md`
+27. `tasks/27-byte-budgeted-memory-governor.md`
+28. `tasks/28-persistent-folder-index.md`
+29. `tasks/29-incremental-folder-watcher.md`
+30. `tasks/30-large-image-tiled-renderer.md`
+31. `tasks/31-windows-native-codec-path.md`
 
 ## Shared Ground Rules
 

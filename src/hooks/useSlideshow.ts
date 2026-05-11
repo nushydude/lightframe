@@ -64,7 +64,13 @@ export function useSlideshow() {
         stopSlideshow();
       }
     }
-  }, [settings.shuffleSlideshow, settings.loopSlideshow, navigateNext, stopSlideshow, setCurrentIndex]);
+  }, [
+    settings.shuffleSlideshow,
+    settings.loopSlideshow,
+    navigateNext,
+    stopSlideshow,
+    setCurrentIndex,
+  ]);
 
   // Timer management
   useEffect(() => {
@@ -83,7 +89,13 @@ export function useSlideshow() {
         timerRef.current = null;
       }
     };
-  }, [isSlideshowActive, isSlideshowPaused, advanceSlide, settings.slideshowIntervalSeconds, images.length]);
+  }, [
+    isSlideshowActive,
+    isSlideshowPaused,
+    advanceSlide,
+    settings.slideshowIntervalSeconds,
+    images.length,
+  ]);
 
   /** Start the slideshow */
   const start = useCallback(async () => {

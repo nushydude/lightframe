@@ -1,9 +1,23 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, message } from '@tauri-apps/plugin-dialog';
+import { confirm, message, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
-import { moveToTrash, copyImageToClipboard, revealInExplorer, openSecondaryWindow } from '../services/tauriCommands';
+import {
+  getFileName,
+  openSecondaryWindow,
+  overwriteWithCrop,
+  saveCroppedCopy,
+} from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
+import {
+  canSaveRotationForPath,
+  copyCurrentImage,
+  deleteCurrentImage,
+  revealCurrentImage,
+} from '../services/viewerActions';
+import { normalizedToIntegerPixelRect } from '../services/cropMath';
+import { invalidateImageAsset } from '../services/imageAssetCache';
+import { invalidateThumbnail } from '../services/thumbnailCache';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -45,12 +59,25 @@ export function ViewerChrome({
     zoomOut,
     removeImage,
     rotation,
-    saveRotation,
+    isCropMode,
+    cropRect,
+    pendingCropPreview,
+    pendingEditsByPath,
+    cropAspectRatio,
     viewMode,
     setViewMode,
+    enterCropMode,
+    exitCropMode,
+    setCropAspectRatio,
+    resetCrop,
+    applyCropPreview,
+    clearCropPreview,
+    clearPendingEdits,
+    commitPendingEdits,
   } = useViewerStore();
 
   const [showExif, setShowExif] = useState(false);
+  const [exifRefreshToken, setExifRefreshToken] = useState(0);
 
   useEffect(() => {
     const handler = () => setShowExif((value) => !value);
@@ -64,8 +91,13 @@ export function ViewerChrome({
   const fileName = currentImagePath
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
-  const currentExtension = fileName.split('.').pop()?.toLowerCase() || '';
-  const canSaveRotation = ['bmp', 'jpg', 'jpeg', 'png', 'webp'].includes(currentExtension);
+  const canSaveRotation = canSaveRotationForPath(currentImagePath);
+  const cropDisabledByRotation = rotation !== 0;
+  const canPreviewCrop = isCropMode && cropRect !== null;
+  const currentPendingEdit = currentImagePath ? pendingEditsByPath[currentImagePath] : undefined;
+  const hasPendingEdits = Boolean(currentPendingEdit);
+  const canCommitPendingEdits =
+    Boolean(currentPendingEdit?.cropRect) || (hasPendingEdits && canSaveRotation);
 
   const toggleFullscreen = async () => {
     try {
@@ -79,42 +111,111 @@ export function ViewerChrome({
   };
 
   const handleDelete = async () => {
-    if (!currentImagePath) return;
-    try {
-      const confirmed = await confirm(
-        `Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`,
-        {
-          title: 'Delete Image',
-          kind: 'warning',
-        }
-      );
-      if (confirmed) {
-        await moveToTrash(currentImagePath);
-        removeImage(currentIndex);
-      }
-    } catch (err) {
-      console.error('Failed to move to trash:', err);
-      await message(`Failed to delete: ${err}`, { title: 'Error', kind: 'error' });
-    }
+    await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
   };
 
   const handleCopy = async () => {
-    if (!currentImagePath) return;
-    try {
-      await copyImageToClipboard(currentImagePath);
-      await message('Image copied to clipboard!', { title: 'Success', kind: 'info' });
-    } catch (err) {
-      console.error('Failed to copy image:', err);
-      await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
-    }
+    await copyCurrentImage(currentImagePath);
   };
 
   const handleReveal = async () => {
-    if (!currentImagePath) return;
+    await revealCurrentImage(currentImagePath);
+  };
+
+  const handleSaveCroppedCopy = async () => {
+    if (!currentImagePath || !cropRect) {
+      return;
+    }
+
+    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const imageWidth = activeImage?.naturalWidth ?? 0;
+    const imageHeight = activeImage?.naturalHeight ?? 0;
+
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      await message('Unable to determine image dimensions for crop export.', {
+        title: 'Error',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const pixelCropRect = normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight);
+    const originalName = getFileName(currentImagePath);
+    const dotIndex = originalName.lastIndexOf('.');
+    const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
+    const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
+    const outputPath = await save({
+      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),
+    });
+
+    if (!outputPath) {
+      return;
+    }
+
     try {
-      await revealInExplorer(currentImagePath);
+      await saveCroppedCopy(currentImagePath, pixelCropRect, outputPath, rotation);
+      await message(`Saved cropped copy to:\n${outputPath}`, {
+        title: 'Cropped Copy Saved',
+        kind: 'info',
+      });
     } catch (err) {
-      console.error('Failed to reveal file:', err);
+      console.error('Failed to save cropped copy:', err);
+      await message(`Failed to save cropped copy: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
+  };
+
+  const handleOverwriteCrop = async () => {
+    if (!currentImagePath || !cropRect) {
+      return;
+    }
+
+    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const imageWidth = activeImage?.naturalWidth ?? 0;
+    const imageHeight = activeImage?.naturalHeight ?? 0;
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      await message('Unable to determine image dimensions for crop overwrite.', {
+        title: 'Error',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const confirmed = await confirm(
+      `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
+      {
+        title: 'Overwrite Cropped Image',
+        kind: 'warning',
+      }
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await overwriteWithCrop(
+        currentImagePath,
+        normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight),
+        rotation
+      );
+      invalidateImageAsset(currentImagePath);
+      invalidateThumbnail(currentImagePath);
+      clearPendingEdits(currentImagePath);
+      useViewerStore.setState({ cacheBuster: Date.now() });
+      setExifRefreshToken((value) => value + 1);
+      await message('Original image updated with the cropped selection.', {
+        title: 'Crop Saved',
+        kind: 'info',
+      });
+    } catch (err) {
+      console.error('Failed to overwrite cropped image:', err);
+      await message(`Failed to overwrite cropped image: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
     }
   };
 
@@ -140,6 +241,7 @@ export function ViewerChrome({
               {isFolderScanning && ' …'}
             </span>
           )}
+          {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
         <div className="top-bar-right">
@@ -275,20 +377,58 @@ export function ViewerChrome({
               <span className="top-bar-btn-icon">⚙</span>
               <span className="top-bar-btn-label">Settings</span>
             </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled ${isCropMode || pendingCropPreview ? 'active' : ''}`}
+              onClick={() => {
+                if (isCropMode) {
+                  exitCropMode();
+                  return;
+                }
+                if (pendingCropPreview) {
+                  clearCropPreview();
+                }
+                enterCropMode();
+              }}
+              title={
+                cropDisabledByRotation
+                  ? 'Crop is unavailable while rotation preview is active'
+                  : 'Crop image'
+              }
+              aria-label="Toggle crop mode"
+              id="btn-crop"
+              disabled={cropDisabledByRotation}
+            >
+              <span className="top-bar-btn-icon">✂</span>
+              <span className="top-bar-btn-label">Crop</span>
+            </button>
           </div>
         </div>
       </div>
 
       {showExif && currentImagePath && (
-        <ExifPanel filePath={currentImagePath} onClose={() => setShowExif(false)} />
+        <ExifPanel
+          key={`${currentImagePath}:${exifRefreshToken}`}
+          filePath={currentImagePath}
+          onClose={() => setShowExif(false)}
+        />
       )}
 
       {images.length > 1 && (
         <>
-          <button className="nav-arrow left" onClick={onPrev} aria-label="Previous image" id="btn-prev">
+          <button
+            className="nav-arrow left"
+            onClick={onPrev}
+            aria-label="Previous image"
+            id="btn-prev"
+          >
             ‹
           </button>
-          <button className="nav-arrow right" onClick={onNext} aria-label="Next image" id="btn-next">
+          <button
+            className="nav-arrow right"
+            onClick={onNext}
+            aria-label="Next image"
+            id="btn-next"
+          >
             ›
           </button>
         </>
@@ -389,13 +529,33 @@ export function ViewerChrome({
           ↻
         </button>
 
-        {rotation !== 0 && canSaveRotation && (
+        {hasPendingEdits && (
+          <button
+            className="control-btn"
+            onClick={() => {
+              if (currentImagePath) {
+                clearPendingEdits(currentImagePath);
+              }
+            }}
+            title="Reset pending edits"
+            aria-label="Reset pending edits"
+            id="btn-reset-edits"
+          >
+            Reset
+          </button>
+        )}
+
+        {canCommitPendingEdits && (
           <button
             className="control-btn active"
-            onClick={saveRotation}
-            title="Save rotation to file"
-            aria-label="Save rotation"
-            id="btn-save-rotation"
+            onClick={() => {
+              if (currentImagePath) {
+                void commitPendingEdits(currentImagePath);
+              }
+            }}
+            title="Save pending edits"
+            aria-label="Save pending edits"
+            id="btn-save-edits"
           >
             💾
           </button>
@@ -422,6 +582,82 @@ export function ViewerChrome({
         >
           1:1
         </button>
+
+        {(isCropMode || pendingCropPreview) && (
+          <>
+            <div className="control-divider" />
+            <select
+              className="crop-aspect-select"
+              aria-label="Crop aspect ratio"
+              value={cropAspectRatio}
+              onChange={(event) =>
+                setCropAspectRatio(event.target.value as 'free' | '1:1' | '4:3' | '3:2' | '16:9')
+              }
+              disabled={!isCropMode}
+            >
+              <option value="free">Free</option>
+              <option value="1:1">1:1</option>
+              <option value="4:3">4:3</option>
+              <option value="3:2">3:2</option>
+              <option value="16:9">16:9</option>
+            </select>
+            <button
+              className="control-btn"
+              onClick={resetCrop}
+              title="Reset crop"
+              aria-label="Reset crop"
+              id="btn-crop-reset"
+            >
+              Reset
+            </button>
+            {isCropMode ? (
+              <button
+                className="control-btn active"
+                onClick={applyCropPreview}
+                title="Preview crop (Enter)"
+                aria-label="Preview crop"
+                id="btn-crop-preview"
+                disabled={!canPreviewCrop}
+              >
+                Preview
+              </button>
+            ) : (
+              <button
+                className="control-btn"
+                onClick={clearCropPreview}
+                title="Clear crop preview"
+                aria-label="Clear crop preview"
+                id="btn-crop-clear-preview"
+              >
+                Clear
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn active"
+                onClick={() => void handleSaveCroppedCopy()}
+                title="Save cropped copy"
+                aria-label="Save cropped copy"
+                id="btn-crop-save-copy"
+                disabled={!cropRect}
+              >
+                Save Copy
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn"
+                onClick={() => void handleOverwriteCrop()}
+                title="Overwrite original with crop"
+                aria-label="Overwrite original with crop"
+                id="btn-crop-overwrite"
+                disabled={!cropRect}
+              >
+                Overwrite
+              </button>
+            )}
+          </>
+        )}
       </div>
     </>
   );

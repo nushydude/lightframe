@@ -2,7 +2,8 @@ import { useEffect, useCallback } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { revealInExplorer } from '../services/tauriCommands';
+import { nudgeCropRectInDirection } from '../services/cropMath';
+import { revealCurrentImage } from '../services/viewerActions';
 
 interface KeyboardHandlers {
   openFilePicker: () => void;
@@ -14,6 +15,7 @@ interface KeyboardHandlers {
   startSlideshow: () => void;
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
+  openCommandPalette: () => void;
 }
 
 /** Hook for handling all keyboard shortcuts */
@@ -22,8 +24,11 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     isFullscreen,
     isSlideshowActive,
     showSettings,
+    showCommandPalette,
     currentImagePath,
     viewMode,
+    isCropMode,
+    cropRect,
     setFullscreen,
     setShowSettings,
     setViewMode,
@@ -32,7 +37,9 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     resetZoom,
     zoomMode,
     setZoomMode,
-    stopSlideshow,
+    updateCropRect,
+    applyCropPreview,
+    exitCropMode,
   } = useViewerStore();
 
   const settings = useSettingsStore((s) => s.settings);
@@ -41,7 +48,11 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     async (e: KeyboardEvent) => {
       // Don't handle shortcuts when typing in inputs
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT'
+      ) {
         return;
       }
 
@@ -55,9 +66,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       // Ctrl + Shift + O: Show in folder
       if (e.ctrlKey && e.shiftKey && e.key === 'O') {
         e.preventDefault();
-        if (currentImagePath) {
-          revealInExplorer(currentImagePath).catch(err => console.error('Failed to reveal file:', err));
-        }
+        void revealCurrentImage(currentImagePath);
         return;
       }
 
@@ -66,6 +75,58 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         e.preventDefault();
         setShowSettings(!showSettings);
         return;
+      }
+
+      // Ctrl + K / Ctrl + Shift + P: Open command palette
+      if (
+        (e.ctrlKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) ||
+        (e.ctrlKey && e.shiftKey && (e.key === 'p' || e.key === 'P'))
+      ) {
+        e.preventDefault();
+        if (!showCommandPalette) {
+          handlers.openCommandPalette();
+        }
+        return;
+      }
+
+      if (showCommandPalette) {
+        return;
+      }
+
+      if (isCropMode) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          exitCropMode();
+          return;
+        }
+
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          applyCropPreview();
+          return;
+        }
+
+        if (!cropRect) {
+          return;
+        }
+
+        const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+        const imageWidth = activeImage?.naturalWidth ?? activeImage?.width ?? 1;
+        const imageHeight = activeImage?.naturalHeight ?? activeImage?.height ?? 1;
+
+        if (
+          e.key === 'ArrowUp' ||
+          e.key === 'ArrowDown' ||
+          e.key === 'ArrowLeft' ||
+          e.key === 'ArrowRight'
+        ) {
+          e.preventDefault();
+          const stepPx = e.shiftKey ? 10 : 1;
+          updateCropRect(
+            nudgeCropRectInDirection(cropRect, e.key, stepPx, imageWidth, imageHeight)
+          );
+          return;
+        }
       }
 
       // Ctrl + 0: Reset zoom to fit
@@ -237,8 +298,11 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       isFullscreen,
       isSlideshowActive,
       showSettings,
+      showCommandPalette,
       currentImagePath,
       viewMode,
+      isCropMode,
+      cropRect,
       settings.loopSlideshow,
       setFullscreen,
       setShowSettings,
@@ -248,7 +312,9 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       zoomIn,
       zoomOut,
       resetZoom,
-      stopSlideshow,
+      updateCropRect,
+      applyCropPreview,
+      exitCropMode,
     ]
   );
 

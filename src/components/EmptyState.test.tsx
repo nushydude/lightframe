@@ -27,7 +27,7 @@ describe('EmptyState', () => {
 
   it('should display shortcut hints', () => {
     render(<EmptyState onOpenFile={vi.fn()} onOpenFolder={vi.fn()} />);
-    
+
     expect(screen.getByText('Ctrl+O')).toBeInTheDocument();
     expect(screen.getByText('Slideshow')).toBeInTheDocument();
     expect(screen.getByText('Fullscreen')).toBeInTheDocument();

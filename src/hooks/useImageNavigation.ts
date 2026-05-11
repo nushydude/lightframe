@@ -69,6 +69,9 @@ export function useImageNavigation() {
     if (images.length === 0 || settings.sortOrder === 'name') return;
 
     const sorted = sortImages([...images], settings.sortOrder);
+    const hasOrderChanged = sorted.some((image, index) => image.path !== images[index]?.path);
+    if (!hasOrderChanged) return;
+
     const currentPath = images[currentIndex]?.path;
     setImages(sorted);
 
@@ -78,7 +81,7 @@ export function useImageNavigation() {
         setCurrentIndex(newIndex);
       }
     }
-  }, [settings.sortOrder]);
+  }, [currentIndex, images, setCurrentIndex, setImages, settings.sortOrder]);
 
   const scanFolderForImage = useCallback(
     async (loadGeneration: number, filePath: string, parentFolder: string) => {
@@ -112,74 +115,68 @@ export function useImageNavigation() {
         }
       }
     },
-    [isCurrentGeneration, setCurrentIndex, setError, setFolderScanning, setImages, settings.sortOrder]
+    [
+      isCurrentGeneration,
+      setCurrentIndex,
+      setError,
+      setFolderScanning,
+      setImages,
+      settings.sortOrder,
+    ]
+  );
+
+  const loadImageFile = useCallback(
+    async (filePath: string, scanInBackground = false) => {
+      const loadGeneration = beginLoadGeneration();
+
+      try {
+        const parentFolder = getParentFolder(filePath);
+        setFolderPath(parentFolder);
+        setCurrentImage(filePath, 0);
+
+        const appWindow = getCurrentWindow();
+        const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
+        await appWindow.setTitle(`${fileName} - LightFrame`);
+        if (!isCurrentGeneration(loadGeneration)) return;
+
+        setFolderScanning(true);
+        const scanPromise = scanFolderForImage(loadGeneration, filePath, parentFolder);
+        if (scanInBackground) {
+          void scanPromise;
+        } else {
+          await scanPromise;
+        }
+      } catch (err) {
+        if (isCurrentGeneration(loadGeneration)) {
+          setError(`Could not open image: ${err}`);
+        }
+      }
+    },
+    [
+      beginLoadGeneration,
+      isCurrentGeneration,
+      scanFolderForImage,
+      setCurrentImage,
+      setError,
+      setFolderScanning,
+      setFolderPath,
+    ]
   );
 
   /** Open and display a specific image file */
   const openImage = useCallback(
     async (filePath: string) => {
-      const loadGeneration = beginLoadGeneration();
-
-      try {
-        const parentFolder = getParentFolder(filePath);
-        setFolderPath(parentFolder);
-        setCurrentImage(filePath, 0);
-
-        const appWindow = getCurrentWindow();
-        const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-        await appWindow.setTitle(`${fileName} - LightFrame`);
-        if (!isCurrentGeneration(loadGeneration)) return;
-
-        setFolderScanning(true);
-        await scanFolderForImage(loadGeneration, filePath, parentFolder);
-      } catch (err) {
-        if (isCurrentGeneration(loadGeneration)) {
-          setError(`Could not open image: ${err}`);
-        }
-      }
+      await loadImageFile(filePath);
     },
-    [
-      beginLoadGeneration,
-      isCurrentGeneration,
-      scanFolderForImage,
-      setCurrentImage,
-      setError,
-      setFolderPath,
-    ]
+    [loadImageFile]
   );
 
   /** Open an image for startup and continue folder scan in the background */
   const openImageForStartup = useCallback(
     async (filePath: string) => {
-      const loadGeneration = beginLoadGeneration();
-
-      try {
-        const parentFolder = getParentFolder(filePath);
-        setFolderPath(parentFolder);
-        setCurrentImage(filePath, 0);
-
-        const appWindow = getCurrentWindow();
-        const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-        await appWindow.setTitle(`${fileName} - LightFrame`);
-        if (!isCurrentGeneration(loadGeneration)) return;
-
-        setFolderScanning(true);
-        void scanFolderForImage(loadGeneration, filePath, parentFolder);
-      } catch (err) {
-        if (isCurrentGeneration(loadGeneration)) {
-          setError(`Could not open image: ${err}`);
-        }
-      }
+      await loadImageFile(filePath, true);
     },
-    [
-      beginLoadGeneration,
-      isCurrentGeneration,
-      scanFolderForImage,
-      setCurrentImage,
-      setError,
-      setFolderPath,
-      setFolderScanning,
-    ]
+    [loadImageFile]
   );
 
   /** Open a file picker dialog */
@@ -190,7 +187,20 @@ export function useImageNavigation() {
         filters: [
           {
             name: 'Images',
-            extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif', 'svg'],
+            extensions: [
+              'jpg',
+              'jpeg',
+              'png',
+              'webp',
+              'gif',
+              'bmp',
+              'tiff',
+              'tif',
+              'heic',
+              'heif',
+              'avif',
+              'svg',
+            ],
           },
         ],
       });
@@ -311,7 +321,9 @@ export function useImageNavigation() {
       }
 
       if (previousImagePath) {
-        const previousPathIndex = refreshedImages.findIndex((image) => image.path === previousImagePath);
+        const previousPathIndex = refreshedImages.findIndex(
+          (image) => image.path === previousImagePath
+        );
         if (previousPathIndex >= 0) {
           setCurrentIndex(previousPathIndex);
           return;

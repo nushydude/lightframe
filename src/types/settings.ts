@@ -69,8 +69,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     windowY: raw.window_y as number | undefined,
     windowWidth: raw.window_width as number | undefined,
     windowHeight: raw.window_height as number | undefined,
-    sortOrder:
-      (raw.sort_order as AppSettings['sortOrder']) || DEFAULT_SETTINGS.sortOrder,
+    sortOrder: (raw.sort_order as AppSettings['sortOrder']) || DEFAULT_SETTINGS.sortOrder,
     showThumbnails: (raw.show_thumbnails as boolean) ?? DEFAULT_SETTINGS.showThumbnails,
   };
 }

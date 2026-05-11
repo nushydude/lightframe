@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getThumbnailMock = vi.fn<
-  (path: string, sizeBytes?: number, modifiedAt?: string) => Promise<string>
->();
+const getThumbnailMock =
+  vi.fn<(path: string, sizeBytes?: number, modifiedAt?: string) => Promise<string>>();
 
 vi.mock('./tauriCommands', () => ({
   getThumbnail: getThumbnailMock,
@@ -72,9 +71,9 @@ describe('thumbnailCache', () => {
 
     await loadThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' });
 
-    expect(
-      getCachedThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' })
-    ).toBe('data:image/jpeg;base64,OLD');
+    expect(getCachedThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' })).toBe(
+      'data:image/jpeg;base64,OLD'
+    );
 
     expect(
       getCachedThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '2' })
@@ -243,12 +242,7 @@ describe('thumbnailCache', () => {
 
     const droppedListener = vi.fn();
     const keptListener = vi.fn();
-    const paths = [
-      'C:/images/a.jpg',
-      'C:/images/b.jpg',
-      'C:/images/c.jpg',
-      'C:/images/d.jpg',
-    ];
+    const paths = ['C:/images/a.jpg', 'C:/images/b.jpg', 'C:/images/c.jpg', 'C:/images/d.jpg'];
 
     preloadThumbnails(paths, { concurrency: 4 });
     preloadThumbnails(['C:/images/b.jpg'], {

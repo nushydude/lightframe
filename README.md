@@ -39,6 +39,7 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 - **Overwrite crop support**: Add explicit overwrite flow with confirmation, cache invalidation, and metadata preservation where possible.
 - **Lossless JPEG rotation**: Prefer metadata or lossless transforms when available instead of always re-encoding pixels.
 - **Edit history per image**: Track pending rotate/crop changes before committing them to disk.
+- **Open in external editor**: Launch the current image in a configured editor such as Paint.NET for deeper edits outside LightFrame.
 
 ### Organization & Review
 
@@ -77,6 +78,18 @@ To compile the application into a standalone binary/installer:
 ```bash
 pnpm tauri build
 ```
+
+## Quality Gates
+
+Before pushing broad changes, run the same guardrails used by CI:
+
+```bash
+pnpm run ci:local
+```
+
+For scoped work, use `pnpm run ci:frontend` for React/TypeScript changes and `pnpm run ci:rust` for
+Tauri/Rust changes. `pnpm run quality:audit` runs Fallow on changed code and blocks newly introduced
+dead code, complexity, and duplication regressions.
 
 ## Contributing
 

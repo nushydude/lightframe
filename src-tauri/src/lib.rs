@@ -27,6 +27,8 @@ pub fn run() {
             commands::copy_image_to_clipboard,
             commands::get_exif_metadata,
             commands::save_rotated_image,
+            commands::save_cropped_copy,
+            commands::overwrite_with_crop,
             commands::get_thumbnail,
         ])
         .run(tauri::generate_context!())

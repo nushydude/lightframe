@@ -27,9 +27,7 @@
       "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://asset.localhost http://tauri.localhost https://tauri.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": ["**"]
       }
     }
   },
@@ -77,9 +75,7 @@
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUwMUEwMzRDQjEyQkE3ODMKUldTRHB5dXhUQU1hVUNobGRKcWcrQStRd05teWtBSFVVRVdDRXhQWkpuVkthV1l2d3YwUFZMUWIK",
-      "endpoints": [
-        "https://github.com/nushydude/lightframe/releases/latest/download/latest.json"
-      ]
+      "endpoints": ["https://github.com/nushydude/lightframe/releases/latest/download/latest.json"]
     }
   }
 }

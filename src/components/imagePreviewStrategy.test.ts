@@ -10,9 +10,9 @@ import {
 describe('imagePreviewStrategy', () => {
   it('treats missing dimensions as likely large', () => {
     expect(isLikelyLargeImage(null)).toBe(true);
-    expect(isLikelyLargeImage({ width: null, height: 100, file_size_bytes: 1, format: 'JPEG' })).toBe(
-      true
-    );
+    expect(
+      isLikelyLargeImage({ width: null, height: 100, file_size_bytes: 1, format: 'JPEG' })
+    ).toBe(true);
   });
 
   it('detects large images when either dimension exceeds the preview bound', () => {

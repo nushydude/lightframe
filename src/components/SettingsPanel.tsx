@@ -10,7 +10,7 @@ export function SettingsPanel() {
   const setShowSettings = useViewerStore((s) => s.setShowSettings);
 
   const handleChange = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    updateSettings({ [key]: value });
+    void updateSettings({ [key]: value });
   };
 
   const handleOverlayClick = (e: React.MouseEvent) => {
@@ -58,7 +58,9 @@ export function SettingsPanel() {
               <select
                 className="setting-select"
                 value={settings.defaultFitMode}
-                onChange={(e) => handleChange('defaultFitMode', e.target.value as AppSettings['defaultFitMode'])}
+                onChange={(e) =>
+                  handleChange('defaultFitMode', e.target.value as AppSettings['defaultFitMode'])
+                }
                 id="setting-fit-mode"
               >
                 <option value="fit">Fit to screen</option>
@@ -150,7 +152,12 @@ export function SettingsPanel() {
               <select
                 className="setting-select"
                 value={settings.mouseWheelBehavior}
-                onChange={(e) => handleChange('mouseWheelBehavior', e.target.value as AppSettings['mouseWheelBehavior'])}
+                onChange={(e) =>
+                  handleChange(
+                    'mouseWheelBehavior',
+                    e.target.value as AppSettings['mouseWheelBehavior']
+                  )
+                }
                 id="setting-mouse-wheel"
               >
                 <option value="zoom">Zoom</option>
@@ -163,7 +170,9 @@ export function SettingsPanel() {
               <select
                 className="setting-select"
                 value={settings.sortOrder}
-                onChange={(e) => handleChange('sortOrder', e.target.value as AppSettings['sortOrder'])}
+                onChange={(e) =>
+                  handleChange('sortOrder', e.target.value as AppSettings['sortOrder'])
+                }
                 id="setting-sort-order"
               >
                 <option value="name">Name</option>
@@ -201,7 +210,8 @@ export function SettingsPanel() {
               </button>
             </div>
             <p className="setting-help">
-              To make LightFrame your default viewer, click the button above, find "LightFrame" in the list, and select it for your image formats.
+              To make LightFrame your default viewer, click the button above, find "LightFrame" in
+              the list, and select it for your image formats.
             </p>
           </div>
 
@@ -209,7 +219,8 @@ export function SettingsPanel() {
           <div className="settings-group">
             <div className="settings-group-title">Format Support</div>
             <p className="setting-help" style={{ marginBottom: '12px' }}>
-              LightFrame uses your system's codecs to render HEIC and HEIF images. If these images don't load, you may need to install the free extensions from the Microsoft Store:
+              LightFrame uses your system's codecs to render HEIC and HEIF images. If these images
+              don't load, you may need to install the free extensions from the Microsoft Store:
             </p>
             <div className="setting-row">
               <button

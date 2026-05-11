@@ -33,7 +33,7 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
     setImageMetadata(null);
     setError(null);
 
-    Promise.allSettled([getExifMetadata(filePath), getImageMetadata(filePath)])
+    void Promise.allSettled([getExifMetadata(filePath), getImageMetadata(filePath)])
       .then(([exifResult, metadataResult]) => {
         if (requestIdRef.current !== requestId) return;
 
@@ -61,7 +61,7 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
   }, [filePath]);
 
   const primaryRows: ExifRow[] = data
-    ? [
+    ? ([
         data.make && data.model
           ? { label: 'Camera', value: `${data.make} ${data.model}` }
           : data.make
@@ -72,11 +72,11 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
         data.exposure_time ? { label: 'Shutter', value: data.exposure_time } : null,
         data.iso != null ? { label: 'ISO', value: String(data.iso) } : null,
         data.focal_length ? { label: 'Focal Length', value: data.focal_length } : null,
-      ].filter(Boolean) as ExifRow[]
+      ].filter(Boolean) as ExifRow[])
     : [];
 
   const fileRows: ExifRow[] = imageMetadata
-    ? [
+    ? ([
         imageMetadata.width != null && imageMetadata.height != null
           ? { label: 'Dimensions', value: `${imageMetadata.width} x ${imageMetadata.height}` }
           : null,
@@ -91,7 +91,7 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
         imageMetadata.file_size_bytes >= 0
           ? { label: 'File Size', value: formatFileSize(imageMetadata.file_size_bytes) }
           : null,
-      ].filter(Boolean) as ExifRow[]
+      ].filter(Boolean) as ExifRow[])
     : [];
 
   return (
@@ -159,7 +159,9 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
                 open={showAllTags}
                 onToggle={(event) => setShowAllTags(event.currentTarget.open)}
               >
-                <summary className="exif-raw-summary">All Tags ({Object.keys(data.raw).length})</summary>
+                <summary className="exif-raw-summary">
+                  All Tags ({Object.keys(data.raw).length})
+                </summary>
                 <dl className="exif-grid exif-grid--compact">
                   {Object.entries(data.raw)
                     .sort(([a], [b]) => a.localeCompare(b))

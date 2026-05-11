@@ -15,6 +15,13 @@ export interface ExifData {
   raw: Record<string, string>;
 }
 
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });
@@ -66,6 +73,25 @@ export async function saveRotatedImage(filePath: string, rotationDegrees: number
   return invoke('save_rotated_image', { filePath, rotationDegrees });
 }
 
+/** Save a cropped copy of an image without overwriting the original */
+export async function saveCroppedCopy(
+  filePath: string,
+  cropRect: CropRect,
+  outputPath: string,
+  rotationDegrees?: number
+): Promise<void> {
+  return invoke('save_cropped_copy', { filePath, cropRect, outputPath, rotationDegrees });
+}
+
+/** Overwrite an image with a cropped version after explicit confirmation */
+export async function overwriteWithCrop(
+  filePath: string,
+  cropRect: CropRect,
+  rotationDegrees?: number
+): Promise<void> {
+  return invoke('overwrite_with_crop', { filePath, cropRect, rotationDegrees });
+}
+
 /** Get a small base64 thumbnail for an image */
 export async function getThumbnail(
   filePath: string,
@@ -96,11 +122,9 @@ export async function openSecondaryWindow(): Promise<void> {
       center: true,
     });
 
-    webview.once('tauri://created', () => {
-      console.log('Secondary window created');
-    });
+    void webview.once('tauri://created', () => {});
 
-    webview.once('tauri://error', (e) => {
+    void webview.once('tauri://error', (e) => {
       console.error('Failed to create secondary window:', e);
     });
   } catch (err) {

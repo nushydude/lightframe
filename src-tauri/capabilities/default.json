@@ -30,9 +30,7 @@
     "process:allow-restart",
     {
       "identifier": "fs:scope",
-      "allow": [
-        { "path": "**" }
-      ]
+      "allow": [{ "path": "**" }]
     }
   ]
 }

@@ -35,26 +35,17 @@ function applyVersionToUrl(url: string, version: number): string {
     return removeVersionFromUrl(url);
   }
 
-  try {
-    const parsed = new URL(url);
-    parsed.searchParams.set('v', String(version));
-    return parsed.toString();
-  } catch {
-    const hashIndex = url.indexOf('#');
-    const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
-    const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
-    const [pathPart, queryPart = ''] = base.split('?', 2);
-    const params = new URLSearchParams(queryPart);
-    params.set('v', String(version));
-    const query = params.toString();
-    return `${pathPart}${query ? `?${query}` : ''}${hash}`;
-  }
+  return updateUrlSearchParams(url, (params) => params.set('v', String(version)));
 }
 
 function removeVersionFromUrl(url: string): string {
+  return updateUrlSearchParams(url, (params) => params.delete('v'));
+}
+
+function updateUrlSearchParams(url: string, update: (params: URLSearchParams) => void): string {
   try {
     const parsed = new URL(url);
-    parsed.searchParams.delete('v');
+    update(parsed.searchParams);
     return parsed.toString();
   } catch {
     const hashIndex = url.indexOf('#');
@@ -62,7 +53,7 @@ function removeVersionFromUrl(url: string): string {
     const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
     const [pathPart, queryPart = ''] = base.split('?', 2);
     const params = new URLSearchParams(queryPart);
-    params.delete('v');
+    update(params);
     const query = params.toString();
     return `${pathPart}${query ? `?${query}` : ''}${hash}`;
   }
@@ -154,10 +145,6 @@ export async function getFullAsset(path: string, options?: CacheReadOptions): Pr
   return entry.url;
 }
 
-export async function getImageAssetUrl(path: string): Promise<string> {
-  return getFullAsset(path);
-}
-
 export async function getPreviewAsset(
   path: string,
   maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION,
@@ -192,11 +179,7 @@ export async function getPreviewAsset(
   }
 
   const current = previewImageAssetCache.get(path);
-  if (
-    current &&
-    current.version >= entry.version &&
-    current.maxDimension === entry.maxDimension
-  ) {
+  if (current && current.version >= entry.version && current.maxDimension === entry.maxDimension) {
     current.lastUsedAt = Date.now();
     return current.dataUrl;
   }
@@ -243,10 +226,6 @@ export async function preloadPreviewAsset(
 
   const img = new Image();
   img.src = dataUrl;
-}
-
-export async function preloadImageAsset(path: string): Promise<void> {
-  return preloadFullAsset(path);
 }
 
 export function invalidateImageAsset(path: string): void {

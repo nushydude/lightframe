@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import {
   evictThumbnailsExcept,
   getCachedThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
+import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 
 const THUMBNAIL_ITEM_WIDTH = 78;
 const THUMBNAIL_WINDOW_RADIUS = 35;
@@ -18,11 +19,8 @@ export function ThumbnailStrip() {
   const { images, currentIndex, setCurrentIndex } = useViewerStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLDivElement>(null);
-  const batchRafRef = useRef<number | null>(null);
-  const hasPendingThumbnailUpdatesRef = useRef(false);
-  const isMountedRef = useRef(true);
+  const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
 
-  const [, setThumbnailVersion] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
 
   const startIndex = Math.max(0, currentIndex - THUMBNAIL_WINDOW_RADIUS);
@@ -36,25 +34,6 @@ export function ThumbnailStrip() {
     [visibleImages]
   );
 
-  const flushThumbnailBatch = useCallback(() => {
-    batchRafRef.current = null;
-    if (!hasPendingThumbnailUpdatesRef.current) return;
-    hasPendingThumbnailUpdatesRef.current = false;
-
-    setThumbnailVersion((version) => version + 1);
-  }, []);
-
-  const scheduleThumbnailFlush = useCallback(() => {
-    if (batchRafRef.current !== null) return;
-    batchRafRef.current = window.requestAnimationFrame(flushThumbnailBatch);
-  }, [flushThumbnailBatch]);
-
-  const handleThumbnailLoaded = useCallback(() => {
-    if (!isMountedRef.current) return;
-    hasPendingThumbnailUpdatesRef.current = true;
-    scheduleThumbnailFlush();
-  }, [scheduleThumbnailFlush]);
-
   useEffect(() => {
     preloadThumbnails(
       visibleImages.map((image) => ({
@@ -65,12 +44,12 @@ export function ThumbnailStrip() {
       {
         concurrency: 4,
         onLoaded: handleThumbnailLoaded,
-        isActive: () => isMountedRef.current,
+        isActive: isThumbnailConsumerActive,
       }
     );
     const visiblePaths = visibleImages.map((image) => image.path);
     evictThumbnailsExcept(new Set(visiblePaths), MAX_STRIP_THUMBNAILS);
-  }, [handleThumbnailLoaded, visibleImages]);
+  }, [handleThumbnailLoaded, isThumbnailConsumerActive, visibleImages]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -100,25 +79,13 @@ export function ThumbnailStrip() {
     });
   }, [containerWidth, currentIndex, endIndex, startIndex, visibleImageKey]);
 
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-      if (batchRafRef.current !== null) {
-        window.cancelAnimationFrame(batchRafRef.current);
-      }
-    };
-  }, []);
-
   if (images.length <= 1) return null;
 
   return (
     <div className="thumbnail-strip-container" ref={containerRef}>
       <div className="thumbnail-strip">
         {startIndex > 0 && (
-          <div
-            className="thumbnail-spacer"
-            style={{ width: startIndex * THUMBNAIL_ITEM_WIDTH }}
-          />
+          <div className="thumbnail-spacer" style={{ width: startIndex * THUMBNAIL_ITEM_WIDTH }} />
         )}
         {visibleImages.map((image, visibleIndex) => {
           const index = startIndex + visibleIndex;
@@ -138,11 +105,7 @@ export function ThumbnailStrip() {
               title={image.file_name}
             >
               {url ? (
-                <img
-                  src={url}
-                  alt=""
-                  draggable={false}
-                />
+                <img src={url} alt="" draggable={false} />
               ) : (
                 <div className="thumbnail-placeholder" />
               )}
