@@ -18,6 +18,7 @@ import {
 import { normalizedToIntegerPixelRect } from '../services/cropMath';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
+import { useCurationStore } from '../state/curationStore';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -75,6 +76,9 @@ export function ViewerChrome({
     clearPendingEdits,
     commitPendingEdits,
   } = useViewerStore();
+  const curationByPath = useCurationStore((state) => state.curationByPath);
+  const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
+  const setRating = useCurationStore((state) => state.setRating);
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
@@ -98,6 +102,9 @@ export function ViewerChrome({
   const hasPendingEdits = Boolean(currentPendingEdit);
   const canCommitPendingEdits =
     Boolean(currentPendingEdit?.cropRect) || (hasPendingEdits && canSaveRotation);
+  const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
+  const isFavorite = Boolean(currentCuration?.favorite);
+  const currentRating = currentCuration?.rating ?? 0;
 
   const toggleFullscreen = async () => {
     try {
@@ -120,6 +127,20 @@ export function ViewerChrome({
 
   const handleReveal = async () => {
     await revealCurrentImage(currentImagePath);
+  };
+
+  const handleToggleFavorite = async () => {
+    if (!currentImagePath) {
+      return;
+    }
+    await toggleFavorite(currentImagePath);
+  };
+
+  const handleSetRating = async (rating: number) => {
+    if (!currentImagePath) {
+      return;
+    }
+    await setRating(currentImagePath, rating);
   };
 
   const handleSaveCroppedCopy = async () => {
@@ -241,6 +262,11 @@ export function ViewerChrome({
               {isFolderScanning && ' …'}
             </span>
           )}
+          {(isFavorite || currentRating > 0) && (
+            <span className="image-counter">
+              {isFavorite ? '★' : '☆'} {currentRating}/5
+            </span>
+          )}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
@@ -321,6 +347,21 @@ export function ViewerChrome({
             >
               <span className="top-bar-btn-icon">🗑</span>
               <span className="top-bar-btn-label">Delete</span>
+            </button>
+          </div>
+
+          <div className="top-bar-separator" aria-hidden="true" />
+
+          <div className="top-bar-group" aria-label="Curation actions">
+            <button
+              className={`top-bar-btn top-bar-btn--labeled ${isFavorite ? 'active' : ''}`}
+              onClick={() => void handleToggleFavorite()}
+              title="Toggle favorite (F)"
+              aria-label="Toggle favorite"
+              id="btn-favorite"
+            >
+              <span className="top-bar-btn-icon">{isFavorite ? '★' : '☆'}</span>
+              <span className="top-bar-btn-label">Favorite</span>
             </button>
           </div>
 
@@ -658,6 +699,22 @@ export function ViewerChrome({
             )}
           </>
         )}
+
+        <div className="control-divider" />
+
+        <div className="rating-controls" role="group" aria-label="Image rating">
+          {[0, 1, 2, 3, 4, 5].map((value) => (
+            <button
+              key={value}
+              className={`control-btn rating-btn ${currentRating === value ? 'active' : ''}`}
+              onClick={() => void handleSetRating(value)}
+              title={value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`}
+              aria-label={value === 0 ? 'Clear rating' : `Set rating ${value}`}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
       </div>
     </>
   );

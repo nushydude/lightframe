@@ -15,6 +15,8 @@ describe('useKeyboardShortcuts', () => {
     stopSlideshow: vi.fn(),
     toggleSlideshowPause: vi.fn(),
     openCommandPalette: vi.fn(),
+    toggleFavoriteCurrent: vi.fn(),
+    setRatingCurrent: vi.fn(),
   };
 
   beforeEach(() => {
@@ -106,5 +108,32 @@ describe('useKeyboardShortcuts', () => {
 
     expect(useViewerStore.getState().isCropMode).toBe(false);
     expect(useViewerStore.getState().pendingCropPreview).not.toBeNull();
+  });
+
+  it('toggles favorite with F and sets rating with Alt+number', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const favoriteEvent = new KeyboardEvent('keydown', {
+      key: 'f',
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(favoriteEvent);
+    });
+    expect(favoriteEvent.defaultPrevented).toBe(true);
+    expect(handlers.toggleFavoriteCurrent).toHaveBeenCalledTimes(1);
+
+    const ratingEvent = new KeyboardEvent('keydown', {
+      key: '4',
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(ratingEvent);
+    });
+    expect(ratingEvent.defaultPrevented).toBe(true);
+    expect(handlers.setRatingCurrent).toHaveBeenCalledWith(4);
   });
 });
