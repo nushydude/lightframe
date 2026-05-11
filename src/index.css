@@ -1,5 +1,9 @@
 /* ===== CSS Reset & Variables ===== */
 :root {
+  --top-bar-safe-height: 64px;
+  --bottom-controls-safe-height: 72px;
+  --thumbnail-strip-height: 90px;
+
   --bg-primary: #0d0d0d;
   --bg-secondary: #1a1a1a;
   --bg-tertiary: #252525;
@@ -850,6 +854,15 @@ body,
   z-index: 20;
 }
 
+.top-bar-menu-empty,
+.header-menu-empty {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  padding: 6px 8px;
+  white-space: normal;
+}
+
 .top-bar-separator {
   width: 1px;
   height: 24px;
@@ -1571,18 +1584,23 @@ body,
 /* ===== EXIF / Info Panel ===== */
 .exif-panel {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  top: var(--top-bar-safe-height);
+  right: 16px;
+  bottom: calc(var(--bottom-controls-safe-height) + 16px);
   width: 300px;
   z-index: var(--z-overlay);
   background: var(--bg-secondary);
-  border-left: 1px solid var(--border);
-  box-shadow: -4px 0 32px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   animation: slideInRight var(--transition-normal);
   overflow: hidden;
+}
+
+.exif-panel--with-thumbnails {
+  bottom: calc(var(--thumbnail-strip-height) + var(--bottom-controls-safe-height) + 20px);
 }
 
 @keyframes slideInRight {

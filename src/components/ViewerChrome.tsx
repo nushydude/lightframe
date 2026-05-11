@@ -90,6 +90,7 @@ export function ViewerChrome({
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
+  const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
@@ -302,11 +303,8 @@ export function ViewerChrome({
               {isFolderScanning && ' …'}
             </span>
           )}
-          {(isFavorite || currentRating > 0) && (
-            <span className="image-counter">
-              {isFavorite ? '★' : '☆'} {currentRating}/5
-            </span>
-          )}
+          {isFavorite && <span className="image-counter">★</span>}
+          {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
@@ -392,7 +390,18 @@ export function ViewerChrome({
               </summary>
               <div className="top-bar-menu-panel">
                 {quickDestinations.length === 0 ? (
-                  <span className="top-bar-menu-empty">No destinations configured</span>
+                  <>
+                    <span className="top-bar-menu-empty">
+                      No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+                    </span>
+                    <button
+                      className="top-bar-menu-item"
+                      onClick={() => setShowSettings(true)}
+                      type="button"
+                    >
+                      Open Settings
+                    </button>
+                  </>
                 ) : (
                   quickDestinations.map((destination) => (
                     <button
@@ -420,7 +429,18 @@ export function ViewerChrome({
               </summary>
               <div className="top-bar-menu-panel">
                 {quickDestinations.length === 0 ? (
-                  <span className="top-bar-menu-empty">No destinations configured</span>
+                  <>
+                    <span className="top-bar-menu-empty">
+                      No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+                    </span>
+                    <button
+                      className="top-bar-menu-item"
+                      onClick={() => setShowSettings(true)}
+                      type="button"
+                    >
+                      Open Settings
+                    </button>
+                  </>
                 ) : (
                   quickDestinations.map((destination) => (
                     <button
@@ -445,7 +465,7 @@ export function ViewerChrome({
               aria-label="Open in external editor"
               id="btn-open-in-editor"
             >
-              <span className="top-bar-btn-icon">Edit</span>
+              <span className="top-bar-btn-icon">✎</span>
               <span className="top-bar-btn-label">
                 {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
               </span>
@@ -583,6 +603,7 @@ export function ViewerChrome({
         <ExifPanel
           key={`${currentImagePath}:${exifRefreshToken}`}
           filePath={currentImagePath}
+          hasThumbnails={showThumbnails && viewMode === 'viewer'}
           onClose={() => setShowExif(false)}
         />
       )}

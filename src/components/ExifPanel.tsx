@@ -5,6 +5,7 @@ import type { ImageMetadata } from '../types/image';
 interface ExifPanelProps {
   filePath: string;
   onClose: () => void;
+  hasThumbnails?: boolean;
 }
 
 interface ExifRow {
@@ -17,7 +18,7 @@ function formatFNumber(f: number): string {
 }
 
 // fallow-ignore-next-line complexity
-export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
+export function ExifPanel({ filePath, onClose, hasThumbnails = false }: ExifPanelProps) {
   const [data, setData] = useState<ExifData | null>(null);
   const [imageMetadata, setImageMetadata] = useState<ImageMetadata | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +98,11 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
     : [];
 
   return (
-    <div className="exif-panel" role="complementary" aria-label="Image metadata">
+    <div
+      className={`exif-panel ${hasThumbnails ? 'exif-panel--with-thumbnails' : ''}`}
+      role="complementary"
+      aria-label="Image metadata"
+    >
       <div className="exif-panel-header">
         <span className="exif-panel-title">Image Info</span>
         <button
