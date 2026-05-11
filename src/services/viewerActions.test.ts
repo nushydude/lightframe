@@ -1,16 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { copyCurrentImage, deleteCurrentImage, revealCurrentImage } from './viewerActions';
+import {
+  copyCurrentImage,
+  deleteCurrentImage,
+  revealCurrentImage,
+  showTransferResultMessage,
+  transferImagesToDestination,
+} from './viewerActions';
 
 const {
   confirmMock,
   messageMock,
   copyImageToClipboardMock,
+  copyImageToFolderMock,
+  moveImageToFolderMock,
   moveToTrashMock,
   revealInExplorerMock,
 } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
   messageMock: vi.fn(),
   copyImageToClipboardMock: vi.fn(),
+  copyImageToFolderMock: vi.fn(),
+  moveImageToFolderMock: vi.fn(),
   moveToTrashMock: vi.fn(),
   revealInExplorerMock: vi.fn(),
 }));
@@ -22,6 +32,8 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('./tauriCommands', () => ({
   copyImageToClipboard: copyImageToClipboardMock,
+  copyImageToFolder: copyImageToFolderMock,
+  moveImageToFolder: moveImageToFolderMock,
   moveToTrash: moveToTrashMock,
   revealInExplorer: revealInExplorerMock,
 }));
@@ -72,5 +84,39 @@ describe('viewerActions', () => {
       expect.objectContaining({ title: 'Error', kind: 'error' })
     );
     expect(removeImage).not.toHaveBeenCalled();
+  });
+
+  it('transfers images to a quick destination and reports partial failures', async () => {
+    copyImageToFolderMock.mockResolvedValueOnce('d:/favorites/test-1.jpg');
+    copyImageToFolderMock.mockRejectedValueOnce(new Error('disk full'));
+
+    const result = await transferImagesToDestination(
+      ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      { id: 'fav', label: 'Favorites', path: 'd:/favorites' },
+      'copy'
+    );
+
+    expect(result.successes).toEqual([
+      { sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/test-1.jpg' },
+    ]);
+    expect(result.failures).toEqual([
+      { sourcePath: 'c:/images/two.jpg', error: 'disk full' },
+    ]);
+  });
+
+  it('shows a warning message when a quick transfer partially fails', async () => {
+    await showTransferResultMessage(
+      {
+        successes: [{ sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/one.jpg' }],
+        failures: [{ sourcePath: 'c:/images/two.jpg', error: 'disk full' }],
+      },
+      { id: 'fav', label: 'Favorites', path: 'd:/favorites' },
+      'move'
+    );
+
+    expect(messageMock).toHaveBeenCalledWith(
+      expect.stringContaining('Moved 1 image to Favorites, but 1 failed.'),
+      expect.objectContaining({ title: 'Move issues', kind: 'warning' })
+    );
   });
 });

@@ -78,6 +78,22 @@ export async function moveToTrash(filePath: string): Promise<void> {
   return invoke('move_to_trash', { filePath });
 }
 
+/** Copy an image file into a destination folder */
+export async function copyImageToFolder(
+  filePath: string,
+  destinationFolder: string
+): Promise<string> {
+  return invoke<string>('copy_image_to_folder', { filePath, destinationFolder });
+}
+
+/** Move an image file into a destination folder */
+export async function moveImageToFolder(
+  filePath: string,
+  destinationFolder: string
+): Promise<string> {
+  return invoke<string>('move_image_to_folder', { filePath, destinationFolder });
+}
+
 /** Copy an image file to the OS clipboard */
 export async function copyImageToClipboard(filePath: string): Promise<void> {
   return invoke('copy_image_to_clipboard', { filePath });

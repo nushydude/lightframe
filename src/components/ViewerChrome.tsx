@@ -14,11 +14,15 @@ import {
   copyCurrentImage,
   deleteCurrentImage,
   revealCurrentImage,
+  showTransferResultMessage,
+  transferImagesToDestination,
 } from '../services/viewerActions';
 import { normalizedToIntegerPixelRect } from '../services/cropMath';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { useCurationStore } from '../state/curationStore';
+import { useSettingsStore } from '../state/settingsStore';
+import type { QuickDestination } from '../types/settings';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -81,6 +85,7 @@ export function ViewerChrome({
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
+  const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
@@ -130,6 +135,30 @@ export function ViewerChrome({
 
   const handleReveal = async () => {
     await revealCurrentImage(currentImagePath);
+  };
+
+  const removeImageByPath = (path: string) => {
+    const state = useViewerStore.getState();
+    const index = state.images.findIndex((image) => image.path === path);
+    if (index >= 0) {
+      invalidateImageAsset(path);
+      invalidateThumbnail(path);
+      state.removeImage(index);
+    }
+  };
+
+  const handleQuickTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
+    if (!currentImagePath) {
+      return;
+    }
+
+    const result = await transferImagesToDestination([currentImagePath], destination, mode);
+    if (mode === 'move') {
+      for (const success of result.successes) {
+        removeImageByPath(success.sourcePath);
+      }
+    }
+    await showTransferResultMessage(result, destination, mode);
   };
 
   const handleToggleFavorite = async () => {
@@ -341,6 +370,62 @@ export function ViewerChrome({
               <span className="top-bar-btn-icon">📋</span>
               <span className="top-bar-btn-label">Copy</span>
             </button>
+            <details className="top-bar-menu">
+              <summary
+                className="top-bar-btn top-bar-btn--labeled"
+                aria-label="Copy image to destination"
+                title={
+                  quickDestinations.length > 0
+                    ? 'Copy image to destination'
+                    : 'Add quick destinations in settings'
+                }
+              >
+                <span className="top-bar-btn-label">Copy To</span>
+              </summary>
+              <div className="top-bar-menu-panel">
+                {quickDestinations.length === 0 ? (
+                  <span className="top-bar-menu-empty">No destinations configured</span>
+                ) : (
+                  quickDestinations.map((destination) => (
+                    <button
+                      key={destination.id}
+                      className="top-bar-menu-item"
+                      onClick={() => void handleQuickTransfer(destination, 'copy')}
+                    >
+                      {destination.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </details>
+            <details className="top-bar-menu">
+              <summary
+                className="top-bar-btn top-bar-btn--labeled"
+                aria-label="Move image to destination"
+                title={
+                  quickDestinations.length > 0
+                    ? 'Move image to destination'
+                    : 'Add quick destinations in settings'
+                }
+              >
+                <span className="top-bar-btn-label">Move To</span>
+              </summary>
+              <div className="top-bar-menu-panel">
+                {quickDestinations.length === 0 ? (
+                  <span className="top-bar-menu-empty">No destinations configured</span>
+                ) : (
+                  quickDestinations.map((destination) => (
+                    <button
+                      key={destination.id}
+                      className="top-bar-menu-item"
+                      onClick={() => void handleQuickTransfer(destination, 'move')}
+                    >
+                      {destination.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </details>
             <button
               className="top-bar-btn top-bar-btn--labeled"
               onClick={handleDelete}

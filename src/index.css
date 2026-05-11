@@ -212,6 +212,57 @@ body,
   gap: 8px;
 }
 
+.header-menu {
+  position: relative;
+}
+
+.header-menu summary {
+  list-style: none;
+}
+
+.header-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.header-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+}
+
+.header-menu-item,
+.top-bar-menu-item {
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.header-menu-item:hover,
+.top-bar-menu-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.header-menu-empty,
+.top-bar-menu-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 4px 2px;
+}
+
 .contact-sheet-header h2 {
   font-size: 18px;
   font-weight: 600;
@@ -345,6 +396,11 @@ body,
 .grid-item.active .grid-thumbnail-wrapper {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-dim);
+}
+
+.grid-item.selected .grid-thumbnail-wrapper {
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 2px var(--accent-dim);
 }
 
 .grid-item img {
@@ -766,6 +822,34 @@ body,
   gap: 8px;
 }
 
+.top-bar-menu {
+  position: relative;
+}
+
+.top-bar-menu summary {
+  list-style: none;
+}
+
+.top-bar-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.top-bar-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+}
+
 .top-bar-separator {
   width: 1px;
   height: 24px;
@@ -1120,6 +1204,10 @@ body,
   margin-bottom: 0;
 }
 
+.setting-row-stack {
+  align-items: flex-start;
+}
+
 .settings-group-title {
   font-size: 11px;
   font-weight: 600;
@@ -1226,6 +1314,40 @@ body,
 .setting-button-secondary:hover {
   background: var(--bg-primary);
   border-color: var(--accent);
+}
+
+.quick-destination-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quick-destination-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.quick-destination-meta {
+  min-width: 0;
+}
+
+.quick-destination-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.quick-destination-path {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .setting-help {

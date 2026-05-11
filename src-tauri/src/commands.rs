@@ -7,6 +7,7 @@ use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -68,6 +69,8 @@ pub struct AppSettings {
     pub sort_order: String,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
+    #[serde(default)]
+    pub quick_destinations: Vec<QuickDestination>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -76,6 +79,13 @@ pub struct ImageCuration {
     pub favorite: bool,
     pub rating: u8,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct QuickDestination {
+    pub id: String,
+    pub label: String,
+    pub path: String,
 }
 
 fn default_show_thumbnails() -> bool {
@@ -99,6 +109,7 @@ impl Default for AppSettings {
             window_height: None,
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
+            quick_destinations: Vec::new(),
         }
     }
 }
@@ -593,10 +604,248 @@ pub async fn clear_image_curation(app: AppHandle, file_path: String) -> Result<(
     write_curation_metadata_to_path(&path, &metadata)
 }
 
+fn build_copy_name(file_stem: &str, extension: &str, attempt: u32) -> String {
+    let suffix = if attempt == 0 { " copy".to_string() } else { format!(" copy {}", attempt + 1) };
+
+    if extension.is_empty() {
+        format!("{}{}", file_stem, suffix)
+    } else {
+        format!("{}{}.{}", file_stem, suffix, extension)
+    }
+}
+
+fn build_destination_candidate_path(
+    source_path: &Path,
+    destination_folder: &Path,
+    attempt: Option<u32>,
+) -> Result<PathBuf, String> {
+    if attempt.is_none() {
+        let file_name =
+            source_path.file_name().ok_or_else(|| "Source file name is missing".to_string())?;
+        return Ok(destination_folder.join(file_name));
+    }
+
+    let file_stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Source file stem is invalid".to_string())?;
+    let extension = source_path.extension().and_then(|value| value.to_str()).unwrap_or_default();
+    Ok(destination_folder.join(build_copy_name(file_stem, extension, attempt.unwrap_or(0))))
+}
+
+fn destination_entry_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(format!("Failed to inspect destination path '{}': {}", path.display(), error))
+        }
+    }
+}
+
+fn next_destination_candidate(
+    source_path: &Path,
+    destination_folder: &Path,
+) -> Result<PathBuf, String> {
+    let preferred_path = build_destination_candidate_path(source_path, destination_folder, None)?;
+    if !destination_entry_exists(&preferred_path)? {
+        return Ok(preferred_path);
+    }
+
+    for attempt in 0..10_000 {
+        let candidate =
+            build_destination_candidate_path(source_path, destination_folder, Some(attempt))?;
+        if !destination_entry_exists(&candidate)? {
+            return Ok(candidate);
+        }
+    }
+
+    Err("Unable to resolve a unique destination file name".to_string())
+}
+
+enum ExclusiveWriteError {
+    AlreadyExists,
+    Other(String),
+}
+
+fn copy_file_exclusive(
+    source_path: &Path,
+    destination_path: &Path,
+) -> Result<(), ExclusiveWriteError> {
+    let mut source_file = fs::File::open(source_path).map_err(|error| {
+        ExclusiveWriteError::Other(format!("Failed to open source file for copy: {}", error))
+    })?;
+    let mut destination_file =
+        fs::OpenOptions::new().write(true).create_new(true).open(destination_path).map_err(
+            |error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    ExclusiveWriteError::AlreadyExists
+                } else {
+                    ExclusiveWriteError::Other(format!(
+                        "Failed to create destination file '{}': {}",
+                        destination_path.display(),
+                        error
+                    ))
+                }
+            },
+        )?;
+
+    io::copy(&mut source_file, &mut destination_file).map_err(|error| {
+        let _ = fs::remove_file(destination_path);
+        ExclusiveWriteError::Other(format!("Failed to copy image to destination: {}", error))
+    })?;
+
+    destination_file.sync_all().map_err(|error| {
+        let _ = fs::remove_file(destination_path);
+        ExclusiveWriteError::Other(format!(
+            "Failed to flush destination file '{}': {}",
+            destination_path.display(),
+            error
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn copy_image_to_folder_blocking(
+    file_path: String,
+    destination_folder: String,
+) -> Result<String, String> {
+    let source_path = Path::new(&file_path);
+    if !source_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let destination_path = Path::new(&destination_folder);
+    if !destination_path.is_dir() {
+        return Err(format!("'{}' is not a valid destination folder", destination_folder));
+    }
+
+    for _ in 0..10_000 {
+        let target_path = next_destination_candidate(source_path, destination_path)?;
+        match copy_file_exclusive(source_path, &target_path) {
+            Ok(()) => return Ok(target_path.to_string_lossy().to_string()),
+            Err(ExclusiveWriteError::AlreadyExists) => continue,
+            Err(ExclusiveWriteError::Other(error)) => return Err(error),
+        }
+    }
+
+    Err("Unable to resolve a unique destination file name".to_string())
+}
+
+fn is_cross_device_rename_error(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(17 | 18))
+}
+
+fn move_file_no_overwrite(
+    source_path: &Path,
+    target_path: &Path,
+) -> Result<(), ExclusiveWriteError> {
+    match fs::hard_link(source_path, target_path) {
+        Ok(()) => {
+            if let Err(remove_error) = fs::remove_file(source_path) {
+                let _ = fs::remove_file(target_path);
+                return Err(ExclusiveWriteError::Other(format!(
+                    "Failed to remove source file after move: {}",
+                    remove_error
+                )));
+            }
+            Ok(())
+        }
+        Err(link_error) if link_error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(ExclusiveWriteError::AlreadyExists)
+        }
+        Err(link_error) if is_cross_device_rename_error(&link_error) => {
+            copy_file_exclusive(source_path, target_path)?;
+            if let Err(remove_error) = fs::remove_file(source_path) {
+                let _ = fs::remove_file(target_path);
+                return Err(ExclusiveWriteError::Other(format!(
+                    "Move fallback copied the file but could not remove the source: {}",
+                    remove_error
+                )));
+            }
+            Ok(())
+        }
+        Err(link_error) => {
+            copy_file_exclusive(source_path, target_path).map_err(
+                |copy_error| match copy_error {
+                    ExclusiveWriteError::AlreadyExists => ExclusiveWriteError::AlreadyExists,
+                    ExclusiveWriteError::Other(copy_message) => {
+                        ExclusiveWriteError::Other(format!(
+                            "Failed to move image to destination: {}. Fallback copy error: {}",
+                            link_error, copy_message
+                        ))
+                    }
+                },
+            )?;
+
+            if let Err(remove_error) = fs::remove_file(source_path) {
+                let _ = fs::remove_file(target_path);
+                return Err(ExclusiveWriteError::Other(format!(
+                    "Move fallback copied the file but could not remove the source: {}",
+                    remove_error
+                )));
+            }
+
+            Ok(())
+        }
+    }
+}
+
+fn move_image_to_folder_blocking(
+    file_path: String,
+    destination_folder: String,
+) -> Result<String, String> {
+    let source_path = Path::new(&file_path);
+    if !source_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let destination_path = Path::new(&destination_folder);
+    if !destination_path.is_dir() {
+        return Err(format!("'{}' is not a valid destination folder", destination_folder));
+    }
+
+    for _ in 0..10_000 {
+        let target_path = next_destination_candidate(source_path, destination_path)?;
+        match move_file_no_overwrite(source_path, &target_path) {
+            Ok(()) => return Ok(target_path.to_string_lossy().to_string()),
+            Err(ExclusiveWriteError::AlreadyExists) => continue,
+            Err(ExclusiveWriteError::Other(error)) => return Err(error),
+        }
+    }
+
+    Err("Unable to resolve a unique destination file name".to_string())
+}
+
 /// Move a file to the OS trash / recycle bin
 #[tauri::command]
 pub async fn move_to_trash(file_path: String) -> Result<(), String> {
     trash::delete(&file_path).map_err(|e| format!("Failed to move file to trash: {}", e))
+}
+
+#[tauri::command]
+pub async fn copy_image_to_folder(
+    file_path: String,
+    destination_folder: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        copy_image_to_folder_blocking(file_path, destination_folder)
+    })
+    .await
+    .map_err(|err| format!("Copy image worker failed: {}", err))?
+}
+
+#[tauri::command]
+pub async fn move_image_to_folder(
+    file_path: String,
+    destination_folder: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        move_image_to_folder_blocking(file_path, destination_folder)
+    })
+    .await
+    .map_err(|err| format!("Move image worker failed: {}", err))?
 }
 
 /// Copy an image file to the OS clipboard
@@ -1198,6 +1447,77 @@ mod tests {
         assert!(entry.favorite);
         assert_eq!(entry.rating, 4);
         assert_eq!(entry.updated_at, 77);
+    }
+
+    #[test]
+    fn test_next_destination_candidate_avoids_multiple_existing_names() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        let destination_dir = dir.path().join("destination");
+        fs::create_dir(&destination_dir).unwrap();
+        fs::write(&source_path, b"source").unwrap();
+        fs::write(destination_dir.join("photo.jpg"), b"existing").unwrap();
+        fs::write(destination_dir.join("photo copy.jpg"), b"existing copy").unwrap();
+
+        let target_path = next_destination_candidate(&source_path, &destination_dir).unwrap();
+
+        assert_eq!(
+            target_path.file_name().and_then(|value| value.to_str()),
+            Some("photo copy 2.jpg")
+        );
+    }
+
+    #[test]
+    fn test_copy_image_to_folder_blocking_copies_with_conflict_name() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        let destination_dir = dir.path().join("destination");
+        fs::create_dir(&destination_dir).unwrap();
+        fs::write(&source_path, b"source").unwrap();
+        fs::write(destination_dir.join("photo.jpg"), b"existing").unwrap();
+
+        let copied_path = copy_image_to_folder_blocking(
+            source_path.to_string_lossy().to_string(),
+            destination_dir.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert!(Path::new(&copied_path).exists());
+        assert_eq!(fs::read(Path::new(&copied_path)).unwrap(), b"source");
+        assert_eq!(fs::read(destination_dir.join("photo.jpg")).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn test_move_image_to_folder_blocking_moves_file() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        let destination_dir = dir.path().join("destination");
+        fs::create_dir(&destination_dir).unwrap();
+        fs::write(&source_path, b"source").unwrap();
+
+        let moved_path = move_image_to_folder_blocking(
+            source_path.to_string_lossy().to_string(),
+            destination_dir.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert!(!source_path.exists());
+        assert_eq!(fs::read(Path::new(&moved_path)).unwrap(), b"source");
+    }
+
+    #[test]
+    fn test_copy_image_to_folder_blocking_rejects_missing_destination() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        fs::write(&source_path, b"source").unwrap();
+
+        let error = copy_image_to_folder_blocking(
+            source_path.to_string_lossy().to_string(),
+            dir.path().join("missing").to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("valid destination folder"));
     }
 
     #[test]

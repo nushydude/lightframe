@@ -27,6 +27,8 @@ pub fn run() {
             commands::write_image_curation,
             commands::clear_image_curation,
             commands::move_to_trash,
+            commands::copy_image_to_folder,
+            commands::move_image_to_folder,
             commands::copy_image_to_clipboard,
             commands::get_exif_metadata,
             commands::save_rotated_image,
