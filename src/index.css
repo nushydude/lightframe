@@ -414,6 +414,68 @@ html, body, #root {
   opacity: 0;
 }
 
+.crop-overlay {
+  position: absolute;
+  z-index: calc(var(--z-controls) + 1);
+}
+
+.crop-overlay.dragging,
+.crop-selection {
+  cursor: move;
+}
+
+.crop-selection {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+  overflow: visible;
+}
+
+.crop-selection-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, transparent 33.33%, rgba(255, 255, 255, 0.4) 33.33%, rgba(255, 255, 255, 0.4) 34%, transparent 34%, transparent 66.66%, rgba(255, 255, 255, 0.4) 66.66%, rgba(255, 255, 255, 0.4) 67%, transparent 67%),
+    linear-gradient(to bottom, transparent 33.33%, rgba(255, 255, 255, 0.4) 33.33%, rgba(255, 255, 255, 0.4) 34%, transparent 34%, transparent 66.66%, rgba(255, 255, 255, 0.4) 66.66%, rgba(255, 255, 255, 0.4) 67%, transparent 67%);
+}
+
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--bg-primary);
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 0;
+}
+
+.crop-handle-nw,
+.crop-handle-ne,
+.crop-handle-sw,
+.crop-handle-se {
+  transform: translate(-50%, -50%);
+}
+
+.crop-handle-n,
+.crop-handle-s {
+  transform: translate(-50%, -50%);
+}
+
+.crop-handle-e,
+.crop-handle-w {
+  transform: translate(-50%, -50%);
+}
+
+.crop-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle-n { left: 50%; top: 0; cursor: ns-resize; }
+.crop-handle-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-handle-e { left: 100%; top: 50%; cursor: ew-resize; }
+.crop-handle-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-handle-s { left: 50%; top: 100%; cursor: ns-resize; }
+.crop-handle-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.crop-handle-w { left: 0; top: 50%; cursor: ew-resize; }
+
 /* ===== Navigation Arrows ===== */
 .nav-arrow {
   position: absolute;
@@ -636,6 +698,15 @@ html, body, #root {
 
 .control-btn.active {
   color: var(--accent);
+}
+
+.crop-aspect-select {
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-control);
+  color: var(--text-primary);
+  padding: 0 10px;
 }
 
 .control-divider {

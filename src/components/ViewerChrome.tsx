@@ -50,9 +50,19 @@ export function ViewerChrome({
     zoomOut,
     removeImage,
     rotation,
+    isCropMode,
+    cropRect,
+    pendingCropPreview,
+    cropAspectRatio,
     saveRotation,
     viewMode,
     setViewMode,
+    enterCropMode,
+    exitCropMode,
+    setCropAspectRatio,
+    resetCrop,
+    applyCropPreview,
+    clearCropPreview,
   } = useViewerStore();
 
   const [showExif, setShowExif] = useState(false);
@@ -70,6 +80,8 @@ export function ViewerChrome({
     ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
     : '';
   const canSaveRotation = canSaveRotationForPath(currentImagePath);
+  const cropDisabledByRotation = rotation !== 0;
+  const canPreviewCrop = isCropMode && cropRect !== null;
 
   const toggleFullscreen = async () => {
     try {
@@ -251,6 +263,26 @@ export function ViewerChrome({
               <span className="top-bar-btn-icon">⚙</span>
               <span className="top-bar-btn-label">Settings</span>
             </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled ${isCropMode || pendingCropPreview ? 'active' : ''}`}
+              onClick={() => {
+                if (isCropMode) {
+                  exitCropMode();
+                  return;
+                }
+                if (pendingCropPreview) {
+                  clearCropPreview();
+                }
+                enterCropMode();
+              }}
+              title={cropDisabledByRotation ? 'Crop is unavailable while rotation preview is active' : 'Crop image'}
+              aria-label="Toggle crop mode"
+              id="btn-crop"
+              disabled={cropDisabledByRotation}
+            >
+              <span className="top-bar-btn-icon">✂</span>
+              <span className="top-bar-btn-label">Crop</span>
+            </button>
           </div>
         </div>
       </div>
@@ -398,6 +430,58 @@ export function ViewerChrome({
         >
           1:1
         </button>
+
+        {(isCropMode || pendingCropPreview) && (
+          <>
+            <div className="control-divider" />
+            <select
+              className="crop-aspect-select"
+              aria-label="Crop aspect ratio"
+              value={cropAspectRatio}
+              onChange={(event) =>
+                setCropAspectRatio(event.target.value as 'free' | '1:1' | '4:3' | '3:2' | '16:9')
+              }
+              disabled={!isCropMode}
+            >
+              <option value="free">Free</option>
+              <option value="1:1">1:1</option>
+              <option value="4:3">4:3</option>
+              <option value="3:2">3:2</option>
+              <option value="16:9">16:9</option>
+            </select>
+            <button
+              className="control-btn"
+              onClick={resetCrop}
+              title="Reset crop"
+              aria-label="Reset crop"
+              id="btn-crop-reset"
+            >
+              Reset
+            </button>
+            {isCropMode ? (
+              <button
+                className="control-btn active"
+                onClick={applyCropPreview}
+                title="Preview crop (Enter)"
+                aria-label="Preview crop"
+                id="btn-crop-preview"
+                disabled={!canPreviewCrop}
+              >
+                Preview
+              </button>
+            ) : (
+              <button
+                className="control-btn"
+                onClick={clearCropPreview}
+                title="Clear crop preview"
+                aria-label="Clear crop preview"
+                id="btn-crop-clear-preview"
+              >
+                Clear
+              </button>
+            )}
+          </>
+        )}
       </div>
     </>
   );

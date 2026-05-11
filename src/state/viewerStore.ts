@@ -2,8 +2,20 @@ import { create } from 'zustand';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
+import {
+  clampNormalizedRect,
+  type CropAspectRatioPreset,
+  type NormalizedCropRect,
+} from '../services/cropMath';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
+
+const DEFAULT_CROP_RECT: NormalizedCropRect = {
+  x: 0.1,
+  y: 0.1,
+  width: 0.8,
+  height: 0.8,
+};
 
 export interface ViewerState {
   // Image state
@@ -23,6 +35,10 @@ export interface ViewerState {
   panX: number;
   panY: number;
   rotation: number; // In degrees
+  isCropMode: boolean;
+  cropRect: NormalizedCropRect | null;
+  pendingCropPreview: NormalizedCropRect | null;
+  cropAspectRatio: CropAspectRatioPreset;
 
   // Slideshow state
   isSlideshowActive: boolean;
@@ -57,6 +73,13 @@ export interface ViewerState {
   zoomOut: () => void;
   rotateClockwise: () => void;
   rotateCounterClockwise: () => void;
+  enterCropMode: () => void;
+  exitCropMode: () => void;
+  updateCropRect: (rect: NormalizedCropRect | null) => void;
+  setCropAspectRatio: (ratio: CropAspectRatioPreset) => void;
+  resetCrop: () => void;
+  applyCropPreview: () => void;
+  clearCropPreview: () => void;
 
   startSlideshow: () => void;
   stopSlideshow: () => void;
@@ -85,6 +108,10 @@ const initialState = {
   panX: 0,
   panY: 0,
   rotation: 0,
+  isCropMode: false,
+  cropRect: null,
+  pendingCropPreview: null,
+  cropAspectRatio: 'free' as CropAspectRatioPreset,
   isSlideshowActive: false,
   isSlideshowPaused: false,
   showControls: true,
@@ -108,6 +135,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       panX: 0,
       panY: 0,
       rotation: 0,
+      isCropMode: false,
+      cropRect: null,
+      pendingCropPreview: null,
+      cropAspectRatio: 'free',
       errorMessage: null,
     }),
 
@@ -128,6 +159,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       panX: 0,
       panY: 0,
       rotation: 0,
+      isCropMode: false,
+      cropRect: null,
+      pendingCropPreview: null,
+      cropAspectRatio: 'free',
       errorMessage: null,
     });
   },
@@ -230,13 +265,55 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   
   rotateClockwise: () => {
     const { rotation } = get();
-    set({ rotation: (rotation + 90) % 360 });
+    set({
+      rotation: (rotation + 90) % 360,
+      isCropMode: false,
+      cropRect: null,
+      pendingCropPreview: null,
+    });
   },
   
   rotateCounterClockwise: () => {
     const { rotation } = get();
-    set({ rotation: (rotation - 90 + 360) % 360 });
+    set({
+      rotation: (rotation - 90 + 360) % 360,
+      isCropMode: false,
+      cropRect: null,
+      pendingCropPreview: null,
+    });
   },
+
+  enterCropMode: () => {
+    const { cropRect, pendingCropPreview } = get();
+    set({
+      isCropMode: true,
+      cropRect: clampNormalizedRect(cropRect ?? pendingCropPreview ?? DEFAULT_CROP_RECT),
+      pendingCropPreview: null,
+    });
+  },
+
+  exitCropMode: () => set({ isCropMode: false, cropRect: null }),
+
+  updateCropRect: (rect) => set({ cropRect: rect ? clampNormalizedRect(rect) : null }),
+
+  setCropAspectRatio: (ratio) => set({ cropAspectRatio: ratio }),
+
+  resetCrop: () =>
+    set({
+      cropRect: clampNormalizedRect(DEFAULT_CROP_RECT),
+      pendingCropPreview: null,
+    }),
+
+  applyCropPreview: () => {
+    const { cropRect } = get();
+    if (!cropRect) return;
+    set({
+      pendingCropPreview: clampNormalizedRect(cropRect),
+      isCropMode: false,
+    });
+  },
+
+  clearCropPreview: () => set({ pendingCropPreview: null }),
 
   startSlideshow: () =>
     set({ isSlideshowActive: true, isSlideshowPaused: false }),
@@ -269,7 +346,13 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
   },
 
-  setViewMode: (mode) => set({ viewMode: mode }),
+  setViewMode: (mode) =>
+    set({
+      viewMode: mode,
+      isCropMode: mode === 'grid' ? false : get().isCropMode,
+      cropRect: mode === 'grid' ? null : get().cropRect,
+      pendingCropPreview: mode === 'grid' ? null : get().pendingCropPreview,
+    }),
 
   beginLoadGeneration: () => {
     const nextGeneration = get().loadGeneration + 1;

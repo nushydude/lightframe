@@ -22,6 +22,7 @@ import {
   shouldLoadFullResolutionImmediately,
   shouldRequestFullResolution,
 } from './imagePreviewStrategy';
+import { CropOverlay, getPreviewClipPath } from './CropOverlay';
 
 type ImageCanvasProps = {
   onWheelNext?: () => void;
@@ -50,7 +51,18 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomMode: 'fit',
     zoomLevel: 1,
   });
-  const { currentImagePath, zoomMode, currentIndex, rotation, cacheBuster, loadGeneration } =
+  const [imageBounds, setImageBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const {
+    currentImagePath,
+    zoomMode,
+    currentIndex,
+    rotation,
+    cacheBuster,
+    loadGeneration,
+    isCropMode,
+    cropRect,
+    pendingCropPreview,
+  } =
     useViewerStore();
   const {
     zoomLevel,
@@ -264,6 +276,30 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setIsLoading(false);
   }, []);
 
+  const updateImageBounds = useCallback(() => {
+    const container = containerRef.current;
+    const image = imgRef.current;
+    if (!container || !image) {
+      setImageBounds(null);
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const imageRect = image.getBoundingClientRect();
+    setImageBounds({
+      left: imageRect.left - containerRect.left,
+      top: imageRect.top - containerRect.top,
+      width: imageRect.width,
+      height: imageRect.height,
+    });
+  }, []);
+
+  useEffect(() => {
+    updateImageBounds();
+    window.addEventListener('resize', updateImageBounds);
+    return () => window.removeEventListener('resize', updateImageBounds);
+  }, [updateImageBounds, currentImagePath, zoomMode, zoomLevel, panX, panY, rotation, pendingCropPreview, isCropMode]);
+
   // Compute image transform
   const getImageStyle = useCallback((): CSSProperties => {
     const style: CSSProperties = {};
@@ -303,8 +339,24 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       style.height = `${metadata.height}px`;
     }
 
+    if (pendingCropPreview && !isCropMode) {
+      style.clipPath = getPreviewClipPath(pendingCropPreview);
+      style.transformOrigin = 'center center';
+    }
+
     return style;
-  }, [isFullResolutionReady, metadata?.height, metadata?.width, panX, panY, rotation, zoomLevel, zoomMode]);
+  }, [
+    isCropMode,
+    isFullResolutionReady,
+    metadata?.height,
+    metadata?.width,
+    panX,
+    panY,
+    pendingCropPreview,
+    rotation,
+    zoomLevel,
+    zoomMode,
+  ]);
 
   const containerClasses = [
     'image-canvas',
@@ -333,9 +385,15 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           alt=""
           className={`${zoomMode} ${isImageLoading ? 'loading' : ''}`}
           style={getImageStyle()}
-          onLoad={handleImageLoad}
+          onLoad={() => {
+            handleImageLoad();
+            updateImageBounds();
+          }}
           draggable={false}
         />
+      )}
+      {isCropMode && cropRect && rotation === 0 && imageBounds && (
+        <CropOverlay imageBounds={imageBounds} cropRect={cropRect} />
       )}
     </div>
   );
