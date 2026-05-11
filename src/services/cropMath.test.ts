@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clampNormalizedRect,
   getAspectRatioValue,
+  normalizedToIntegerPixelRect,
   normalizedToPixelRect,
   nudgeCropRectInDirection,
   pixelToNormalizedRect,
@@ -15,6 +16,21 @@ describe('cropMath', () => {
 
     expect(pixelRect).toEqual({ x: 100, y: 100, width: 500, height: 200 });
     expect(pixelToNormalizedRect(pixelRect, 1000, 500)).toEqual(normalized);
+  });
+
+  it('rounds normalized rectangles to in-bounds integer pixel rectangles', () => {
+    expect(
+      normalizedToIntegerPixelRect(
+        { x: 0.3333, y: 0.1, width: 0.6667, height: 0.9 },
+        301,
+        199
+      )
+    ).toEqual({
+      x: 100,
+      y: 19,
+      width: 201,
+      height: 180,
+    });
   });
 
   it('clamps rectangles within image bounds', () => {

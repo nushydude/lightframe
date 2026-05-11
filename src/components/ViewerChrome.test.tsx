@@ -3,6 +3,8 @@ import { ViewerChrome } from './ViewerChrome';
 import { useViewerStore } from '../state/viewerStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { save } from '@tauri-apps/plugin-dialog';
+import * as tauriCommands from '../services/tauriCommands';
 
 describe('ViewerChrome', () => {
   const defaultProps = {
@@ -19,6 +21,7 @@ describe('ViewerChrome', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
     vi.clearAllMocks();
+    document.body.innerHTML = '';
   });
 
   it('should not render if no image is open', () => {
@@ -122,5 +125,31 @@ describe('ViewerChrome', () => {
 
     fireEvent.click(screen.getByLabelText('Zoom out'));
     expect(spyOut).toHaveBeenCalled();
+  });
+
+  it('does nothing when save cropped copy dialog is canceled', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      isCropMode: true,
+      cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+    });
+    vi.mocked(save).mockResolvedValue(null);
+    const saveCopySpy = vi.spyOn(tauriCommands, 'saveCroppedCopy');
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Save cropped copy'));
+    });
+
+    expect(saveCopySpy).not.toHaveBeenCalled();
   });
 });
