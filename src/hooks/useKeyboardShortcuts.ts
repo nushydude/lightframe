@@ -42,6 +42,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     updateCropRect,
     applyCropPreview,
     exitCropMode,
+    exitCompareMode,
+    switchCompareFocus,
+    moveCompareFocusedCandidate,
+    promoteFocusedComparePane,
   } = useViewerStore();
 
   const settings = useSettingsStore((s) => s.settings);
@@ -127,6 +131,38 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
           updateCropRect(
             nudgeCropRectInDirection(cropRect, e.key, stepPx, imageWidth, imageHeight)
           );
+          return;
+        }
+      }
+
+      if (viewMode === 'compare') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          exitCompareMode();
+          return;
+        }
+
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          switchCompareFocus();
+          return;
+        }
+
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          moveCompareFocusedCandidate(-1);
+          return;
+        }
+
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          moveCompareFocusedCandidate(1);
+          return;
+        }
+
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          promoteFocusedComparePane();
           return;
         }
       }
@@ -335,6 +371,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       updateCropRect,
       applyCropPreview,
       exitCropMode,
+      exitCompareMode,
+      switchCompareFocus,
+      moveCompareFocusedCandidate,
+      promoteFocusedComparePane,
     ]
   );
 

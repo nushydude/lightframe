@@ -6,6 +6,7 @@ import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
 import { ThumbnailStrip } from './components/ThumbnailStrip';
 import { ContactSheet } from './components/ContactSheet';
+import { CompareView } from './components/CompareView';
 import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -396,6 +397,14 @@ function App() {
           state.enterCropMode();
         },
         startSlideshow,
+        toggleCompareMode: () => {
+          const state = useViewerStore.getState();
+          if (state.viewMode === 'compare') {
+            state.exitCompareMode();
+            return;
+          }
+          state.enterCompareMode();
+        },
       }),
     [
       openFilePicker,
@@ -493,6 +502,7 @@ function App() {
       ? 'with-thumbnails'
       : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
+    viewMode === 'compare' && !isSecondary ? 'compare-mode' : '',
     isSecondary ? 'secondary-window' : '',
   ]
     .filter(Boolean)
@@ -522,6 +532,20 @@ function App() {
                 onTogglePause={toggleSlideshowPause}
               />
               {settings.showThumbnails && <ThumbnailStrip />}
+            </>
+          ) : viewMode === 'compare' ? (
+            <>
+              <CompareView />
+              <ViewerChrome
+                onOpenFile={openFilePicker}
+                onOpenFolder={openFolderPicker}
+                onRefreshFolder={refreshFolder}
+                onGoHome={handleGoHome}
+                onNext={() => goNext()}
+                onPrev={() => goPrev()}
+                onStartSlideshow={startSlideshow}
+                onTogglePause={toggleSlideshowPause}
+              />
             </>
           ) : (
             <ContactSheet onGoHome={handleGoHome} />

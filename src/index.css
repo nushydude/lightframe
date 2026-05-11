@@ -393,6 +393,105 @@ body,
   overflow: hidden;
 }
 
+/* ===== Compare View ===== */
+.compare-view {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 60px 16px 90px;
+  background: var(--bg-primary);
+}
+
+.compare-view-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.compare-pane {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.compare-pane.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.compare-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-pane-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compare-pane-role {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.compare-pane-focus {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.compare-pane-index {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.compare-pane-filename {
+  font-size: 12px;
+  color: var(--text-primary);
+  padding: 8px 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compare-pane-canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  padding: 10px;
+}
+
+.compare-pane-canvas img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.compare-pane-placeholder {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 /* ===== Image Canvas ===== */
 .image-canvas {
   flex: 1;
@@ -721,6 +820,16 @@ body,
 .top-bar-btn:hover {
   background: var(--bg-control-hover);
   border-color: var(--border-hover);
+}
+
+.top-bar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.top-bar-btn:disabled:hover {
+  background: var(--bg-control);
+  border-color: var(--border);
 }
 
 .top-bar-btn-icon {
