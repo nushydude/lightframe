@@ -31,6 +31,12 @@ pub struct ImageMetadata {
     pub height: Option<u32>,
     pub file_size_bytes: u64,
     pub format: String,
+    pub browser_renderable: bool,
+    pub rust_decode_supported: bool,
+    pub metadata_supported: bool,
+    pub thumbnail_supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub support_note: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -259,6 +265,7 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
 
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+    let format_support = thumbnails::format_support_for_path(path);
 
     // Try to read image dimensions
     let (width, height) = match image::image_dimensions(path) {
@@ -279,7 +286,17 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
         other => other.to_uppercase(),
     };
 
-    Ok(ImageMetadata { width, height, file_size_bytes, format })
+    Ok(ImageMetadata {
+        width,
+        height,
+        file_size_bytes,
+        format,
+        browser_renderable: format_support.browser_renderable,
+        rust_decode_supported: format_support.rust_decode_supported,
+        metadata_supported: format_support.metadata_supported,
+        thumbnail_supported: format_support.thumbnail_supported,
+        support_note: format_support.support_note.map(str::to_string),
+    })
 }
 
 fn rotation_save_strategy(extension: &str, rotation_degrees: i32) -> Option<RotationSaveStrategy> {
@@ -1606,6 +1623,64 @@ mod tests {
         assert_eq!(metadata.height, Some(3));
         assert_eq!(metadata.format, "PNG");
         assert_eq!(metadata.file_size_bytes, expected_size);
+        assert!(metadata.browser_renderable);
+        assert!(metadata.rust_decode_supported);
+        assert!(metadata.metadata_supported);
+        assert!(metadata.thumbnail_supported);
+        assert_eq!(metadata.support_note, None);
+    }
+
+    #[test]
+    fn test_get_image_metadata_blocking_falls_back_for_heic_files() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.heic");
+        fs::write(&image_path, b"not-a-real-heic").unwrap();
+        let expected_size = fs::metadata(&image_path).unwrap().len();
+
+        let metadata =
+            get_image_metadata_blocking(image_path.to_string_lossy().to_string()).unwrap();
+
+        assert_eq!(metadata.width, None);
+        assert_eq!(metadata.height, None);
+        assert_eq!(metadata.format, "HEIC");
+        assert_eq!(metadata.file_size_bytes, expected_size);
+        assert!(metadata.browser_renderable);
+        assert!(!metadata.rust_decode_supported);
+        assert!(metadata.metadata_supported);
+        assert!(metadata.thumbnail_supported);
+        assert!(metadata
+            .support_note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("placeholder thumbnail"));
+    }
+
+    #[test]
+    fn test_get_image_metadata_blocking_falls_back_for_decode_limited_formats() {
+        let dir = tempdir().unwrap();
+
+        for (file_name, expected_format) in [
+            ("sample.heic", "HEIC"),
+            ("sample.heif", "HEIC"),
+            ("sample.avif", "AVIF"),
+            ("sample.svg", "SVG"),
+        ] {
+            let file_path = dir.path().join(file_name);
+            fs::write(&file_path, b"not-a-decodable-image").unwrap();
+            let expected_size = fs::metadata(&file_path).unwrap().len();
+
+            let metadata =
+                get_image_metadata_blocking(file_path.to_string_lossy().to_string()).unwrap();
+
+            assert_eq!(metadata.width, None, "unexpected width for {}", file_name);
+            assert_eq!(metadata.height, None, "unexpected height for {}", file_name);
+            assert_eq!(
+                metadata.file_size_bytes, expected_size,
+                "unexpected size for {}",
+                file_name
+            );
+            assert_eq!(metadata.format, expected_format, "unexpected format for {}", file_name);
+        }
     }
 
     #[test]

@@ -10,8 +10,18 @@ const CACHE_VERSION: &str = "v1";
 const MAX_CACHE_ENTRIES: usize = 2_000;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const CLEANUP_INTERVAL: usize = 32;
+const FALLBACK_PLACEHOLDER_MIME_TYPE: &str = "image/svg+xml";
 
 static THUMBNAIL_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormatSupport {
+    pub browser_renderable: bool,
+    pub rust_decode_supported: bool,
+    pub metadata_supported: bool,
+    pub thumbnail_supported: bool,
+    pub support_note: Option<&'static str>,
+}
 
 #[derive(Debug, Clone)]
 pub struct SourceMetadata {
@@ -62,6 +72,54 @@ pub fn hash_cache_key(cache_key: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
+    match normalized_extension(file_path).as_deref() {
+        Some("heic") => FormatSupport {
+            browser_renderable: true,
+            rust_decode_supported: false,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: Some(
+                "HEIC files use a labeled placeholder thumbnail because LightFrame cannot decode HEIC thumbnails directly.",
+            ),
+        },
+        Some("heif") => FormatSupport {
+            browser_renderable: true,
+            rust_decode_supported: false,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: Some(
+                "HEIF files use a labeled placeholder thumbnail because LightFrame cannot decode HEIF thumbnails directly.",
+            ),
+        },
+        Some("svg") => FormatSupport {
+            browser_renderable: true,
+            rust_decode_supported: false,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: Some(
+                "SVG files use a labeled placeholder thumbnail because LightFrame does not rasterize SVG thumbnails in Rust yet.",
+            ),
+        },
+        Some("avif") => FormatSupport {
+            browser_renderable: true,
+            rust_decode_supported: true,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: Some(
+                "AVIF thumbnails fall back to a labeled placeholder when decoding fails.",
+            ),
+        },
+        _ => FormatSupport {
+            browser_renderable: true,
+            rust_decode_supported: true,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: None,
+        },
+    }
+}
+
 pub fn get_or_create_thumbnail(
     file_path: &Path,
     metadata: &SourceMetadata,
@@ -91,18 +149,29 @@ pub fn get_or_create_thumbnail(
         }
     }
 
-    let jpeg_bytes = generate_thumbnail_jpeg(file_path)?;
-    if cache_available {
-        if let Err(error) = write_cache_file(&cache_file, &jpeg_bytes) {
-            eprintln!(
-                "Warning: failed to write thumbnail cache file '{}': {}",
-                cache_file.display(),
-                error
-            );
+    match generate_thumbnail_jpeg(file_path) {
+        Ok(jpeg_bytes) => {
+            if cache_available {
+                if let Err(error) = write_cache_file(&cache_file, &jpeg_bytes) {
+                    eprintln!(
+                        "Warning: failed to write thumbnail cache file '{}': {}",
+                        cache_file.display(),
+                        error
+                    );
+                }
+            }
+
+            Ok(jpeg_data_url(&jpeg_bytes))
+        }
+        Err(error) => {
+            if let Some(placeholder_data_url) = known_fallback_thumbnail_data_url(file_path, &error)
+            {
+                return Ok(placeholder_data_url);
+            }
+
+            Err(format!("Failed to generate thumbnail: {}", error))
         }
     }
-
-    Ok(jpeg_data_url(&jpeg_bytes))
 }
 
 fn normalize_path_for_key(path: &Path) -> String {
@@ -125,20 +194,72 @@ fn normalize_path_for_key(path: &Path) -> String {
     }
 }
 
-fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, String> {
-    let img = image::open(file_path).map_err(|e| format!("Failed to open for thumbnail: {}", e))?;
+fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
+    let img = image::open(file_path)?;
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
 
     let mut buffer = std::io::Cursor::new(Vec::new());
-    thumb
-        .write_to(&mut buffer, image::ImageFormat::Jpeg)
-        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+    thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
     Ok(buffer.into_inner())
 }
 
 fn jpeg_data_url(bytes: &[u8]) -> String {
     let base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     format!("data:image/jpeg;base64,{}", base64)
+}
+
+fn known_fallback_thumbnail_data_url(
+    file_path: &Path,
+    error: &image::ImageError,
+) -> Option<String> {
+    if matches!(error, image::ImageError::IoError(_)) {
+        return None;
+    }
+
+    let extension = normalized_extension(file_path)?;
+    if !matches!(extension.as_str(), "heic" | "heif" | "avif" | "svg") {
+        return None;
+    }
+
+    Some(placeholder_thumbnail_data_url(&extension))
+}
+
+fn normalized_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
+fn placeholder_thumbnail_data_url(extension: &str) -> String {
+    let format_label = match extension {
+        "heic" => "HEIC",
+        "heif" => "HEIF",
+        "avif" => "AVIF",
+        "svg" => "SVG",
+        _ => "IMAGE",
+    };
+
+    let canvas_size = THUMBNAIL_SIZE;
+    let inner_size = THUMBNAIL_SIZE.saturating_sub(24);
+    let svg = format!(
+        concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{canvas}\" height=\"{canvas}\" ",
+            "viewBox=\"0 0 {canvas} {canvas}\">",
+            "<rect width=\"{canvas}\" height=\"{canvas}\" fill=\"#1f2933\"/>",
+            "<rect x=\"12\" y=\"12\" width=\"{inner}\" height=\"{inner}\" rx=\"10\" fill=\"#2e3c4b\"/>",
+            "<text x=\"50%\" y=\"47%\" fill=\"#e5edf5\" text-anchor=\"middle\" ",
+            "font-family=\"Arial, sans-serif\" font-size=\"20\">{label}</text>",
+            "<text x=\"50%\" y=\"66%\" fill=\"#9eb0c2\" text-anchor=\"middle\" ",
+            "font-family=\"Arial, sans-serif\" font-size=\"11\">Preview unavailable</text>",
+            "</svg>"
+        ),
+        canvas = canvas_size,
+        inner = inner_size,
+        label = format_label
+    );
+
+    let base64 = base64::engine::general_purpose::STANDARD.encode(svg.as_bytes());
+    format!("data:{};base64,{}", FALLBACK_PLACEHOLDER_MIME_TYPE, base64)
 }
 
 fn parse_modified_seconds(value: &str) -> Option<u64> {
@@ -267,10 +388,16 @@ fn is_cache_thumbnail_filename(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use tempfile::tempdir;
 
     fn cache_file_name_for_index(index: usize) -> String {
         format!("{index:064x}.jpg")
+    }
+
+    fn decode_data_url_payload(data_url: &str) -> Vec<u8> {
+        let (_, payload) = data_url.split_once(',').unwrap();
+        base64::engine::general_purpose::STANDARD.decode(payload).unwrap()
     }
 
     #[test]
@@ -342,6 +469,59 @@ mod tests {
         let result = get_or_create_thumbnail(&image_path, &metadata, &invalid_cache_dir).unwrap();
 
         assert!(result.starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn unsupported_formats_return_stable_placeholder_thumbnail_data_url() {
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().join("thumbs");
+
+        for (extension, expected_label) in
+            [("heic", "HEIC"), ("heif", "HEIF"), ("avif", "AVIF"), ("svg", "SVG")]
+        {
+            let image_path = dir.path().join(format!("sample.{}", extension));
+            fs::write(&image_path, b"not-a-decodable-image").unwrap();
+
+            let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+            let first = get_or_create_thumbnail(&image_path, &metadata, &cache_dir).unwrap();
+            let second = get_or_create_thumbnail(&image_path, &metadata, &cache_dir).unwrap();
+
+            assert!(first.starts_with("data:image/svg+xml;base64,"));
+            assert_eq!(first, second);
+
+            let decoded = String::from_utf8(decode_data_url_payload(&first)).unwrap();
+            assert!(decoded.contains(&format!(">{}<", expected_label)));
+        }
+
+        let cached_jpg_files = fs::read_dir(&cache_dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("jpg"))
+            .count();
+        assert_eq!(cached_jpg_files, 0);
+    }
+
+    #[test]
+    fn fallback_formats_do_not_mask_io_errors() {
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().join("thumbs");
+        let missing = dir.path().join("missing.heic");
+        let metadata = SourceMetadata { size_bytes: 1, modified_seconds: 1 };
+
+        let error = get_or_create_thumbnail(&missing, &metadata, &cache_dir).unwrap_err();
+        assert!(error.contains("Failed to generate thumbnail"));
+    }
+
+    #[test]
+    fn supported_decode_formats_still_return_errors_when_corrupt() {
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().join("thumbs");
+        let broken_jpg = dir.path().join("broken.jpg");
+        fs::write(&broken_jpg, b"not-a-real-jpeg").unwrap();
+        let metadata = resolve_source_metadata(&broken_jpg, None, None).unwrap();
+
+        let error = get_or_create_thumbnail(&broken_jpg, &metadata, &cache_dir).unwrap_err();
+        assert!(error.contains("Failed to generate thumbnail"));
     }
 
     #[test]
