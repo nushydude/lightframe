@@ -43,6 +43,19 @@ describe('settingsToRust', () => {
       quick_destinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' }],
     });
   });
+
+  it('maps external editor settings to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      externalEditorPath: 'C:/Program Files/Paint.NET/paintdotnet.exe',
+      externalEditorLabel: 'Paint.NET',
+    });
+
+    expect(rust).toMatchObject({
+      external_editor_path: 'C:/Program Files/Paint.NET/paintdotnet.exe',
+      external_editor_label: 'Paint.NET',
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -87,5 +100,15 @@ describe('settingsFromRust', () => {
     expect(settings.quickDestinations).toEqual([
       { id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' },
     ]);
+  });
+
+  it('parses external editor settings from rust payloads', () => {
+    const settings = settingsFromRust({
+      external_editor_path: 'C:/Program Files/Paint.NET/paintdotnet.exe',
+      external_editor_label: 'Paint.NET',
+    });
+
+    expect(settings.externalEditorPath).toBe('C:/Program Files/Paint.NET/paintdotnet.exe');
+    expect(settings.externalEditorLabel).toBe('Paint.NET');
   });
 });

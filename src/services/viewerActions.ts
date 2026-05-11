@@ -4,8 +4,10 @@ import {
   copyImageToFolder,
   moveImageToFolder,
   moveToTrash,
+  openInExternalApplication,
   revealInExplorer,
 } from './tauriCommands';
+import { useSettingsStore } from '../state/settingsStore';
 import type { QuickDestination } from '../types/settings';
 
 interface DeleteCurrentImageOptions {
@@ -118,6 +120,43 @@ export async function copyCurrentImage(currentImagePath: string | null): Promise
   } catch (err) {
     console.error('Failed to copy image:', err);
     await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
+  }
+}
+
+export async function openCurrentImageInEditor(
+  currentImagePath: string | null,
+  externalEditorPath?: string | null,
+  externalEditorLabel?: string | null
+): Promise<void> {
+  if (!currentImagePath) {
+    return;
+  }
+
+  const settings = useSettingsStore.getState().settings;
+  const editorPath = externalEditorPath?.trim() || settings.externalEditorPath?.trim();
+
+  if (!editorPath) {
+    await message('No external editor is configured. Set one in Settings > External Editor.', {
+      title: 'External editor not configured',
+      kind: 'warning',
+    });
+    return;
+  }
+
+  const editorExecutable = editorPath.replace(/\\/g, '/').split('/').pop() ?? editorPath;
+  const editorLabel =
+    externalEditorLabel?.trim() ||
+    settings.externalEditorLabel?.trim() ||
+    editorExecutable.replace(/\.[^.]+$/, '');
+
+  try {
+    await openInExternalApplication(currentImagePath, editorPath);
+  } catch (err) {
+    console.error('Failed to open image in external editor:', err);
+    await message(`Failed to open image in ${editorLabel}: ${err}`, {
+      title: 'Could not open editor',
+      kind: 'error',
+    });
   }
 }
 

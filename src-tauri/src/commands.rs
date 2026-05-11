@@ -77,6 +77,10 @@ pub struct AppSettings {
     pub show_thumbnails: bool,
     #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
+    #[serde(default)]
+    pub external_editor_path: Option<String>,
+    #[serde(default)]
+    pub external_editor_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -116,6 +120,8 @@ impl Default for AppSettings {
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
             quick_destinations: Vec::new(),
+            external_editor_path: None,
+            external_editor_label: None,
         }
     }
 }
@@ -1983,5 +1989,7 @@ mod tests {
         assert_eq!(settings.window_y, None);
         assert_eq!(settings.window_width, None);
         assert_eq!(settings.window_height, None);
+        assert_eq!(settings.external_editor_path, None);
+        assert_eq!(settings.external_editor_label, None);
     }
 }

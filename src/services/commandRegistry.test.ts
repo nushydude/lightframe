@@ -10,6 +10,7 @@ describe('createViewerCommands', () => {
   it('executes file actions directly in grid mode', async () => {
     const saveRotation = vi.fn().mockResolvedValue(undefined);
     const revealCurrentImage = vi.fn().mockResolvedValue(undefined);
+    const openCurrentImageInEditor = vi.fn().mockResolvedValue(undefined);
     const copyCurrentImage = vi.fn().mockResolvedValue(undefined);
     const deleteCurrentImage = vi.fn().mockResolvedValue(undefined);
 
@@ -30,6 +31,7 @@ describe('createViewerCommands', () => {
       toggleFullscreen: vi.fn().mockResolvedValue(undefined),
       saveRotation,
       revealCurrentImage,
+      openCurrentImageInEditor,
       copyCurrentImage,
       deleteCurrentImage,
       enterCropMode: vi.fn(),
@@ -40,21 +42,25 @@ describe('createViewerCommands', () => {
     const state = useViewerStore.getState();
     const saveRotationCommand = commands.find((command) => command.id === 'save-rotation');
     const revealCommand = commands.find((command) => command.id === 'reveal-in-folder');
+    const editCommand = commands.find((command) => command.id === 'open-in-editor');
     const copyCommand = commands.find((command) => command.id === 'copy-to-clipboard');
     const deleteCommand = commands.find((command) => command.id === 'delete-image');
 
     expect(saveRotationCommand?.isEnabled(state)).toBe(true);
     expect(revealCommand?.isEnabled(state)).toBe(true);
+    expect(editCommand?.isEnabled(state)).toBe(true);
     expect(copyCommand?.isEnabled(state)).toBe(true);
     expect(deleteCommand?.isEnabled(state)).toBe(true);
 
     await saveRotationCommand?.run();
     await revealCommand?.run();
+    await editCommand?.run();
     await copyCommand?.run();
     await deleteCommand?.run();
 
     expect(saveRotation).toHaveBeenCalledTimes(1);
     expect(revealCurrentImage).toHaveBeenCalledTimes(1);
+    expect(openCurrentImageInEditor).toHaveBeenCalledTimes(1);
     expect(copyCurrentImage).toHaveBeenCalledTimes(1);
     expect(deleteCurrentImage).toHaveBeenCalledTimes(1);
   });
@@ -77,6 +83,7 @@ describe('createViewerCommands', () => {
       toggleFullscreen: vi.fn().mockResolvedValue(undefined),
       saveRotation: vi.fn().mockResolvedValue(undefined),
       revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
       enterCropMode,
@@ -107,6 +114,7 @@ describe('createViewerCommands', () => {
       toggleFullscreen: vi.fn().mockResolvedValue(undefined),
       saveRotation: vi.fn().mockResolvedValue(undefined),
       revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
       enterCropMode: vi.fn(),
@@ -131,6 +139,7 @@ describe('createViewerCommands', () => {
       toggleFullscreen: vi.fn().mockResolvedValue(undefined),
       saveRotation: vi.fn().mockResolvedValue(undefined),
       revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
       enterCropMode: vi.fn(),
@@ -177,5 +186,37 @@ describe('createViewerCommands', () => {
 
     void compareCommand?.run();
     expect(toggleCompareMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes an external editor command with the expected shortcut', async () => {
+    const openCurrentImageInEditor = vi.fn().mockResolvedValue(undefined);
+    useViewerStore.setState({
+      currentImagePath: 'c:/images/test.jpg',
+    });
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor,
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
+    });
+
+    const editCommand = commands.find((command) => command.id === 'open-in-editor');
+    expect(editCommand?.shortcut).toBe('Ctrl+E');
+    expect(editCommand?.isEnabled(useViewerStore.getState())).toBe(true);
+
+    await editCommand?.run();
+    expect(openCurrentImageInEditor).toHaveBeenCalledTimes(1);
   });
 });

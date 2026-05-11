@@ -13,6 +13,7 @@ import {
   canSaveRotationForPath,
   copyCurrentImage,
   deleteCurrentImage,
+  openCurrentImageInEditor,
   revealCurrentImage,
   showTransferResultMessage,
   transferImagesToDestination,
@@ -86,6 +87,8 @@ export function ViewerChrome({
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
+  const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
+  const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
@@ -131,6 +134,10 @@ export function ViewerChrome({
 
   const handleCopy = async () => {
     await copyCurrentImage(currentImagePath);
+  };
+
+  const handleOpenInEditor = async () => {
+    await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
   };
 
   const handleReveal = async () => {
@@ -426,6 +433,22 @@ export function ViewerChrome({
                 )}
               </div>
             </details>
+            <button
+              className="top-bar-btn top-bar-btn--labeled"
+              onClick={handleOpenInEditor}
+              title={
+                externalEditorPath
+                  ? `Edit in ${externalEditorLabel || 'external editor'} (Ctrl+E)`
+                  : 'Configure an external editor in Settings (Ctrl+E)'
+              }
+              aria-label="Open in external editor"
+              id="btn-open-in-editor"
+            >
+              <span className="top-bar-btn-icon">Edit</span>
+              <span className="top-bar-btn-label">
+                {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+              </span>
+            </button>
             <button
               className="top-bar-btn top-bar-btn--labeled"
               onClick={handleDelete}

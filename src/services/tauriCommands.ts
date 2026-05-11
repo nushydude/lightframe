@@ -137,13 +137,21 @@ export async function getThumbnail(
   return invoke<string>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
 }
 
-import { revealItemInDir, openUrl } from '@tauri-apps/plugin-opener';
+import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit } from '@tauri-apps/api/event';
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
 export async function revealInExplorer(filePath: string): Promise<void> {
   return revealItemInDir(filePath);
+}
+
+/** Open a file path in a specific external application */
+export async function openInExternalApplication(
+  filePath: string,
+  applicationPath: string
+): Promise<void> {
+  return openPath(filePath, applicationPath);
 }
 
 /** Open a secondary window for Presentation Mode */

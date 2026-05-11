@@ -22,6 +22,7 @@ interface CreateViewerCommandsOptions {
   toggleFullscreen: () => Promise<void>;
   saveRotation: () => Promise<void>;
   revealCurrentImage: () => Promise<void>;
+  openCurrentImageInEditor: () => Promise<void>;
   copyCurrentImage: () => Promise<void>;
   deleteCurrentImage: () => Promise<void>;
   enterCropMode: () => void;
@@ -177,6 +178,14 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       shortcut: 'Ctrl+Shift+O',
       isEnabled: (state) => Boolean(state.currentImagePath),
       run: () => options.revealCurrentImage(),
+    },
+    {
+      id: 'open-in-editor',
+      label: 'Open in External Editor',
+      keywords: ['edit', 'external', 'editor', 'paint', 'retouch'],
+      shortcut: 'Ctrl+E',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => options.openCurrentImageInEditor(),
     },
     {
       id: 'copy-to-clipboard',

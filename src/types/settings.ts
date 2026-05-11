@@ -20,6 +20,8 @@ export interface AppSettings {
   sortOrder: 'name' | 'date' | 'size' | 'random';
   showThumbnails: boolean;
   quickDestinations: QuickDestination[];
+  externalEditorPath?: string;
+  externalEditorLabel?: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -58,6 +60,8 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
       label: destination.label,
       path: destination.path,
     })),
+    external_editor_path: settings.externalEditorPath,
+    external_editor_label: settings.externalEditorLabel,
   };
 }
 
@@ -98,5 +102,13 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
           })
           .filter((value): value is QuickDestination => value !== null)
       : DEFAULT_SETTINGS.quickDestinations,
+    externalEditorPath:
+      typeof raw.external_editor_path === 'string' && raw.external_editor_path.trim()
+        ? raw.external_editor_path.trim()
+        : undefined,
+    externalEditorLabel:
+      typeof raw.external_editor_label === 'string' && raw.external_editor_label.trim()
+        ? raw.external_editor_label.trim()
+        : undefined,
   };
 }

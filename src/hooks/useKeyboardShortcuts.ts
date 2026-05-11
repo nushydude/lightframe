@@ -7,6 +7,7 @@ import { revealCurrentImage } from '../services/viewerActions';
 
 interface KeyboardHandlers {
   openFilePicker: () => void;
+  openCurrentImageInEditor: () => void | Promise<void>;
   goNext: (loop?: boolean) => boolean;
   goPrev: (loop?: boolean) => boolean;
   goFirst: () => void;
@@ -66,6 +67,15 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.ctrlKey && e.key === 'o') {
         e.preventDefault();
         handlers.openFilePicker();
+        return;
+      }
+
+      // Ctrl + E: Open in configured external editor
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault();
+        if (currentImagePath) {
+          void handlers.openCurrentImageInEditor();
+        }
         return;
       }
 

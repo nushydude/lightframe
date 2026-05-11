@@ -8,6 +8,10 @@
     "opener:default",
     "opener:allow-reveal-item-in-dir",
     {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "**", "app": true }]
+    },
+    {
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "ms-settings:*" },
