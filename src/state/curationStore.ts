@@ -83,7 +83,7 @@ export const useCurationStore = create<CurationState>((set, get) => ({
     }
 
     const current = get().curationByPath[filePath];
-    const nextFavorite = !Boolean(current?.favorite);
+    const nextFavorite = !current?.favorite;
     const currentRating = clampRating(current?.rating ?? 0);
 
     try {
