@@ -58,18 +58,18 @@ function getEditFieldsForPath(
   };
 }
 
-export interface PendingImageEditSnapshot {
+interface PendingImageEditSnapshot {
   rotationDegrees: number;
   cropRect: NormalizedCropRect | null;
   pendingCropPreview: NormalizedCropRect | null;
 }
 
-export interface PendingImageEdit extends PendingImageEditSnapshot {
+interface PendingImageEdit extends PendingImageEditSnapshot {
   updatedAt: number;
   history: PendingImageEditSnapshot[];
 }
 
-export interface ViewerState {
+interface ViewerState {
   // Image state
   currentImagePath: string | null;
   folderPath: string | null;

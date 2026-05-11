@@ -16,8 +16,8 @@ export type PixelRect = {
 
 export type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
-export const MIN_NORMALIZED_SIZE = 0.02;
-export const MIN_PIXEL_SIZE = 12;
+const MIN_NORMALIZED_SIZE = 0.02;
+const MIN_PIXEL_SIZE = 12;
 
 const EPSILON = 1e-6;
 
@@ -96,7 +96,7 @@ export function clampPixelRect(
   return { x, y, width, height };
 }
 
-export function nudgeCropRect(
+function nudgeCropRect(
   rect: NormalizedCropRect,
   deltaXPx: number,
   deltaYPx: number,

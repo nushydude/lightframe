@@ -45,6 +45,10 @@ jobs:
       - name: Build frontend
         run: pnpm run build
 
+      - name: Fetch pull request base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+
       - name: Audit changed-code quality
         run: pnpm run quality:audit:ci
 

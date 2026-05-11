@@ -125,9 +125,8 @@ export function useImageNavigation() {
     ]
   );
 
-  /** Open and display a specific image file */
-  const openImage = useCallback(
-    async (filePath: string) => {
+  const loadImageFile = useCallback(
+    async (filePath: string, scanInBackground = false) => {
       const loadGeneration = beginLoadGeneration();
 
       try {
@@ -141,7 +140,12 @@ export function useImageNavigation() {
         if (!isCurrentGeneration(loadGeneration)) return;
 
         setFolderScanning(true);
-        await scanFolderForImage(loadGeneration, filePath, parentFolder);
+        const scanPromise = scanFolderForImage(loadGeneration, filePath, parentFolder);
+        if (scanInBackground) {
+          void scanPromise;
+        } else {
+          await scanPromise;
+        }
       } catch (err) {
         if (isCurrentGeneration(loadGeneration)) {
           setError(`Could not open image: ${err}`);
@@ -159,38 +163,20 @@ export function useImageNavigation() {
     ]
   );
 
+  /** Open and display a specific image file */
+  const openImage = useCallback(
+    async (filePath: string) => {
+      await loadImageFile(filePath);
+    },
+    [loadImageFile]
+  );
+
   /** Open an image for startup and continue folder scan in the background */
   const openImageForStartup = useCallback(
     async (filePath: string) => {
-      const loadGeneration = beginLoadGeneration();
-
-      try {
-        const parentFolder = getParentFolder(filePath);
-        setFolderPath(parentFolder);
-        setCurrentImage(filePath, 0);
-
-        const appWindow = getCurrentWindow();
-        const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-        await appWindow.setTitle(`${fileName} - LightFrame`);
-        if (!isCurrentGeneration(loadGeneration)) return;
-
-        setFolderScanning(true);
-        void scanFolderForImage(loadGeneration, filePath, parentFolder);
-      } catch (err) {
-        if (isCurrentGeneration(loadGeneration)) {
-          setError(`Could not open image: ${err}`);
-        }
-      }
+      await loadImageFile(filePath, true);
     },
-    [
-      beginLoadGeneration,
-      isCurrentGeneration,
-      scanFolderForImage,
-      setCurrentImage,
-      setError,
-      setFolderPath,
-      setFolderScanning,
-    ]
+    [loadImageFile]
   );
 
   /** Open a file picker dialog */

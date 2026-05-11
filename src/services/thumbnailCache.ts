@@ -273,6 +273,8 @@ export function getCachedThumbnail(request: string | ThumbnailRequest): string |
   return entry.dataUrl;
 }
 
+// Direct loader is part of the cache test seam.
+// fallow-ignore-next-line unused-export
 export function loadThumbnail(request: string | ThumbnailRequest): Promise<string> {
   const normalized = normalizeRequest(request);
   const { path, sizeBytes, modifiedAt } = normalized;
@@ -343,6 +345,8 @@ export function evictThumbnailsExcept(keepPaths: Set<string>, maxEntriesOverride
   enforceCacheLimit();
 }
 
+// Reset hook is intentionally test-only.
+// fallow-ignore-next-line unused-export
 export function clearThumbnailCacheForTests(): void {
   thumbnailCache.clear();
   queuedRequests.clear();

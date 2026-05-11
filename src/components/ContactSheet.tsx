@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import {
   evictThumbnailsExcept,
   getCachedThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
+import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 
 const GRID_ITEM_SIZE = 140;
 const GRID_GAP = 20;
@@ -26,13 +27,10 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [columns, setColumns] = useState(1);
-  const [, setThumbnailVersion] = useState(0);
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
-  const batchRafRef = useRef<number | null>(null);
-  const hasPendingThumbnailUpdatesRef = useRef(false);
-  const isMountedRef = useRef(true);
+  const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
 
   const totalRows = Math.ceil(images.length / columns);
   const activeRow = currentIndex >= 0 ? Math.floor(currentIndex / columns) : 0;
@@ -53,25 +51,6 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     () => images.slice(visibleRange.startIndex, visibleRange.endIndex),
     [images, visibleRange.endIndex, visibleRange.startIndex]
   );
-
-  const flushThumbnailBatch = useCallback(() => {
-    batchRafRef.current = null;
-    if (!hasPendingThumbnailUpdatesRef.current) return;
-    hasPendingThumbnailUpdatesRef.current = false;
-
-    setThumbnailVersion((version) => version + 1);
-  }, []);
-
-  const scheduleThumbnailFlush = useCallback(() => {
-    if (batchRafRef.current !== null) return;
-    batchRafRef.current = window.requestAnimationFrame(flushThumbnailBatch);
-  }, [flushThumbnailBatch]);
-
-  const handleThumbnailLoaded = useCallback(() => {
-    if (!isMountedRef.current) return;
-    hasPendingThumbnailUpdatesRef.current = true;
-    scheduleThumbnailFlush();
-  }, [scheduleThumbnailFlush]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -119,7 +98,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
       {
         concurrency: 6,
         onLoaded: handleThumbnailLoaded,
-        isActive: () => isMountedRef.current,
+        isActive: isThumbnailConsumerActive,
       }
     );
 
@@ -134,6 +113,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     columns,
     handleThumbnailLoaded,
     images,
+    isThumbnailConsumerActive,
     visibleImages,
     visibleRange.endIndex,
     visibleRange.startIndex,
@@ -141,12 +121,8 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
   useEffect(() => {
     return () => {
-      isMountedRef.current = false;
       if (scrollRafRef.current !== null) {
         window.cancelAnimationFrame(scrollRafRef.current);
-      }
-      if (batchRafRef.current !== null) {
-        window.cancelAnimationFrame(batchRafRef.current);
       }
     };
   }, []);
