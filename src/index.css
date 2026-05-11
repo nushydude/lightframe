@@ -416,6 +416,18 @@ body,
   opacity: 0;
 }
 
+.image-canvas img.image-full-loader {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
+  max-width: none;
+  max-height: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .crop-overlay {
   position: absolute;
   z-index: calc(var(--z-controls) + 1);

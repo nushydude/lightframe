@@ -1,4 +1,5 @@
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageCanvas } from './ImageCanvas';
 import { useViewerStore } from '../state/viewerStore';
@@ -13,7 +14,7 @@ const {
   getImageMetadataMock,
 } = vi.hoisted(() => ({
   getPreviewAssetMock: vi.fn(async () => 'data:image/jpeg;base64,preview'),
-  getFullAssetMock: vi.fn(async () => 'asset://localhost/full.jpg'),
+  getFullAssetMock: vi.fn(() => 'asset://localhost/full.jpg'),
   preloadPreviewAssetMock: vi.fn(async () => undefined),
   preloadFullAssetMock: vi.fn(async () => undefined),
   trimImageAssetCacheMock: vi.fn(),
@@ -57,6 +58,14 @@ describe('ImageCanvas', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getPreviewAssetMock.mockImplementation(async () => 'data:image/jpeg;base64,preview');
+    getFullAssetMock.mockImplementation(() => 'asset://localhost/full.jpg');
+    getImageMetadataMock.mockImplementation(async () => ({
+      width: 1200,
+      height: 900,
+      file_size_bytes: 1024,
+      format: 'JPEG',
+    }));
     vi.useFakeTimers();
     useViewerStore.getState().reset();
   });
@@ -206,18 +215,11 @@ describe('ImageCanvas', () => {
     ]);
   });
 
-  it('does not warn when full preloader resolves after unmount', async () => {
-    const createdImages: Array<{ onload: (() => void) | null; onerror: (() => void) | null }> = [];
-
-    class FakeImage {
-      onload: (() => void) | null = null;
-      onerror: (() => void) | null = null;
-      set src(_value: string) {
-        createdImages.push({ onload: this.onload, onerror: this.onerror });
-      }
-    }
-    globalThis.Image = FakeImage as unknown as typeof Image;
-
+  it('surfaces full asset URL creation failures instead of staying stuck loading', async () => {
+    getFullAssetMock.mockImplementationOnce(() => {
+      throw new Error('convert failed');
+    });
+    getPreviewAssetMock.mockImplementationOnce(() => new Promise(() => {}));
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     useViewerStore.setState({
@@ -234,26 +236,177 @@ describe('ImageCanvas', () => {
       ],
     });
 
-    const { unmount } = render(<ImageCanvas />);
+    render(<ImageCanvas />);
 
     await act(async () => {
       await Promise.resolve();
-      await Promise.resolve();
     });
-    expect(createdImages.length).toBeGreaterThan(0);
-
-    unmount();
-
-    await act(async () => {
-      createdImages[0]?.onload?.();
-      await Promise.resolve();
-    });
-
-    const unmountedWarning = consoleErrorSpy.mock.calls.some(([firstArg]) =>
-      String(firstArg).includes('state update on an unmounted component')
-    );
-    expect(unmountedWarning).toBe(false);
+    expect(getFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg');
+    expect(useViewerStore.getState().errorMessage).toContain('Could not create image URL');
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it('renders the full asset immediately so preview rendering cannot block display', async () => {
+    getPreviewAssetMock.mockImplementationOnce(() => new Promise(() => {}));
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 4000,
+      height: 3000,
+      file_size_bytes: 1024,
+      format: 'JPEG',
+    });
+
+    class FakeImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        this.onload?.();
+      }
+    }
+    globalThis.Image = FakeImage as unknown as typeof Image;
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const previewImage = container.querySelector('img');
+    expect(previewImage).not.toBeNull();
+    expect(previewImage?.getAttribute('src')).toBe('asset://localhost/full.jpg');
+
+    await act(async () => {
+      fireEvent.error(previewImage as HTMLImageElement);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg');
+    expect(useViewerStore.getState().errorMessage).toContain('Could not display image');
+  });
+
+  it('loads the full asset after React StrictMode remount checks', async () => {
+    getPreviewAssetMock.mockImplementation(() => new Promise(() => {}));
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(
+      <StrictMode>
+        <ImageCanvas />
+      </StrictMode>
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('asset://localhost/full.jpg');
+  });
+
+  it('keeps the preview visible when the full asset cannot render', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const visibleImage = container.querySelector('img:not(.image-full-loader)');
+    const fullLoader = container.querySelector('img.image-full-loader');
+
+    expect(visibleImage?.getAttribute('src')).toBe('data:image/jpeg;base64,preview');
+    expect(fullLoader?.getAttribute('src')).toBe('asset://localhost/full.jpg');
+
+    await act(async () => {
+      fireEvent.error(fullLoader as HTMLImageElement);
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('img:not(.image-full-loader)')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,preview'
+    );
+    expect(useViewerStore.getState().errorMessage).toBeNull();
+  });
+
+  it('uses the full asset immediately when preview generation stalls', async () => {
+    getPreviewAssetMock.mockImplementationOnce(() => new Promise(() => {}));
+
+    class FakeImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        this.onload?.();
+      }
+    }
+    globalThis.Image = FakeImage as unknown as typeof Image;
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('asset://localhost/full.jpg');
   });
 });

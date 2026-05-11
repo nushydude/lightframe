@@ -59,8 +59,8 @@ function updateUrlSearchParams(url: string, update: (params: URLSearchParams) =>
   }
 }
 
-async function createCacheEntry(path: string, version: number): Promise<ImageAssetEntry> {
-  const baseUrl = await convertFileSrc(path);
+function createCacheEntry(path: string, version: number): ImageAssetEntry {
+  const baseUrl = convertFileSrc(path);
   return {
     url: applyVersionToUrl(baseUrl, version),
     version,
@@ -106,7 +106,7 @@ function maybePruneEntries<T>(cache: Map<string, T>, keepPaths: Set<string>): vo
   }
 }
 
-export async function getFullAsset(path: string, options?: CacheReadOptions): Promise<string> {
+export function getFullAsset(path: string, options?: CacheReadOptions): string {
   const existing = fullImageAssetCache.get(path);
   if (existing) {
     existing.lastUsedAt = Date.now();
@@ -114,7 +114,7 @@ export async function getFullAsset(path: string, options?: CacheReadOptions): Pr
   }
 
   const startVersion = currentVersion(path);
-  const entry = await createCacheEntry(path, startVersion);
+  const entry = createCacheEntry(path, startVersion);
 
   const resolvedVersion = Math.max(startVersion, currentVersion(path));
   if (resolvedVersion !== entry.version) {
@@ -201,7 +201,7 @@ export async function preloadFullAsset(path: string, options?: CacheReadOptions)
     return;
   }
 
-  const url = await getFullAsset(path, options);
+  const url = getFullAsset(path, options);
   if (!shouldStore(options)) {
     return;
   }
