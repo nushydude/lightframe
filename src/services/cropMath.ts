@@ -21,6 +21,18 @@ const MIN_PIXEL_SIZE = 12;
 
 const EPSILON = 1e-6;
 
+type RectEdges = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+type RectSize = {
+  width: number;
+  height: number;
+};
+
 export function getAspectRatioValue(preset: CropAspectRatioPreset): number | null {
   if (preset === 'free') return null;
   const [w, h] = preset.split(':').map(Number);
@@ -140,82 +152,133 @@ export function resizeRectWithHandle(
   boundsHeight: number,
   aspectRatio?: number | null
 ): PixelRect {
-  let left = startRect.x;
-  let right = startRect.x + startRect.width;
-  let top = startRect.y;
-  let bottom = startRect.y + startRect.height;
-
-  if (handle.includes('e')) right += deltaX;
-  if (handle.includes('w')) left += deltaX;
-  if (handle.includes('s')) bottom += deltaY;
-  if (handle.includes('n')) top += deltaY;
-
-  if (right < left) [left, right] = [right, left];
-  if (bottom < top) [top, bottom] = [bottom, top];
-
-  let width = Math.max(MIN_PIXEL_SIZE, right - left);
-  let height = Math.max(MIN_PIXEL_SIZE, bottom - top);
-
-  if (aspectRatio && aspectRatio > 0) {
-    const horizontal = handle.includes('e') || handle.includes('w');
-    const vertical = handle.includes('n') || handle.includes('s');
-    if (horizontal && vertical) {
-      if (Math.abs(deltaX) > Math.abs(deltaY)) {
-        height = width / aspectRatio;
-      } else {
-        width = height * aspectRatio;
-      }
-    } else if (horizontal) {
-      height = width / aspectRatio;
-    } else if (vertical) {
-      width = height * aspectRatio;
-    }
-
-    if (handle.includes('w')) {
-      left = right - width;
-    } else {
-      right = left + width;
-    }
-
-    if (handle.includes('n')) {
-      top = bottom - height;
-    } else {
-      bottom = top + height;
-    }
-  }
-
-  left = clamp(left, 0, boundsWidth - MIN_PIXEL_SIZE);
-  top = clamp(top, 0, boundsHeight - MIN_PIXEL_SIZE);
-  right = clamp(right, left + MIN_PIXEL_SIZE, boundsWidth);
-  bottom = clamp(bottom, top + MIN_PIXEL_SIZE, boundsHeight);
-
-  width = right - left;
-  height = bottom - top;
-
-  if (aspectRatio && aspectRatio > 0) {
-    const desiredHeight = width / aspectRatio;
-    if (desiredHeight <= boundsHeight + EPSILON) {
-      height = Math.max(MIN_PIXEL_SIZE, desiredHeight);
-      if (handle.includes('n')) {
-        top = bottom - height;
-      }
-    } else {
-      const desiredWidth = height * aspectRatio;
-      width = Math.max(MIN_PIXEL_SIZE, desiredWidth);
-      if (handle.includes('w')) {
-        left = right - width;
-      }
-    }
-    left = clamp(left, 0, boundsWidth - width);
-    top = clamp(top, 0, boundsHeight - height);
-  }
-
-  return clampPixelRect(
-    { x: left, y: top, width, height },
+  const edges = clampResizeEdges(
+    applyAspectRatioToEdges(
+      getResizedEdges(startRect, handle, deltaX, deltaY),
+      handle,
+      deltaX,
+      deltaY,
+      aspectRatio
+    ),
     boundsWidth,
-    boundsHeight,
-    MIN_PIXEL_SIZE
+    boundsHeight
   );
+
+  const rect = fitAspectRatioWithinBounds(edges, handle, boundsWidth, boundsHeight, aspectRatio);
+
+  return clampPixelRect(rect, boundsWidth, boundsHeight, MIN_PIXEL_SIZE);
+}
+
+function getResizedEdges(
+  startRect: PixelRect,
+  handle: ResizeHandle,
+  deltaX: number,
+  deltaY: number
+): RectEdges {
+  const edges = {
+    left: startRect.x + (handle.includes('w') ? deltaX : 0),
+    right: startRect.x + startRect.width + (handle.includes('e') ? deltaX : 0),
+    top: startRect.y + (handle.includes('n') ? deltaY : 0),
+    bottom: startRect.y + startRect.height + (handle.includes('s') ? deltaY : 0),
+  };
+
+  return normalizeEdges(edges);
+}
+
+function normalizeEdges(edges: RectEdges): RectEdges {
+  return {
+    left: Math.min(edges.left, edges.right),
+    right: Math.max(edges.left, edges.right),
+    top: Math.min(edges.top, edges.bottom),
+    bottom: Math.max(edges.top, edges.bottom),
+  };
+}
+
+function applyAspectRatioToEdges(
+  edges: RectEdges,
+  handle: ResizeHandle,
+  deltaX: number,
+  deltaY: number,
+  aspectRatio?: number | null
+): RectEdges {
+  if (!aspectRatio || aspectRatio <= 0) return edges;
+
+  const size = getAspectRatioSize(edges, handle, deltaX, deltaY, aspectRatio);
+  return anchorSizeToHandle(edges, size, handle);
+}
+
+function getAspectRatioSize(
+  edges: RectEdges,
+  handle: ResizeHandle,
+  deltaX: number,
+  deltaY: number,
+  aspectRatio: number
+): RectSize {
+  let width = Math.max(MIN_PIXEL_SIZE, edges.right - edges.left);
+  let height = Math.max(MIN_PIXEL_SIZE, edges.bottom - edges.top);
+  const horizontal = handle.includes('e') || handle.includes('w');
+  const vertical = handle.includes('n') || handle.includes('s');
+
+  if (horizontal && (!vertical || Math.abs(deltaX) > Math.abs(deltaY))) {
+    height = width / aspectRatio;
+  } else if (vertical) {
+    width = height * aspectRatio;
+  }
+
+  return { width, height };
+}
+
+function anchorSizeToHandle(edges: RectEdges, size: RectSize, handle: ResizeHandle): RectEdges {
+  return {
+    left: handle.includes('w') ? edges.right - size.width : edges.left,
+    right: handle.includes('w') ? edges.right : edges.left + size.width,
+    top: handle.includes('n') ? edges.bottom - size.height : edges.top,
+    bottom: handle.includes('n') ? edges.bottom : edges.top + size.height,
+  };
+}
+
+function clampResizeEdges(edges: RectEdges, boundsWidth: number, boundsHeight: number): RectEdges {
+  const left = clamp(edges.left, 0, boundsWidth - MIN_PIXEL_SIZE);
+  const top = clamp(edges.top, 0, boundsHeight - MIN_PIXEL_SIZE);
+  return {
+    left,
+    top,
+    right: clamp(edges.right, left + MIN_PIXEL_SIZE, boundsWidth),
+    bottom: clamp(edges.bottom, top + MIN_PIXEL_SIZE, boundsHeight),
+  };
+}
+
+function fitAspectRatioWithinBounds(
+  edges: RectEdges,
+  handle: ResizeHandle,
+  boundsWidth: number,
+  boundsHeight: number,
+  aspectRatio?: number | null
+): PixelRect {
+  let left = edges.left;
+  let top = edges.top;
+  let width = edges.right - edges.left;
+  let height = edges.bottom - edges.top;
+
+  if (!aspectRatio || aspectRatio <= 0) {
+    return { x: left, y: top, width, height };
+  }
+
+  const desiredHeight = width / aspectRatio;
+  if (desiredHeight <= boundsHeight + EPSILON) {
+    height = Math.max(MIN_PIXEL_SIZE, desiredHeight);
+    top = handle.includes('n') ? edges.bottom - height : top;
+  } else {
+    width = Math.max(MIN_PIXEL_SIZE, height * aspectRatio);
+    left = handle.includes('w') ? edges.right - width : left;
+  }
+
+  return {
+    x: clamp(left, 0, boundsWidth - width),
+    y: clamp(top, 0, boundsHeight - height),
+    width,
+    height,
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {

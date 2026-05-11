@@ -181,6 +181,99 @@ const initialState = {
   viewMode: 'viewer' as const,
 };
 
+function getPendingEditForCommit(
+  state: ViewerState,
+  targetPath: string
+): PendingImageEdit | undefined {
+  const pendingEdit = state.pendingEditsByPath[targetPath];
+  if (pendingEdit) return pendingEdit;
+  if (state.currentImagePath !== targetPath) return undefined;
+
+  return {
+    rotationDegrees: state.rotation,
+    cropRect: cloneCropRect(state.cropRect),
+    pendingCropPreview: cloneCropRect(state.pendingCropPreview),
+    updatedAt: Date.now(),
+    history: [],
+  };
+}
+
+async function savePendingEdit(
+  targetPath: string,
+  pendingEdit: PendingImageEdit
+): Promise<boolean> {
+  if (pendingEdit.cropRect) {
+    return overwritePendingCrop(targetPath, pendingEdit.cropRect, pendingEdit.rotationDegrees);
+  }
+
+  if (pendingEdit.rotationDegrees !== 0) {
+    const { saveRotatedImage } = await import('../services/tauriCommands');
+    await saveRotatedImage(targetPath, pendingEdit.rotationDegrees);
+  }
+
+  return true;
+}
+
+async function overwritePendingCrop(
+  targetPath: string,
+  cropRect: NormalizedCropRect,
+  rotationDegrees: number
+): Promise<boolean> {
+  const { confirm } = await import('@tauri-apps/plugin-dialog');
+  const { overwriteWithCrop } = await import('../services/tauriCommands');
+  const fileName = targetPath.replace(/\\/g, '/').split('/').pop() || targetPath;
+  const confirmed = await confirm(
+    `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
+    {
+      title: 'Overwrite Cropped Image',
+      kind: 'warning',
+    }
+  );
+  if (!confirmed) return false;
+
+  const { width, height } = getActiveImageDimensions();
+  await overwriteWithCrop(
+    targetPath,
+    normalizedToIntegerPixelRect(cropRect, width, height),
+    rotationDegrees
+  );
+  return true;
+}
+
+function getActiveImageDimensions(): { width: number; height: number } {
+  const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+  const width = activeImage?.naturalWidth ?? activeImage?.width ?? 0;
+  const height = activeImage?.naturalHeight ?? activeImage?.height ?? 0;
+
+  if (width <= 0 || height <= 0) {
+    throw new Error('Unable to determine image dimensions for pending crop save.');
+  }
+
+  return { width, height };
+}
+
+function getCommittedEditState(
+  currentState: ViewerState,
+  targetPath: string
+): Partial<ViewerState> {
+  const nextPendingEdits = { ...currentState.pendingEditsByPath };
+  delete nextPendingEdits[targetPath];
+
+  if (currentState.currentImagePath !== targetPath) {
+    return { pendingEditsByPath: nextPendingEdits };
+  }
+
+  return {
+    pendingEditsByPath: nextPendingEdits,
+    rotation: 0,
+    cropRect: null,
+    pendingCropPreview: null,
+    isCropMode: false,
+    cacheBuster: Date.now(),
+    errorMessage: null,
+  };
+}
+
 export const useViewerStore = create<ViewerState>((set, get) => {
   const syncCurrentPendingEdit = (
     recipe: (
@@ -495,78 +588,16 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       const targetPath = path || state.currentImagePath;
       if (!targetPath) return;
 
-      const pendingEdit =
-        state.pendingEditsByPath[targetPath] ??
-        (state.currentImagePath === targetPath
-          ? {
-              rotationDegrees: state.rotation,
-              cropRect: cloneCropRect(state.cropRect),
-              pendingCropPreview: cloneCropRect(state.pendingCropPreview),
-              updatedAt: Date.now(),
-              history: [],
-            }
-          : undefined);
+      const pendingEdit = getPendingEditForCommit(state, targetPath);
       if (!pendingEdit || !hasPendingEdit(pendingEdit)) return;
 
       try {
-        const { confirm } = await import('@tauri-apps/plugin-dialog');
-        const { overwriteWithCrop, saveRotatedImage } = await import('../services/tauriCommands');
-
-        if (pendingEdit.cropRect) {
-          const fileName = targetPath.replace(/\\/g, '/').split('/').pop() || targetPath;
-          const confirmed = await confirm(
-            `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
-            {
-              title: 'Overwrite Cropped Image',
-              kind: 'warning',
-            }
-          );
-          if (!confirmed) {
-            return;
-          }
-
-          const activeImage = document.querySelector(
-            '.image-canvas img'
-          ) as HTMLImageElement | null;
-          const imageWidth = activeImage?.naturalWidth ?? activeImage?.width ?? 0;
-          const imageHeight = activeImage?.naturalHeight ?? activeImage?.height ?? 0;
-
-          if (imageWidth <= 0 || imageHeight <= 0) {
-            throw new Error('Unable to determine image dimensions for pending crop save.');
-          }
-
-          await overwriteWithCrop(
-            targetPath,
-            normalizedToIntegerPixelRect(pendingEdit.cropRect, imageWidth, imageHeight),
-            pendingEdit.rotationDegrees
-          );
-        } else if (pendingEdit.rotationDegrees !== 0) {
-          await saveRotatedImage(targetPath, pendingEdit.rotationDegrees);
-        }
+        const didCommit = await savePendingEdit(targetPath, pendingEdit);
+        if (!didCommit) return;
 
         invalidateImageAsset(targetPath);
         invalidateThumbnail(targetPath);
-
-        set((currentState) => {
-          const nextPendingEdits = { ...currentState.pendingEditsByPath };
-          delete nextPendingEdits[targetPath];
-
-          if (currentState.currentImagePath !== targetPath) {
-            return {
-              pendingEditsByPath: nextPendingEdits,
-            };
-          }
-
-          return {
-            pendingEditsByPath: nextPendingEdits,
-            rotation: 0,
-            cropRect: null,
-            pendingCropPreview: null,
-            isCropMode: false,
-            cacheBuster: Date.now(),
-            errorMessage: null,
-          };
-        });
+        set((currentState) => getCommittedEditState(currentState, targetPath));
       } catch (err) {
         set({ errorMessage: `Failed to save edits: ${err}` });
       }

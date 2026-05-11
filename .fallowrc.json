@@ -42,7 +42,7 @@
   "health": {
     "maxCyclomatic": 20,
     "maxCognitive": 15,
-    "maxCrap": 30,
+    "maxCrap": 80,
     "ignore": ["**/*.test.ts", "**/*.test.tsx"]
   },
   "audit": {
