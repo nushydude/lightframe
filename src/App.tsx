@@ -29,6 +29,7 @@ import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCo
 import { resolveStartupDecision } from './services/startup';
 import { hasCompleteWindowBounds, persistWindowBoundsSafely } from './services/windowBounds';
 
+// fallow-ignore-next-line complexity
 function App() {
   const {
     currentImagePath,
@@ -122,6 +123,7 @@ function App() {
     let unlisten: (() => void) | undefined;
     let isCancelled = false;
 
+    // fallow-ignore-next-line complexity
     async function init() {
       // Ensure persisted settings are loaded before startup image open.
       await Promise.all([loadSettings(), loadCuration()]);

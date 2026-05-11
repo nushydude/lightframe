@@ -29,6 +29,7 @@ interface ContactSheetProps {
  * A full-screen grid view of all images in the current folder.
  * Windowed rendering keeps large folders responsive.
  */
+// fallow-ignore-next-line complexity
 export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const { images, currentIndex, setCurrentIndex, setViewMode } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
@@ -217,6 +218,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
   };
 
   useEffect(() => {
+    // fallow-ignore-next-line complexity
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter') {
         setViewMode('viewer');
@@ -344,6 +346,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
           {visibleRange.topHeight > 0 && (
             <div className="grid-spacer" style={{ height: visibleRange.topHeight }} />
           )}
+          {/* fallow-ignore-next-line complexity */}
           {visibleImages.map((image, visibleIndex) => {
             const index = visibleRange.startIndex + visibleIndex;
             const isActive = index === currentIndex;

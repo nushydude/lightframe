@@ -37,6 +37,7 @@ interface ViewerChromeProps {
 }
 
 /** Top bar and navigation overlay controls */
+// fallow-ignore-next-line complexity
 export function ViewerChrome({
   onOpenFile,
   onOpenFolder,

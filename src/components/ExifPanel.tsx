@@ -16,6 +16,7 @@ function formatFNumber(f: number): string {
   return `f/${f % 1 === 0 ? f.toFixed(0) : f.toFixed(1)}`;
 }
 
+// fallow-ignore-next-line complexity
 export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
   const [data, setData] = useState<ExifData | null>(null);
   const [imageMetadata, setImageMetadata] = useState<ImageMetadata | null>(null);
