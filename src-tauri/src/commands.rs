@@ -471,6 +471,27 @@ fn apply_rotation(
     Ok(rotated)
 }
 
+fn write_cropped_image(
+    cropped: &image::RgbaImage,
+    output_path: &Path,
+    error_prefix: &str,
+) -> Result<(), String> {
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    let write_result = if matches!(extension.as_str(), "jpg" | "jpeg") {
+        image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(cropped.clone()).to_rgb8())
+            .save(output_path)
+    } else {
+        cropped.save(output_path)
+    };
+
+    write_result.map_err(|e| format!("{}: {}", error_prefix, e))
+}
+
 fn save_cropped_copy_blocking(
     file_path: String,
     crop_rect: CropRect,
@@ -530,7 +551,122 @@ fn save_cropped_copy_blocking(
     )
     .to_image();
 
-    cropped.save(output_path_ref).map_err(|e| format!("Failed to save cropped copy: {}", e))?;
+    write_cropped_image(&cropped, output_path_ref, "Failed to save cropped copy")?;
+
+    Ok(())
+}
+
+fn build_crop_temp_path(source_path: &Path) -> Result<PathBuf, String> {
+    build_unique_sibling_path(source_path, "lightframe-crop")
+}
+
+fn build_unique_sibling_path(source_path: &Path, label: &str) -> Result<PathBuf, String> {
+    let parent_dir = source_path
+        .parent()
+        .ok_or_else(|| "Source path must include a parent directory".to_string())?;
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Source file name is invalid".to_string())?;
+    let extension = source_path.extension().and_then(|value| value.to_str()).unwrap_or("img");
+    let unique_suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    let mut attempt = 0_u32;
+    loop {
+        let candidate = parent_dir
+            .join(format!("{}.{}-{}-{}.{}", stem, label, unique_suffix, attempt, extension));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        attempt = attempt.saturating_add(1);
+    }
+}
+
+fn replace_file_safely(temp_path: &Path, destination_path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let backup_path = build_unique_sibling_path(destination_path, "lightframe-backup")?;
+
+        fs::rename(destination_path, &backup_path)
+            .map_err(|e| format!("Failed to stage original file for replacement: {}", e))?;
+
+        match fs::rename(temp_path, destination_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup_path);
+                Ok(())
+            }
+            Err(err) => {
+                let _ = fs::rename(&backup_path, destination_path);
+                let _ = fs::remove_file(temp_path);
+                Err(format!("Failed to replace original image: {}", err))
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::rename(temp_path, destination_path)
+            .map_err(|e| format!("Failed to replace original image: {}", e))
+    }
+}
+
+fn overwrite_with_crop_blocking(
+    file_path: String,
+    crop_rect: CropRect,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    let input_path = Path::new(&file_path);
+    if !input_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let extension = input_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    let img =
+        image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
+    let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
+    let (image_width, image_height) = rotated.dimensions();
+    validate_crop_rect(crop_rect, image_width, image_height)?;
+
+    let cropped = image::imageops::crop_imm(
+        &rotated,
+        crop_rect.x,
+        crop_rect.y,
+        crop_rect.width,
+        crop_rect.height,
+    )
+    .to_image();
+
+    let temp_path = build_crop_temp_path(input_path)?;
+    let metadata = Metadata::new_from_path(input_path).ok();
+
+    if let Err(err) =
+        write_cropped_image(&cropped, &temp_path, "Failed to write temporary cropped image")
+    {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        if let Some(mut current_metadata) = metadata {
+            current_metadata.set_tag(ExifTag::Orientation(vec![1]));
+            if let Err(err) = current_metadata.write_to_file(&temp_path) {
+                eprintln!("Failed to preserve metadata for cropped overwrite: {}", err);
+            }
+        }
+    }
+
+    if let Err(err) = replace_file_safely(&temp_path, input_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
 
     Ok(())
 }
@@ -547,6 +683,19 @@ pub async fn save_cropped_copy(
     })
     .await
     .map_err(|err| format!("Crop copy worker failed: {}", err))?
+}
+
+#[tauri::command]
+pub async fn overwrite_with_crop(
+    file_path: String,
+    crop_rect: CropRect,
+    rotation_degrees: Option<i32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        overwrite_with_crop_blocking(file_path, crop_rect, rotation_degrees)
+    })
+    .await
+    .map_err(|err| format!("Crop overwrite worker failed: {}", err))?
 }
 
 /// Generate a small base64 thumbnail for high-performance navigation
@@ -915,6 +1064,69 @@ mod tests {
 
         assert!(error.contains("already exists"));
         assert_eq!(image::open(&output_path).unwrap().dimensions(), existing.dimensions());
+    }
+
+    #[test]
+    fn test_overwrite_with_crop_blocking_replaces_original_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+
+        image::RgbaImage::from_pixel(120, 90, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        overwrite_with_crop_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 10, y: 15, width: 50, height: 40 },
+            None,
+        )
+        .unwrap();
+
+        let overwritten = image::open(&input_path).unwrap();
+        assert_eq!(overwritten.dimensions(), (50, 40));
+    }
+
+    #[test]
+    fn test_overwrite_with_crop_blocking_invalid_crop_keeps_original_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+
+        image::RgbaImage::from_pixel(120, 90, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let before = image::open(&input_path).unwrap();
+        let error = overwrite_with_crop_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 110, y: 80, width: 20, height: 20 },
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("outside the image bounds"));
+        assert_eq!(image::open(&input_path).unwrap().dimensions(), before.dimensions());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_overwrite_with_crop_blocking_preserves_unrelated_backup_named_file() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("photo.jpg");
+        let unrelated_backup_path = dir.path().join("photo.lightframe-backup");
+        let sentinel = b"keep-this-backup-file";
+
+        image::RgbImage::from_pixel(120, 90, image::Rgb([10, 20, 30])).save(&input_path).unwrap();
+        fs::write(&unrelated_backup_path, sentinel).unwrap();
+
+        overwrite_with_crop_blocking(
+            input_path.to_string_lossy().to_string(),
+            CropRect { x: 10, y: 15, width: 50, height: 40 },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(image::open(&input_path).unwrap().dimensions(), (50, 40));
+        assert_eq!(fs::read(&unrelated_backup_path).unwrap(), sentinel);
     }
 
     #[test]

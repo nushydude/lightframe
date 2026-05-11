@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { message, save } from '@tauri-apps/plugin-dialog';
+import { confirm, message, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
-import { getFileName, openSecondaryWindow, saveCroppedCopy } from '../services/tauriCommands';
+import { getFileName, openSecondaryWindow, overwriteWithCrop, saveCroppedCopy } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
 import {
   canSaveRotationForPath,
@@ -11,6 +11,8 @@ import {
   revealCurrentImage,
 } from '../services/viewerActions';
 import { normalizedToIntegerPixelRect } from '../services/cropMath';
+import { invalidateImageAsset } from '../services/imageAssetCache';
+import { invalidateThumbnail } from '../services/thumbnailCache';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -68,6 +70,7 @@ export function ViewerChrome({
   } = useViewerStore();
 
   const [showExif, setShowExif] = useState(false);
+  const [exifRefreshToken, setExifRefreshToken] = useState(0);
 
   useEffect(() => {
     const handler = () => setShowExif((value) => !value);
@@ -147,6 +150,62 @@ export function ViewerChrome({
     } catch (err) {
       console.error('Failed to save cropped copy:', err);
       await message(`Failed to save cropped copy: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
+  };
+
+  const handleOverwriteCrop = async () => {
+    if (!currentImagePath || !cropRect) {
+      return;
+    }
+
+    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const imageWidth = activeImage?.naturalWidth ?? 0;
+    const imageHeight = activeImage?.naturalHeight ?? 0;
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      await message('Unable to determine image dimensions for crop overwrite.', {
+        title: 'Error',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const confirmed = await confirm(
+      `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
+      {
+        title: 'Overwrite Cropped Image',
+        kind: 'warning',
+      }
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await overwriteWithCrop(
+        currentImagePath,
+        normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight),
+        rotation
+      );
+      invalidateImageAsset(currentImagePath);
+      invalidateThumbnail(currentImagePath);
+      useViewerStore.setState({
+        isCropMode: false,
+        cropRect: null,
+        pendingCropPreview: null,
+        cacheBuster: Date.now(),
+      });
+      setExifRefreshToken((value) => value + 1);
+      await message('Original image updated with the cropped selection.', {
+        title: 'Crop Saved',
+        kind: 'info',
+      });
+    } catch (err) {
+      console.error('Failed to overwrite cropped image:', err);
+      await message(`Failed to overwrite cropped image: ${err}`, {
         title: 'Error',
         kind: 'error',
       });
@@ -335,7 +394,11 @@ export function ViewerChrome({
       </div>
 
       {showExif && currentImagePath && (
-        <ExifPanel filePath={currentImagePath} onClose={() => setShowExif(false)} />
+        <ExifPanel
+          key={`${currentImagePath}:${exifRefreshToken}`}
+          filePath={currentImagePath}
+          onClose={() => setShowExif(false)}
+        />
       )}
 
       {images.length > 1 && (
@@ -537,6 +600,18 @@ export function ViewerChrome({
                 disabled={!cropRect}
               >
                 Save Copy
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn"
+                onClick={() => void handleOverwriteCrop()}
+                title="Overwrite original with crop"
+                aria-label="Overwrite original with crop"
+                id="btn-crop-overwrite"
+                disabled={!cropRect}
+              >
+                Overwrite
               </button>
             )}
           </>

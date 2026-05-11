@@ -83,6 +83,15 @@ export async function saveCroppedCopy(
   return invoke('save_cropped_copy', { filePath, cropRect, outputPath, rotationDegrees });
 }
 
+/** Overwrite an image with a cropped version after explicit confirmation */
+export async function overwriteWithCrop(
+  filePath: string,
+  cropRect: CropRect,
+  rotationDegrees?: number
+): Promise<void> {
+  return invoke('overwrite_with_crop', { filePath, cropRect, rotationDegrees });
+}
+
 /** Get a small base64 thumbnail for an image */
 export async function getThumbnail(
   filePath: string,

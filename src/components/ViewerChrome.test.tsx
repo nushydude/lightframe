@@ -3,7 +3,7 @@ import { ViewerChrome } from './ViewerChrome';
 import { useViewerStore } from '../state/viewerStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { save } from '@tauri-apps/plugin-dialog';
+import { confirm, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
 
 describe('ViewerChrome', () => {
@@ -151,5 +151,86 @@ describe('ViewerChrome', () => {
     });
 
     expect(saveCopySpy).not.toHaveBeenCalled();
+  });
+
+  it('does not call overwrite command when overwrite confirmation is canceled', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      isCropMode: true,
+      cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+    });
+    vi.mocked(confirm).mockResolvedValue(false);
+    const overwriteSpy = vi.spyOn(tauriCommands, 'overwriteWithCrop');
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Overwrite original with crop'));
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('photo.jpg'),
+      expect.objectContaining({
+        title: 'Overwrite Cropped Image',
+        kind: 'warning',
+      })
+    );
+    expect(vi.mocked(confirm).mock.calls[0]?.[0]).toContain('This modifies the source file.');
+    expect(overwriteSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the metadata panel after a successful crop overwrite', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      isCropMode: true,
+      cropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+    });
+    vi.mocked(confirm).mockResolvedValue(true);
+    vi.spyOn(tauriCommands, 'overwriteWithCrop').mockResolvedValue(undefined);
+    vi.spyOn(tauriCommands, 'getImageMetadata').mockResolvedValue({
+      width: 1200,
+      height: 800,
+      file_size_bytes: 1000,
+      format: 'JPEG',
+    });
+    vi.spyOn(tauriCommands, 'getExifMetadata').mockResolvedValue({ raw: {} });
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Toggle image info panel'));
+    });
+
+    await waitFor(() => {
+      expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(1);
+      expect(tauriCommands.getExifMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Overwrite original with crop'));
+    });
+
+    await waitFor(() => {
+      expect(tauriCommands.overwriteWithCrop).toHaveBeenCalledTimes(1);
+      expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(2);
+      expect(tauriCommands.getExifMetadata).toHaveBeenCalledTimes(2);
+    });
   });
 });
