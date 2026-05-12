@@ -33,8 +33,7 @@ interface ContactSheetProps {
  */
 // fallow-ignore-next-line complexity
 export function ContactSheet({ onGoHome }: ContactSheetProps) {
-  const { images, currentIndex, setCurrentIndex, setViewMode, setShowSettings } =
-    useViewerStore();
+  const { images, currentIndex, setCurrentIndex, setViewMode, setShowSettings } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const [scrollTop, setScrollTop] = useState(0);

@@ -1874,7 +1874,8 @@ body,
 
 .exif-panel--with-thumbnails {
   max-height: calc(
-    100% - var(--top-bar-safe-height) - var(--thumbnail-strip-height) - var(--bottom-controls-safe-height) - 56px
+    100% - var(--top-bar-safe-height) - var(--thumbnail-strip-height) -
+      var(--bottom-controls-safe-height) - 56px
   );
 }
 

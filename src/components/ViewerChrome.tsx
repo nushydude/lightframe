@@ -142,9 +142,9 @@ export function ViewerChrome({
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
-  const [toolbarUsage, setToolbarUsage] = useState<Partial<Record<SecondaryToolbarActionId, number>>>(
-    () => readToolbarUsage()
-  );
+  const [toolbarUsage, setToolbarUsage] = useState<
+    Partial<Record<SecondaryToolbarActionId, number>>
+  >(() => readToolbarUsage());
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
