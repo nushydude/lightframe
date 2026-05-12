@@ -56,6 +56,17 @@ describe('settingsToRust', () => {
       external_editor_label: 'Paint.NET',
     });
   });
+
+  it('maps projector prompt preference to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      promptProjectorGridOnOpen: false,
+    });
+
+    expect(rust).toMatchObject({
+      prompt_projector_grid_on_open: false,
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -110,5 +121,13 @@ describe('settingsFromRust', () => {
 
     expect(settings.externalEditorPath).toBe('C:/Program Files/Paint.NET/paintdotnet.exe');
     expect(settings.externalEditorLabel).toBe('Paint.NET');
+  });
+
+  it('parses projector prompt preference from rust payloads', () => {
+    const settings = settingsFromRust({
+      prompt_projector_grid_on_open: false,
+    });
+
+    expect(settings.promptProjectorGridOnOpen).toBe(false);
   });
 });

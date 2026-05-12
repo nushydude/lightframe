@@ -30,6 +30,7 @@ pub fn run() {
             commands::copy_image_to_folder,
             commands::move_image_to_folder,
             commands::copy_image_to_clipboard,
+            commands::open_in_external_application,
             commands::get_exif_metadata,
             commands::save_rotated_image,
             commands::save_cropped_copy,

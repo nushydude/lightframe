@@ -1,10 +1,24 @@
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { ViewerChrome } from './ViewerChrome';
 import { useViewerStore } from '../state/viewerStore';
+import { useCurationStore } from '../state/curationStore';
+import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
+
+const projectorState = vi.hoisted(() => ({
+  isProjectorOpen: false,
+  refreshProjectorState: vi.fn(),
+}));
+
+vi.mock('../hooks/useProjectorState', () => ({
+  useProjectorState: () => ({
+    isProjectorOpen: projectorState.isProjectorOpen,
+    refreshProjectorState: projectorState.refreshProjectorState,
+  }),
+}));
 
 describe('ViewerChrome', () => {
   const defaultProps = {
@@ -20,8 +34,19 @@ describe('ViewerChrome', () => {
 
   beforeEach(() => {
     useViewerStore.getState().reset();
+    useCurationStore.setState({ curationByPath: {}, isLoaded: false });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        promptProjectorGridOnOpen: true,
+      },
+    }));
+    projectorState.isProjectorOpen = false;
+    projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
     document.body.innerHTML = '';
+    window.localStorage.clear();
   });
 
   it('should not render if no image is open', () => {
@@ -55,6 +80,39 @@ describe('ViewerChrome', () => {
 
     expect(screen.getByText('photo.jpg')).toBeInTheDocument();
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
+  });
+
+  it('shows only a star for favorites without a rating', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    useCurationStore.setState({
+      curationByPath: {
+        'C:/Images/photo.jpg': {
+          path: 'C:/Images/photo.jpg',
+          favorite: true,
+          rating: 0,
+          updated_at: 1,
+        },
+      },
+      isLoaded: true,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const topBarLeft = container.querySelector('.top-bar-left');
+
+    expect(topBarLeft?.textContent).toContain('★');
+    expect(topBarLeft?.textContent).not.toContain('0/5');
   });
 
   it('should call onNext when next button is clicked', () => {
@@ -101,11 +159,25 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
+    fireEvent.click(screen.getByLabelText('More actions'));
     const refreshButton = screen.getByLabelText('Refresh folder');
     expect(refreshButton).toBeEnabled();
 
     fireEvent.click(refreshButton);
     expect(defaultProps.onRefreshFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores overflow action usage so the menu can learn over time', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByLabelText('Refresh folder'));
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem('lightframe.toolbar-usage.v1')).toContain('"refresh":1');
+    });
   });
 
   it('shows a disabled compare button when fewer than two images are loaded', () => {
@@ -280,6 +352,7 @@ describe('ViewerChrome', () => {
     render(<ViewerChrome {...defaultProps} />);
 
     await act(async () => {
+      fireEvent.click(screen.getByLabelText('More actions'));
       fireEvent.click(screen.getByLabelText('Toggle image info panel'));
     });
 
@@ -378,5 +451,47 @@ describe('ViewerChrome', () => {
       expect(tauriCommands.overwriteWithCrop).toHaveBeenCalledTimes(1);
       expect(useViewerStore.getState().pendingEditsByPath['C:/Images/photo.jpg']).toBeUndefined();
     });
+  });
+
+  it('prompts to switch to grid view when projector mode opens from viewer mode', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', viewMode: 'viewer' });
+    vi.spyOn(tauriCommands, 'openSecondaryWindow').mockResolvedValue(undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Open projector mode'));
+    });
+
+    expect(await screen.findByRole('dialog', { name: 'Projector mode setup' })).toBeInTheDocument();
+    expect(screen.getByText(/works best with grid view/i)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Grid' }));
+    });
+
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+  });
+
+  it('skips the projector grid prompt when the preference is disabled', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', viewMode: 'viewer' });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        promptProjectorGridOnOpen: false,
+      },
+    }));
+    vi.spyOn(tauriCommands, 'openSecondaryWindow').mockResolvedValue(undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Open projector mode'));
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Projector mode setup' })).not.toBeInTheDocument();
   });
 });

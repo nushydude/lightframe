@@ -8,7 +8,9 @@ import {
   invalidateThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
+import { closeSecondaryWindow } from '../services/tauriCommands';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
+import { useProjectorState } from '../hooks/useProjectorState';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
 import { showTransferResultMessage, transferImagesToDestination } from '../services/viewerActions';
@@ -31,7 +33,8 @@ interface ContactSheetProps {
  */
 // fallow-ignore-next-line complexity
 export function ContactSheet({ onGoHome }: ContactSheetProps) {
-  const { images, currentIndex, setCurrentIndex, setViewMode } = useViewerStore();
+  const { images, currentIndex, setCurrentIndex, setViewMode, setShowSettings } =
+    useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const [scrollTop, setScrollTop] = useState(0);
@@ -39,6 +42,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
   const [columns, setColumns] = useState(1);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -159,6 +163,10 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     setViewMode('viewer');
   };
 
+  const handleSelectForProjector = (index: number) => {
+    setCurrentIndex(index);
+  };
+
   const handleGridItemClick = (event: MouseEvent<HTMLDivElement>, index: number, path: string) => {
     if (event.shiftKey && lastSelectedIndex !== null) {
       setSelectedPaths((current) => selectRangePaths(images, lastSelectedIndex, index, current));
@@ -176,6 +184,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
     setSelectedPaths([path]);
     setLastSelectedIndex(index);
+    if (isProjectorOpen) {
+      handleSelectForProjector(index);
+      return;
+    }
+
     handleSelect(index);
   };
 
@@ -215,6 +228,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
       );
     }
     await showTransferResultMessage(result, destination, mode);
+  };
+
+  const handleCloseProjector = async () => {
+    await closeSecondaryWindow();
+    await refreshProjectorState();
   };
 
   useEffect(() => {
@@ -263,8 +281,13 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
         <div className="header-actions">
           <details className="header-menu">
             <summary
-              className="header-btn"
+              className="header-btn has-tooltip"
               aria-label="Copy selected images"
+              data-tooltip={
+                quickDestinations.length > 0
+                  ? 'Copy selected images'
+                  : 'Add quick destinations in Settings'
+              }
               title={
                 quickDestinations.length > 0
                   ? 'Copy selected images'
@@ -275,7 +298,18 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             </summary>
             <div className="header-menu-panel">
               {quickDestinations.length === 0 ? (
-                <span className="header-menu-empty">No destinations configured</span>
+                <>
+                  <span className="header-menu-empty">
+                    No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+                  </span>
+                  <button
+                    className="header-menu-item"
+                    onClick={() => setShowSettings(true)}
+                    type="button"
+                  >
+                    Open Settings
+                  </button>
+                </>
               ) : (
                 quickDestinations.map((destination) => (
                   <button
@@ -291,8 +325,13 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
           </details>
           <details className="header-menu">
             <summary
-              className="header-btn"
+              className="header-btn has-tooltip"
               aria-label="Move selected images"
+              data-tooltip={
+                quickDestinations.length > 0
+                  ? 'Move selected images'
+                  : 'Add quick destinations in Settings'
+              }
               title={
                 quickDestinations.length > 0
                   ? 'Move selected images'
@@ -303,7 +342,18 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             </summary>
             <div className="header-menu-panel">
               {quickDestinations.length === 0 ? (
-                <span className="header-menu-empty">No destinations configured</span>
+                <>
+                  <span className="header-menu-empty">
+                    No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+                  </span>
+                  <button
+                    className="header-menu-item"
+                    onClick={() => setShowSettings(true)}
+                    type="button"
+                  >
+                    Open Settings
+                  </button>
+                </>
               ) : (
                 quickDestinations.map((destination) => (
                   <button
@@ -318,14 +368,26 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             </div>
           </details>
           <button
-            className="header-btn"
+            className="header-btn has-tooltip"
             onClick={onGoHome}
+            data-tooltip="Back to landing page"
             title="Back to landing page"
             aria-label="Back to landing page"
             id="btn-home-grid"
           >
             Home
           </button>
+          {isProjectorOpen && (
+            <button
+              className="header-btn has-tooltip"
+              onClick={() => void handleCloseProjector()}
+              data-tooltip="Close projector mode"
+              title="Close projector mode"
+              aria-label="Close projector mode"
+            >
+              Projector Off
+            </button>
+          )}
           <button
             className="close-btn"
             onClick={() => setViewMode('viewer')}

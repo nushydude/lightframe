@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
@@ -75,6 +76,8 @@ pub struct AppSettings {
     pub sort_order: String,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
+    #[serde(default = "default_prompt_projector_grid_on_open")]
+    pub prompt_projector_grid_on_open: bool,
     #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
     #[serde(default)]
@@ -102,6 +105,10 @@ fn default_show_thumbnails() -> bool {
     true
 }
 
+fn default_prompt_projector_grid_on_open() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
@@ -119,6 +126,7 @@ impl Default for AppSettings {
             window_height: None,
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
+            prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
             quick_destinations: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
@@ -895,6 +903,41 @@ pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || copy_image_to_clipboard_blocking(file_path))
         .await
         .map_err(|err| format!("Clipboard worker failed: {}", err))?
+}
+
+fn open_in_external_application_blocking(
+    file_path: String,
+    application_path: String,
+) -> Result<(), String> {
+    let image_path = Path::new(&file_path);
+    if !image_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let editor_path = Path::new(&application_path);
+    if !editor_path.is_file() {
+        return Err(format!("'{}' is not a valid application", application_path));
+    }
+
+    Command::new(editor_path)
+        .arg(image_path)
+        .spawn()
+        .map_err(|err| format!("Failed to launch external application: {}", err))?;
+
+    Ok(())
+}
+
+/// Open an image in a specific external application
+#[tauri::command]
+pub async fn open_in_external_application(
+    file_path: String,
+    application_path: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_in_external_application_blocking(file_path, application_path)
+    })
+    .await
+    .map_err(|err| format!("Open external application worker failed: {}", err))?
 }
 
 /// Rotate an image file on disk and save it

@@ -1,4 +1,14 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc as tauriConvertFileSrc, invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import {
+  availableMonitors,
+  currentMonitor,
+  PhysicalPosition,
+  PhysicalSize,
+  type Monitor,
+} from '@tauri-apps/api/window';
+import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { ImageFile, ImageMetadata } from '../types/image';
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
@@ -137,10 +147,6 @@ export async function getThumbnail(
   return invoke<string>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
 }
 
-import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { emit } from '@tauri-apps/api/event';
-
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
 export async function revealInExplorer(filePath: string): Promise<void> {
   return revealItemInDir(filePath);
@@ -151,29 +157,97 @@ export async function openInExternalApplication(
   filePath: string,
   applicationPath: string
 ): Promise<void> {
-  return openPath(filePath, applicationPath);
+  return invoke('open_in_external_application', { filePath, applicationPath });
 }
 
-/** Open a secondary window for Presentation Mode */
+function isSameMonitor(a: Monitor | null, b: Monitor): boolean {
+  return (
+    a?.name === b.name &&
+    a.position.x === b.position.x &&
+    a.position.y === b.position.y &&
+    a.size.width === b.size.width &&
+    a.size.height === b.size.height
+  );
+}
+
+async function getProjectorMonitor(): Promise<Monitor | null> {
+  const monitors = await availableMonitors();
+  if (monitors.length === 0) {
+    return null;
+  }
+
+  if (monitors.length === 1) {
+    return monitors[0] ?? null;
+  }
+
+  const activeMonitor = await currentMonitor();
+  return monitors.find((monitor) => !isSameMonitor(activeMonitor, monitor)) ?? monitors[0] ?? null;
+}
+
+async function positionProjectorWindow(webview: WebviewWindow): Promise<void> {
+  const monitor = await getProjectorMonitor();
+  if (monitor) {
+    await webview.setPosition(new PhysicalPosition(monitor.position.x, monitor.position.y));
+    await webview.setSize(new PhysicalSize(monitor.size.width, monitor.size.height));
+  }
+
+  await webview.show();
+  await webview.setFocus();
+  await webview.setFullscreen(true);
+}
+
+function waitForProjectorCreation(webview: WebviewWindow): Promise<void> {
+  return new Promise((resolve, reject) => {
+    void webview.once('tauri://created', () => resolve());
+    void webview.once('tauri://error', (event) => {
+      reject(event.payload instanceof Error ? event.payload : new Error(String(event.payload)));
+    });
+  });
+}
+
+/** Open a secondary window for Projector Mode */
 export async function openSecondaryWindow(): Promise<void> {
   const label = 'secondary';
   try {
+    const existingWebview = await WebviewWindow.getByLabel(label);
+    if (existingWebview) {
+      await positionProjectorWindow(existingWebview);
+      return;
+    }
+
     const webview = new WebviewWindow(label, {
-      title: 'LightFrame — Projector',
+      title: 'LightFrame - Projector',
       width: 800,
       height: 600,
-      visible: true,
-      center: true,
+      visible: false,
+      focus: true,
     });
 
-    void webview.once('tauri://created', () => {});
-
-    void webview.once('tauri://error', (e) => {
-      console.error('Failed to create secondary window:', e);
-    });
+    await waitForProjectorCreation(webview);
+    await positionProjectorWindow(webview);
   } catch (err) {
     console.error('Secondary window error:', err);
+    throw err;
   }
+}
+
+export async function isSecondaryWindowOpen(): Promise<boolean> {
+  return (await WebviewWindow.getByLabel('secondary')) !== null;
+}
+
+export async function closeSecondaryWindow(): Promise<void> {
+  const webview = await WebviewWindow.getByLabel('secondary');
+  if (!webview) {
+    return;
+  }
+
+  try {
+    await webview.setFullscreen(false);
+  } catch (err) {
+    console.warn('Failed to exit fullscreen before closing projector window:', err);
+  }
+
+  await webview.close();
 }
 
 /** Emit a sync event to update secondary windows */
@@ -196,8 +270,6 @@ export async function openSettings(): Promise<void> {
 export async function openUrlExternal(url: string): Promise<void> {
   return openUrl(url);
 }
-
-import { convertFileSrc as tauriConvertFileSrc } from '@tauri-apps/api/core';
 
 /** Convert a local file path to a Tauri asset protocol URL */
 export function convertFileSrc(path: string): string {
