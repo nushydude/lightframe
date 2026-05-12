@@ -6,6 +6,7 @@ interface ExifPanelProps {
   filePath: string;
   onClose: () => void;
   hasThumbnails?: boolean;
+  refreshToken?: number;
 }
 
 interface ExifRow {
@@ -18,11 +19,17 @@ function formatFNumber(f: number): string {
 }
 
 // fallow-ignore-next-line complexity
-export function ExifPanel({ filePath, onClose, hasThumbnails = false }: ExifPanelProps) {
+export function ExifPanel({
+  filePath,
+  onClose,
+  hasThumbnails = false,
+  refreshToken = 0,
+}: ExifPanelProps) {
   const [data, setData] = useState<ExifData | null>(null);
   const [imageMetadata, setImageMetadata] = useState<ImageMetadata | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showLoadingIndicator, setShowLoadingIndicator] = useState(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const requestIdRef = useRef(0);
 
@@ -31,9 +38,14 @@ export function ExifPanel({ filePath, onClose, hasThumbnails = false }: ExifPane
     requestIdRef.current = requestId;
 
     setLoading(true);
-    setData(null);
-    setImageMetadata(null);
+    setShowLoadingIndicator(false);
     setError(null);
+
+    const loadingIndicatorTimer = window.setTimeout(() => {
+      if (requestIdRef.current === requestId) {
+        setShowLoadingIndicator(true);
+      }
+    }, 500);
 
     void Promise.allSettled([getExifMetadata(filePath), getImageMetadata(filePath)])
       .then(([exifResult, metadataResult]) => {
@@ -58,9 +70,14 @@ export function ExifPanel({ filePath, onClose, hasThumbnails = false }: ExifPane
       .finally(() => {
         if (requestIdRef.current === requestId) {
           setLoading(false);
+          setShowLoadingIndicator(false);
         }
       });
-  }, [filePath]);
+
+    return () => {
+      window.clearTimeout(loadingIndicatorTimer);
+    };
+  }, [filePath, refreshToken]);
 
   const primaryRows: ExifRow[] = data
     ? ([
@@ -116,8 +133,8 @@ export function ExifPanel({ filePath, onClose, hasThumbnails = false }: ExifPane
       </div>
 
       <div className="exif-panel-body">
-        {loading && (
-          <div className="exif-loading">
+        {loading && showLoadingIndicator && (
+          <div className={`exif-loading ${data || imageMetadata ? 'exif-loading--inline' : ''}`}>
             <div className="exif-spinner" />
             <span>Reading metadata…</span>
           </div>
@@ -130,7 +147,7 @@ export function ExifPanel({ filePath, onClose, hasThumbnails = false }: ExifPane
           </div>
         )}
 
-        {!loading && data && (
+        {data && (
           <>
             {fileRows.length > 0 && (
               <section className="exif-section">
