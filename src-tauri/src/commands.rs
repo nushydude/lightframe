@@ -79,6 +79,8 @@ pub struct AppSettings {
     #[serde(default = "default_prompt_projector_grid_on_open")]
     pub prompt_projector_grid_on_open: bool,
     #[serde(default)]
+    pub open_projector_in_grid_view: bool,
+    #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
     #[serde(default)]
     pub external_editor_path: Option<String>,
@@ -127,6 +129,7 @@ impl Default for AppSettings {
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
             prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
+            open_projector_in_grid_view: false,
             quick_destinations: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
@@ -2032,6 +2035,7 @@ mod tests {
         assert_eq!(settings.window_y, None);
         assert_eq!(settings.window_width, None);
         assert_eq!(settings.window_height, None);
+        assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);
     }
