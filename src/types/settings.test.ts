@@ -32,6 +32,41 @@ describe('settingsToRust', () => {
       window_height: undefined,
     });
   });
+
+  it('maps quick destinations to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      quickDestinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' }],
+    });
+
+    expect(rust).toMatchObject({
+      quick_destinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' }],
+    });
+  });
+
+  it('maps external editor settings to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      externalEditorPath: 'C:/Program Files/Paint.NET/paintdotnet.exe',
+      externalEditorLabel: 'Paint.NET',
+    });
+
+    expect(rust).toMatchObject({
+      external_editor_path: 'C:/Program Files/Paint.NET/paintdotnet.exe',
+      external_editor_label: 'Paint.NET',
+    });
+  });
+
+  it('maps projector prompt preference to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      promptProjectorGridOnOpen: false,
+    });
+
+    expect(rust).toMatchObject({
+      prompt_projector_grid_on_open: false,
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -63,5 +98,36 @@ describe('settingsFromRust', () => {
     expect(settings.windowY).toBeUndefined();
     expect(settings.windowWidth).toBeUndefined();
     expect(settings.windowHeight).toBeUndefined();
+  });
+
+  it('parses quick destinations from rust payloads and filters invalid entries', () => {
+    const settings = settingsFromRust({
+      quick_destinations: [
+        { id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' },
+        { id: '', label: 'Broken', path: 'D:/Broken' },
+      ],
+    });
+
+    expect(settings.quickDestinations).toEqual([
+      { id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' },
+    ]);
+  });
+
+  it('parses external editor settings from rust payloads', () => {
+    const settings = settingsFromRust({
+      external_editor_path: 'C:/Program Files/Paint.NET/paintdotnet.exe',
+      external_editor_label: 'Paint.NET',
+    });
+
+    expect(settings.externalEditorPath).toBe('C:/Program Files/Paint.NET/paintdotnet.exe');
+    expect(settings.externalEditorLabel).toBe('Paint.NET');
+  });
+
+  it('parses projector prompt preference from rust payloads', () => {
+    const settings = settingsFromRust({
+      prompt_projector_grid_on_open: false,
+    });
+
+    expect(settings.promptProjectorGridOnOpen).toBe(false);
   });
 });

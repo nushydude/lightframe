@@ -7,6 +7,7 @@ import { revealCurrentImage } from '../services/viewerActions';
 
 interface KeyboardHandlers {
   openFilePicker: () => void;
+  openCurrentImageInEditor: () => void | Promise<void>;
   goNext: (loop?: boolean) => boolean;
   goPrev: (loop?: boolean) => boolean;
   goFirst: () => void;
@@ -16,6 +17,8 @@ interface KeyboardHandlers {
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
   openCommandPalette: () => void;
+  toggleFavoriteCurrent: () => void;
+  setRatingCurrent: (rating: number) => void;
 }
 
 /** Hook for handling all keyboard shortcuts */
@@ -40,11 +43,16 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     updateCropRect,
     applyCropPreview,
     exitCropMode,
+    exitCompareMode,
+    switchCompareFocus,
+    moveCompareFocusedCandidate,
+    promoteFocusedComparePane,
   } = useViewerStore();
 
   const settings = useSettingsStore((s) => s.settings);
 
   const handleKeyDown = useCallback(
+    // fallow-ignore-next-line complexity
     async (e: KeyboardEvent) => {
       // Don't handle shortcuts when typing in inputs
       const target = e.target as HTMLElement;
@@ -60,6 +68,15 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.ctrlKey && e.key === 'o') {
         e.preventDefault();
         handlers.openFilePicker();
+        return;
+      }
+
+      // Ctrl + E: Open in configured external editor
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault();
+        if (currentImagePath) {
+          void handlers.openCurrentImageInEditor();
+        }
         return;
       }
 
@@ -125,6 +142,38 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
           updateCropRect(
             nudgeCropRectInDirection(cropRect, e.key, stepPx, imageWidth, imageHeight)
           );
+          return;
+        }
+      }
+
+      if (viewMode === 'compare') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          exitCompareMode();
+          return;
+        }
+
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          switchCompareFocus();
+          return;
+        }
+
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          moveCompareFocusedCandidate(-1);
+          return;
+        }
+
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          moveCompareFocusedCandidate(1);
+          return;
+        }
+
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          promoteFocusedComparePane();
           return;
         }
       }
@@ -198,6 +247,24 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if ((e.key === 'g' || e.key === 'G') && currentImagePath) {
         e.preventDefault();
         setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer');
+        return;
+      }
+
+      // F: Toggle favorite
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        if (currentImagePath) {
+          handlers.toggleFavoriteCurrent();
+        }
+        return;
+      }
+
+      // Alt + 0..5: Set image rating
+      if (!e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && /^[0-5]$/.test(e.key)) {
+        e.preventDefault();
+        if (currentImagePath) {
+          handlers.setRatingCurrent(Number(e.key));
+        }
         return;
       }
 
@@ -315,6 +382,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       updateCropRect,
       applyCropPreview,
       exitCropMode,
+      exitCompareMode,
+      switchCompareFocus,
+      moveCompareFocusedCandidate,
+      promoteFocusedComparePane,
     ]
   );
 

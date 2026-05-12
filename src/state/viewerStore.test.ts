@@ -313,4 +313,100 @@ describe('viewerStore', () => {
       nowSpy.mockRestore();
     }
   });
+
+  it('enters compare mode using current image as primary and adjacent image as secondary', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 1,
+      currentImagePath: '2.jpg',
+    });
+
+    const didEnter = useViewerStore.getState().enterCompareMode();
+    expect(didEnter).toBe(true);
+
+    const state = useViewerStore.getState();
+    expect(state.viewMode).toBe('compare');
+    expect(state.comparePrimaryIndex).toBe(1);
+    expect(state.compareSecondaryIndex).toBe(2);
+    expect(state.compareFocusedPane).toBe('secondary');
+  });
+
+  it('blocks compare mode for single-image folders', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+    });
+
+    const didEnter = useViewerStore.getState().enterCompareMode();
+    expect(didEnter).toBe(false);
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+  });
+
+  it('navigates compare candidates, promotes focused pane, and exits compare mode', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 1,
+      currentImagePath: '2.jpg',
+    });
+    useViewerStore.getState().enterCompareMode();
+
+    useViewerStore.getState().switchCompareFocus();
+    expect(useViewerStore.getState().compareFocusedPane).toBe('primary');
+
+    expect(useViewerStore.getState().moveCompareFocusedCandidate(-1)).toBe(true);
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(0);
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+
+    useViewerStore.getState().switchCompareFocus();
+    expect(useViewerStore.getState().compareFocusedPane).toBe('secondary');
+
+    expect(useViewerStore.getState().promoteFocusedComparePane()).toBe(true);
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(2);
+    expect(useViewerStore.getState().compareSecondaryIndex).toBe(0);
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+
+    useViewerStore.getState().exitCompareMode();
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+    expect(useViewerStore.getState().currentImagePath).toBe('3.jpg');
+  });
+
+  it('keeps compare indices valid as the image list changes', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 1,
+      currentImagePath: '2.jpg',
+    });
+    useViewerStore.getState().enterCompareMode();
+
+    useViewerStore.getState().setImages([
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(1);
+    expect(useViewerStore.getState().compareSecondaryIndex).toBe(0);
+
+    useViewerStore
+      .getState()
+      .setImages([
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ]);
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().compareSecondaryIndex).toBe(-1);
+  });
 });

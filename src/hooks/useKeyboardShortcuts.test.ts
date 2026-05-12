@@ -6,6 +6,7 @@ import { useViewerStore } from '../state/viewerStore';
 describe('useKeyboardShortcuts', () => {
   const handlers = {
     openFilePicker: vi.fn(),
+    openCurrentImageInEditor: vi.fn(),
     goNext: vi.fn(() => true),
     goPrev: vi.fn(() => true),
     goFirst: vi.fn(),
@@ -15,6 +16,8 @@ describe('useKeyboardShortcuts', () => {
     stopSlideshow: vi.fn(),
     toggleSlideshowPause: vi.fn(),
     openCommandPalette: vi.fn(),
+    toggleFavoriteCurrent: vi.fn(),
+    setRatingCurrent: vi.fn(),
   };
 
   beforeEach(() => {
@@ -70,6 +73,23 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.openCommandPalette).toHaveBeenCalledTimes(1);
   });
 
+  it('opens the configured external editor on Ctrl+E', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'e',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.openCurrentImageInEditor).toHaveBeenCalledTimes(1);
+  });
+
   it('nudges crop rect and previews it with keyboard while crop mode is active', () => {
     const image = document.createElement('img');
     image.className = 'image-canvas';
@@ -106,5 +126,104 @@ describe('useKeyboardShortcuts', () => {
 
     expect(useViewerStore.getState().isCropMode).toBe(false);
     expect(useViewerStore.getState().pendingCropPreview).not.toBeNull();
+  });
+
+  it('toggles favorite with F and sets rating with Alt+number', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const favoriteEvent = new KeyboardEvent('keydown', {
+      key: 'f',
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(favoriteEvent);
+    });
+    expect(favoriteEvent.defaultPrevented).toBe(true);
+    expect(handlers.toggleFavoriteCurrent).toHaveBeenCalledTimes(1);
+
+    const ratingEvent = new KeyboardEvent('keydown', {
+      key: '4',
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(ratingEvent);
+    });
+    expect(ratingEvent.defaultPrevented).toBe(true);
+    expect(handlers.setRatingCurrent).toHaveBeenCalledWith(4);
+  });
+
+  it('handles compare mode keyboard controls', () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'c:/test/a.jpg',
+          file_name: 'a',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+        {
+          path: 'c:/test/b.jpg',
+          file_name: 'b',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+        {
+          path: 'c:/test/c.jpg',
+          file_name: 'c',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+      ],
+      currentIndex: 1,
+      currentImagePath: 'c:/test/b.jpg',
+    });
+    useViewerStore.getState().enterCompareMode();
+
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().compareFocusedPane).toBe('primary');
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(0);
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().compareFocusedPane).toBe('secondary');
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().comparePrimaryIndex).toBe(2);
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+    expect(useViewerStore.getState().compareSecondaryIndex).toBe(0);
+    expect(useViewerStore.getState().compareFocusedPane).toBe('primary');
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+    });
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
   });
 });

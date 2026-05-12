@@ -45,6 +45,26 @@ describe('thumbnailCache', () => {
     clearThumbnailCacheForTests();
   });
 
+  it('treats known fallback data URLs as cacheable thumbnail results', async () => {
+    const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
+      await loadThumbnailCacheModule();
+
+    const request = { path: 'C:/images/unsupported.heic', sizeBytes: 128, modifiedAt: '42' };
+    getThumbnailMock.mockResolvedValueOnce('data:image/svg+xml;base64,FALLBACK');
+
+    const first = await loadThumbnail(request);
+    const cached = getCachedThumbnail(request);
+    const second = await loadThumbnail(request);
+
+    expect(first).toBe('data:image/svg+xml;base64,FALLBACK');
+    expect(cached).toBe('data:image/svg+xml;base64,FALLBACK');
+    expect(second).toBe('data:image/svg+xml;base64,FALLBACK');
+    expect(getThumbnailMock).toHaveBeenCalledTimes(1);
+    expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/unsupported.heic', 128, '42');
+
+    clearThumbnailCacheForTests();
+  });
+
   it('reuses cached thumbnails for identical structured requests', async () => {
     const { clearThumbnailCacheForTests, loadThumbnail } = await loadThumbnailCacheModule();
     getThumbnailMock.mockResolvedValueOnce('data:image/jpeg;base64,STRUCTURED');

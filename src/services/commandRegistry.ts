@@ -22,10 +22,12 @@ interface CreateViewerCommandsOptions {
   toggleFullscreen: () => Promise<void>;
   saveRotation: () => Promise<void>;
   revealCurrentImage: () => Promise<void>;
+  openCurrentImageInEditor: () => Promise<void>;
   copyCurrentImage: () => Promise<void>;
   deleteCurrentImage: () => Promise<void>;
   enterCropMode: () => void;
   startSlideshow: () => void;
+  toggleCompareMode: () => void;
 }
 
 export function createViewerCommands(options: CreateViewerCommandsOptions): ViewerCommand[] {
@@ -152,6 +154,13 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       },
     },
     {
+      id: 'toggle-compare',
+      label: 'Toggle Compare View',
+      keywords: ['compare', 'side-by-side', 'review'],
+      isEnabled: (state) => state.images.length > 1 && Boolean(state.currentImagePath),
+      run: () => options.toggleCompareMode(),
+    },
+    {
       id: 'toggle-settings',
       label: 'Toggle Settings',
       keywords: ['settings', 'preferences'],
@@ -171,6 +180,14 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       run: () => options.revealCurrentImage(),
     },
     {
+      id: 'open-in-editor',
+      label: 'Open in External Editor',
+      keywords: ['edit', 'external', 'editor', 'paint', 'retouch'],
+      shortcut: 'Ctrl+E',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => options.openCurrentImageInEditor(),
+    },
+    {
       id: 'copy-to-clipboard',
       label: 'Copy to Clipboard',
       keywords: ['copy', 'clipboard'],
@@ -188,7 +205,8 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       id: 'crop-image',
       label: 'Crop Image',
       keywords: ['crop', 'edit', 'trim'],
-      isEnabled: (state) => Boolean(state.currentImagePath) && state.rotation === 0,
+      isEnabled: (state) =>
+        Boolean(state.currentImagePath) && state.rotation === 0 && state.viewMode !== 'compare',
       run: () => options.enterCropMode(),
     },
     {

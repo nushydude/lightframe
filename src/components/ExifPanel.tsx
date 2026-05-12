@@ -5,6 +5,8 @@ import type { ImageMetadata } from '../types/image';
 interface ExifPanelProps {
   filePath: string;
   onClose: () => void;
+  hasThumbnails?: boolean;
+  refreshToken?: number;
 }
 
 interface ExifRow {
@@ -16,11 +18,18 @@ function formatFNumber(f: number): string {
   return `f/${f % 1 === 0 ? f.toFixed(0) : f.toFixed(1)}`;
 }
 
-export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
+// fallow-ignore-next-line complexity
+export function ExifPanel({
+  filePath,
+  onClose,
+  hasThumbnails = false,
+  refreshToken = 0,
+}: ExifPanelProps) {
   const [data, setData] = useState<ExifData | null>(null);
   const [imageMetadata, setImageMetadata] = useState<ImageMetadata | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showLoadingIndicator, setShowLoadingIndicator] = useState(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const requestIdRef = useRef(0);
 
@@ -29,9 +38,14 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
     requestIdRef.current = requestId;
 
     setLoading(true);
-    setData(null);
-    setImageMetadata(null);
+    setShowLoadingIndicator(false);
     setError(null);
+
+    const loadingIndicatorTimer = window.setTimeout(() => {
+      if (requestIdRef.current === requestId) {
+        setShowLoadingIndicator(true);
+      }
+    }, 500);
 
     void Promise.allSettled([getExifMetadata(filePath), getImageMetadata(filePath)])
       .then(([exifResult, metadataResult]) => {
@@ -56,9 +70,14 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
       .finally(() => {
         if (requestIdRef.current === requestId) {
           setLoading(false);
+          setShowLoadingIndicator(false);
         }
       });
-  }, [filePath]);
+
+    return () => {
+      window.clearTimeout(loadingIndicatorTimer);
+    };
+  }, [filePath, refreshToken]);
 
   const primaryRows: ExifRow[] = data
     ? ([
@@ -91,11 +110,16 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
         imageMetadata.file_size_bytes >= 0
           ? { label: 'File Size', value: formatFileSize(imageMetadata.file_size_bytes) }
           : null,
+        imageMetadata.support_note ? { label: 'Support', value: imageMetadata.support_note } : null,
       ].filter(Boolean) as ExifRow[])
     : [];
 
   return (
-    <div className="exif-panel" role="complementary" aria-label="Image metadata">
+    <div
+      className={`exif-panel ${hasThumbnails ? 'exif-panel--with-thumbnails' : ''}`}
+      role="complementary"
+      aria-label="Image metadata"
+    >
       <div className="exif-panel-header">
         <span className="exif-panel-title">Image Info</span>
         <button
@@ -109,8 +133,8 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
       </div>
 
       <div className="exif-panel-body">
-        {loading && (
-          <div className="exif-loading">
+        {loading && showLoadingIndicator && (
+          <div className={`exif-loading ${data || imageMetadata ? 'exif-loading--inline' : ''}`}>
             <div className="exif-spinner" />
             <span>Reading metadata…</span>
           </div>
@@ -123,7 +147,7 @@ export function ExifPanel({ filePath, onClose }: ExifPanelProps) {
           </div>
         )}
 
-        {!loading && data && (
+        {data && (
           <>
             {fileRows.length > 0 && (
               <section className="exif-section">

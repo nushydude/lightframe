@@ -6,6 +6,7 @@ import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
 import { ThumbnailStrip } from './components/ThumbnailStrip';
 import { ContactSheet } from './components/ContactSheet';
+import { CompareView } from './components/CompareView';
 import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -15,13 +16,20 @@ import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
+import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
-import { copyCurrentImage, deleteCurrentImage, revealCurrentImage } from './services/viewerActions';
+import {
+  copyCurrentImage,
+  deleteCurrentImage,
+  openCurrentImageInEditor,
+  revealCurrentImage,
+} from './services/viewerActions';
 
 import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
 import { hasCompleteWindowBounds, persistWindowBoundsSafely } from './services/windowBounds';
 
+// fallow-ignore-next-line complexity
 function App() {
   const {
     currentImagePath,
@@ -39,6 +47,9 @@ function App() {
   } = useViewerStore();
 
   const { settings, isLoaded, loadSettings, updateSettings } = useSettingsStore();
+  const loadCuration = useCurationStore((state) => state.loadCuration);
+  const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
+  const setRating = useCurationStore((state) => state.setRating);
 
   const {
     openImage,
@@ -112,9 +123,10 @@ function App() {
     let unlisten: (() => void) | undefined;
     let isCancelled = false;
 
+    // fallow-ignore-next-line complexity
     async function init() {
       // Ensure persisted settings are loaded before startup image open.
-      await loadSettings();
+      await Promise.all([loadSettings(), loadCuration()]);
       if (!isCancelled) {
         const loadedSettings = useSettingsStore.getState().settings;
         const loadedDefaultFitMode = loadedSettings.defaultFitMode;
@@ -170,7 +182,7 @@ function App() {
       isCancelled = true;
       if (unlisten) unlisten();
     };
-  }, [loadSettings, openImage, openImageForStartup, setError]);
+  }, [loadCuration, loadSettings, openImage, openImageForStartup, setError]);
 
   useEffect(() => {
     if (!hasStartupResolved || startupShowAttempted) return;
@@ -377,6 +389,8 @@ function App() {
         toggleFullscreen: handleToggleFullscreen,
         saveRotation: () => useViewerStore.getState().saveRotation(),
         revealCurrentImage: () => revealCurrentImage(useViewerStore.getState().currentImagePath),
+        openCurrentImageInEditor: () =>
+          openCurrentImageInEditor(useViewerStore.getState().currentImagePath),
         copyCurrentImage: () => copyCurrentImage(useViewerStore.getState().currentImagePath),
         deleteCurrentImage: () =>
           deleteCurrentImage({
@@ -392,6 +406,14 @@ function App() {
           state.enterCropMode();
         },
         startSlideshow,
+        toggleCompareMode: () => {
+          const state = useViewerStore.getState();
+          if (state.viewMode === 'compare') {
+            state.exitCompareMode();
+            return;
+          }
+          state.enterCompareMode();
+        },
       }),
     [
       openFilePicker,
@@ -408,6 +430,8 @@ function App() {
   // Register keyboard shortcuts
   useKeyboardShortcuts({
     openFilePicker,
+    openCurrentImageInEditor: () =>
+      openCurrentImageInEditor(useViewerStore.getState().currentImagePath),
     goNext,
     goPrev,
     goFirst,
@@ -417,6 +441,18 @@ function App() {
     stopSlideshow,
     toggleSlideshowPause,
     openCommandPalette: () => setShowCommandPalette(true),
+    toggleFavoriteCurrent: () => {
+      const path = useViewerStore.getState().currentImagePath;
+      if (path) {
+        void toggleFavorite(path);
+      }
+    },
+    setRatingCurrent: (rating) => {
+      const path = useViewerStore.getState().currentImagePath;
+      if (path) {
+        void setRating(path, rating);
+      }
+    },
   });
 
   const { showControls } = useViewerStore();
@@ -477,6 +513,7 @@ function App() {
       ? 'with-thumbnails'
       : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
+    viewMode === 'compare' && !isSecondary ? 'compare-mode' : '',
     isSecondary ? 'secondary-window' : '',
   ]
     .filter(Boolean)
@@ -506,6 +543,20 @@ function App() {
                 onTogglePause={toggleSlideshowPause}
               />
               {settings.showThumbnails && <ThumbnailStrip />}
+            </>
+          ) : viewMode === 'compare' ? (
+            <>
+              <CompareView />
+              <ViewerChrome
+                onOpenFile={openFilePicker}
+                onOpenFolder={openFolderPicker}
+                onRefreshFolder={refreshFolder}
+                onGoHome={handleGoHome}
+                onNext={() => goNext()}
+                onPrev={() => goPrev()}
+                onStartSlideshow={startSlideshow}
+                onTogglePause={toggleSlideshowPause}
+              />
             </>
           ) : (
             <ContactSheet onGoHome={handleGoHome} />

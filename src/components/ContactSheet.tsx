@@ -1,11 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type UIEvent } from 'react';
 import { useViewerStore } from '../state/viewerStore';
+import { useCurationStore } from '../state/curationStore';
+import { useSettingsStore } from '../state/settingsStore';
 import {
   evictThumbnailsExcept,
   getCachedThumbnail,
+  invalidateThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
+import { closeSecondaryWindow } from '../services/tauriCommands';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
+import { useProjectorState } from '../hooks/useProjectorState';
+import { invalidateImageAsset } from '../services/imageAssetCache';
+import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
+import { showTransferResultMessage, transferImagesToDestination } from '../services/viewerActions';
+import type { QuickDestination } from '../types/settings';
 
 const GRID_ITEM_SIZE = 140;
 const GRID_GAP = 20;
@@ -22,11 +31,17 @@ interface ContactSheetProps {
  * A full-screen grid view of all images in the current folder.
  * Windowed rendering keeps large folders responsive.
  */
+// fallow-ignore-next-line complexity
 export function ContactSheet({ onGoHome }: ContactSheetProps) {
-  const { images, currentIndex, setCurrentIndex, setViewMode } = useViewerStore();
+  const { images, currentIndex, setCurrentIndex, setViewMode, setShowSettings } = useViewerStore();
+  const curationByPath = useCurationStore((state) => state.curationByPath);
+  const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [columns, setColumns] = useState(1);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -127,6 +142,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const validPaths = new Set(images.map((image) => image.path));
+    setSelectedPaths((current) => current.filter((path) => validPaths.has(path)));
+  }, [images]);
+
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const nextScrollTop = event.currentTarget.scrollTop;
     if (scrollRafRef.current !== null) return;
@@ -142,7 +162,105 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     setViewMode('viewer');
   };
 
+  const handleSelectForProjector = (index: number) => {
+    setCurrentIndex(index);
+  };
+
+  const handleGridItemClick = (event: MouseEvent<HTMLDivElement>, index: number, path: string) => {
+    if (event.shiftKey && lastSelectedIndex !== null) {
+      setSelectedPaths((current) => selectRangePaths(images, lastSelectedIndex, index, current));
+      setLastSelectedIndex(index);
+      setCurrentIndex(index);
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedPaths((current) => toggleSelectionPath(current, path));
+      setLastSelectedIndex(index);
+      setCurrentIndex(index);
+      return;
+    }
+
+    setSelectedPaths([path]);
+    setLastSelectedIndex(index);
+    if (isProjectorOpen) {
+      handleSelectForProjector(index);
+      return;
+    }
+
+    handleSelect(index);
+  };
+
+  const removeMovedImages = (paths: string[]) => {
+    const state = useViewerStore.getState();
+    const indexByPath = new Map(state.images.map((image, index) => [image.path, index]));
+    const indices = paths
+      .map((path) => {
+        invalidateThumbnail(path);
+        invalidateImageAsset(path);
+        return indexByPath.get(path);
+      })
+      .filter((index): index is number => index !== undefined)
+      .sort((a, b) => b - a);
+
+    for (const index of indices) {
+      useViewerStore.getState().removeImage(index);
+    }
+  };
+
+  const handleBulkTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
+    const targetPaths =
+      selectedPaths.length > 0
+        ? selectedPaths
+        : currentIndex >= 0
+          ? [images[currentIndex].path]
+          : [];
+    if (targetPaths.length === 0) {
+      return;
+    }
+
+    const result = await transferImagesToDestination(targetPaths, destination, mode);
+    if (mode === 'move') {
+      removeMovedImages(result.successes.map((success) => success.sourcePath));
+      setSelectedPaths((current) =>
+        current.filter((path) => !result.successes.some((success) => success.sourcePath === path))
+      );
+    }
+    await showTransferResultMessage(result, destination, mode);
+  };
+
+  const renderQuickDestinationMenu = (mode: 'copy' | 'move') => (
+    <div className="header-menu-panel">
+      {quickDestinations.length === 0 ? (
+        <>
+          <span className="header-menu-empty">
+            No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+          </span>
+          <button className="header-menu-item" onClick={() => setShowSettings(true)} type="button">
+            Open Settings
+          </button>
+        </>
+      ) : (
+        quickDestinations.map((destination) => (
+          <button
+            key={destination.id}
+            className="header-menu-item"
+            onClick={() => void handleBulkTransfer(destination, mode)}
+          >
+            {destination.label}
+          </button>
+        ))
+      )}
+    </div>
+  );
+
+  const handleCloseProjector = async () => {
+    await closeSecondaryWindow();
+    await refreshProjectorState();
+  };
+
   useEffect(() => {
+    // fallow-ignore-next-line complexity
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter') {
         setViewMode('viewer');
@@ -180,17 +298,70 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
         <div className="header-left">
           <h2>Contact Sheet</h2>
           <span className="image-count">{images.length} images</span>
+          {selectedPaths.length > 0 && (
+            <span className="image-count">{selectedPaths.length} selected</span>
+          )}
         </div>
         <div className="header-actions">
+          <details className="header-menu">
+            <summary
+              className="header-btn has-tooltip"
+              aria-label="Copy selected images"
+              data-tooltip={
+                quickDestinations.length > 0
+                  ? 'Copy selected images'
+                  : 'Add quick destinations in Settings'
+              }
+              title={
+                quickDestinations.length > 0
+                  ? 'Copy selected images'
+                  : 'Add quick destinations in settings'
+              }
+            >
+              Copy To
+            </summary>
+            {renderQuickDestinationMenu('copy')}
+          </details>
+          <details className="header-menu">
+            <summary
+              className="header-btn has-tooltip"
+              aria-label="Move selected images"
+              data-tooltip={
+                quickDestinations.length > 0
+                  ? 'Move selected images'
+                  : 'Add quick destinations in Settings'
+              }
+              title={
+                quickDestinations.length > 0
+                  ? 'Move selected images'
+                  : 'Add quick destinations in settings'
+              }
+            >
+              Move To
+            </summary>
+            {renderQuickDestinationMenu('move')}
+          </details>
           <button
-            className="header-btn"
+            className="header-btn has-tooltip"
             onClick={onGoHome}
+            data-tooltip="Back to landing page"
             title="Back to landing page"
             aria-label="Back to landing page"
             id="btn-home-grid"
           >
             Home
           </button>
+          {isProjectorOpen && (
+            <button
+              className="header-btn has-tooltip"
+              onClick={() => void handleCloseProjector()}
+              data-tooltip="Close projector mode"
+              title="Close projector mode"
+              aria-label="Close projector mode"
+            >
+              Projector Off
+            </button>
+          )}
           <button
             className="close-btn"
             onClick={() => setViewMode('viewer')}
@@ -211,6 +382,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
           {visibleRange.topHeight > 0 && (
             <div className="grid-spacer" style={{ height: visibleRange.topHeight }} />
           )}
+          {/* fallow-ignore-next-line complexity */}
           {visibleImages.map((image, visibleIndex) => {
             const index = visibleRange.startIndex + visibleIndex;
             const isActive = index === currentIndex;
@@ -219,15 +391,24 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
               sizeBytes: image.size_bytes,
               modifiedAt: image.modified_at,
             });
+            const curation = curationByPath[image.path];
+            const isFavorite = Boolean(curation?.favorite);
+            const rating = curation?.rating ?? 0;
 
             return (
               <div
                 key={image.path}
-                className={`grid-item ${isActive ? 'active' : ''}`}
-                onClick={() => handleSelect(index)}
+                className={`grid-item ${isActive ? 'active' : ''} ${selectedPaths.includes(image.path) ? 'selected' : ''}`}
+                onClick={(event) => handleGridItemClick(event, index, image.path)}
                 title={image.file_name}
               >
                 <div className="grid-thumbnail-wrapper">
+                  {(isFavorite || rating > 0) && (
+                    <div className="grid-curation-badges" aria-hidden="true">
+                      {isFavorite && <span className="grid-curation-badge favorite">★</span>}
+                      {rating > 0 && <span className="grid-curation-badge rating">{rating}</span>}
+                    </div>
+                  )}
                   {url ? (
                     <img src={url} alt="" draggable={false} />
                   ) : (

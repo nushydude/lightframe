@@ -2,11 +2,15 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "secondary"],
   "permissions": [
     "core:default",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "**", "app": true }]
+    },
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -20,12 +24,15 @@
     "fs:allow-read-file",
     "fs:allow-read-dir",
     "cli:default",
+    "core:window:allow-close",
     "core:window:allow-show",
+    "core:window:allow-set-focus",
     "core:window:allow-set-position",
     "core:window:allow-set-size",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-title",
+    "core:webview:allow-create-webview-window",
     "updater:default",
     "process:allow-restart",
     {
