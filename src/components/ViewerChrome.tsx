@@ -1,1 +1,1160 @@
-import { useEffect, useRef, useState } from 'react';import { getCurrentWindow } from '@tauri-apps/api/window';import { confirm, message, save } from '@tauri-apps/plugin-dialog';import { ExifPanel } from './ExifPanel';import {  closeSecondaryWindow,  getFileName,  openSecondaryWindow,  overwriteWithCrop,  saveCroppedCopy,} from '../services/tauriCommands';import { useViewerStore } from '../state/viewerStore';import {  canSaveRotationForPath,  copyCurrentImage,  deleteCurrentImage,  openCurrentImageInEditor,  revealCurrentImage,  showTransferResultMessage,  transferImagesToDestination,} from '../services/viewerActions';import { normalizedToIntegerPixelRect } from '../services/cropMath';import { invalidateImageAsset } from '../services/imageAssetCache';import { invalidateThumbnail } from '../services/thumbnailCache';import { useProjectorState } from '../hooks/useProjectorState';import { useCurationStore } from '../state/curationStore';import { useSettingsStore } from '../state/settingsStore';import type { QuickDestination } from '../types/settings';interface ViewerChromeProps {  onOpenFile: () => void;  onOpenFolder: () => void;  onRefreshFolder: () => void;  onGoHome: () => void;  onNext: () => void;  onPrev: () => void;  onStartSlideshow: () => void;  onTogglePause: () => void;}type SecondaryToolbarActionId =  | 'copy'  | 'copy-to'  | 'crop'  | 'delete'  | 'edit'  | 'info'  | 'move-to'  | 'projector'  | 'refresh'  | 'reveal'  | 'settings';const TOOLBAR_USAGE_STORAGE_KEY = 'lightframe.toolbar-usage.v1';function readToolbarUsage(): Partial<Record<SecondaryToolbarActionId, number>> {  if (typeof window === 'undefined') {    return {};  }  try {    const raw = window.localStorage.getItem(TOOLBAR_USAGE_STORAGE_KEY);    if (!raw) {      return {};    }    const parsed = JSON.parse(raw) as Record<string, unknown>;    const usage: Partial<Record<SecondaryToolbarActionId, number>> = {};    for (const [key, value] of Object.entries(parsed)) {      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {        usage[key as SecondaryToolbarActionId] = value;      }    }    return usage;  } catch (err) {    console.error('Failed to read toolbar usage:', err);    return {};  }}/** Top bar and navigation overlay controls */// fallow-ignore-next-line complexityexport function ViewerChrome({  onOpenFile,  onOpenFolder,  onRefreshFolder,  onGoHome,  onNext,  onPrev,  onStartSlideshow,  onTogglePause,}: ViewerChromeProps) {  const {    currentImagePath,    images,    currentIndex,    folderPath,    isFullscreen,    isSlideshowActive,    isSlideshowPaused,    zoomMode,    zoomLevel,    isFolderScanning,    setFullscreen,    setShowSettings,    setZoomMode,    zoomIn,    zoomOut,    removeImage,    rotation,    isCropMode,    cropRect,    pendingCropPreview,    pendingEditsByPath,    cropAspectRatio,    viewMode,    setViewMode,    enterCompareMode,    exitCompareMode,    enterCropMode,    exitCropMode,    setCropAspectRatio,    resetCrop,    applyCropPreview,    clearCropPreview,    clearPendingEdits,    commitPendingEdits,  } = useViewerStore();  const curationByPath = useCurationStore((state) => state.curationByPath);  const toggleFavorite = useCurationStore((state) => state.toggleFavorite);  const setRating = useCurationStore((state) => state.setRating);  const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);  const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);  const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);  const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);  const promptProjectorGridOnOpen = useSettingsStore(    (state) => state.settings.promptProjectorGridOnOpen  );  const updateSettings = useSettingsStore((state) => state.updateSettings);  const [showExif, setShowExif] = useState(false);  const [exifRefreshToken, setExifRefreshToken] = useState(0);  const [toolbarUsage, setToolbarUsage] = useState<Partial<Record<SecondaryToolbarActionId, number>>>(    () => readToolbarUsage()  );  const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);  const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);  const { isProjectorOpen, refreshProjectorState } = useProjectorState();  const moreMenuRef = useRef<HTMLDetailsElement | null>(null);  const copyToMenuRef = useRef<HTMLDetailsElement | null>(null);  const moveToMenuRef = useRef<HTMLDetailsElement | null>(null);  useEffect(() => {    const handler = () => setShowExif((value) => !value);    window.addEventListener('toggle-exif', handler);    return () => {      window.removeEventListener('toggle-exif', handler);    };  }, []);  const closeOverflowMenus = () => {    if (copyToMenuRef.current) {      copyToMenuRef.current.open = false;    }    if (moveToMenuRef.current) {      moveToMenuRef.current.open = false;    }    if (moreMenuRef.current) {      moreMenuRef.current.open = false;    }  };  const recordToolbarActionUsage = (actionId: SecondaryToolbarActionId) => {    setToolbarUsage((current) => {      const next = {        ...current,        [actionId]: (current[actionId] ?? 0) + 1,      };      try {        window.localStorage.setItem(TOOLBAR_USAGE_STORAGE_KEY, JSON.stringify(next));      } catch (err) {        console.error('Failed to persist toolbar usage:', err);      }      return next;    });  };  const persistProjectorPromptPreferenceIfNeeded = async () => {    if (!skipProjectorGridPrompt) {      return;    }    await updateSettings({ promptProjectorGridOnOpen: false });  };  const fileName = currentImagePath    ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''    : '';  const canSaveRotation = canSaveRotationForPath(currentImagePath);  const canEnterCompareMode = images.length > 1;  const cropDisabledByRotation = rotation !== 0 || viewMode === 'compare';  const canPreviewCrop = isCropMode && cropRect !== null;  const currentPendingEdit = currentImagePath ? pendingEditsByPath[currentImagePath] : undefined;  const hasPendingEdits = Boolean(currentPendingEdit);  const canCommitPendingEdits =    Boolean(currentPendingEdit?.cropRect) || (hasPendingEdits && canSaveRotation);  const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;  const isFavorite = Boolean(currentCuration?.favorite);  const currentRating = currentCuration?.rating ?? 0;  const toggleFullscreen = async () => {    try {      const appWindow = getCurrentWindow();      const nextFullscreen = !isFullscreen;      await appWindow.setFullscreen(nextFullscreen);      setFullscreen(nextFullscreen);    } catch (err) {      console.error('Failed to toggle fullscreen:', err);    }  };  const handleDelete = async () => {    await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });    recordToolbarActionUsage('delete');    closeOverflowMenus();  };  const handleCopy = async () => {    await copyCurrentImage(currentImagePath);    recordToolbarActionUsage('copy');    closeOverflowMenus();  };  const handleOpenInEditor = async () => {    await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);    recordToolbarActionUsage('edit');    closeOverflowMenus();  };  const handleReveal = async () => {    await revealCurrentImage(currentImagePath);    recordToolbarActionUsage('reveal');    closeOverflowMenus();  };  const handleRefresh = () => {    onRefreshFolder();    recordToolbarActionUsage('refresh');    closeOverflowMenus();  };  const removeImageByPath = (path: string) => {    const state = useViewerStore.getState();    const index = state.images.findIndex((image) => image.path === path);    if (index >= 0) {      invalidateImageAsset(path);      invalidateThumbnail(path);      state.removeImage(index);    }  };  const handleQuickTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {    if (!currentImagePath) {      return;    }    const result = await transferImagesToDestination([currentImagePath], destination, mode);    if (mode === 'move') {      for (const success of result.successes) {        removeImageByPath(success.sourcePath);      }    }    await showTransferResultMessage(result, destination, mode);    recordToolbarActionUsage(mode === 'copy' ? 'copy-to' : 'move-to');    closeOverflowMenus();  };  const handleToggleFavorite = async () => {    if (!currentImagePath) {      return;    }    await toggleFavorite(currentImagePath);  };  const handleSetRating = async (rating: number) => {    if (!currentImagePath) {      return;    }    await setRating(currentImagePath, rating);  };  const handleToggleInfo = () => {    setShowExif((value) => !value);    recordToolbarActionUsage('info');    closeOverflowMenus();  };  const handleOpenSettings = () => {    setShowSettings(true);    recordToolbarActionUsage('settings');    closeOverflowMenus();  };  const handleProjectorPromptKeepCurrentView = async () => {    await persistProjectorPromptPreferenceIfNeeded();    setShowProjectorGridPrompt(false);    setSkipProjectorGridPrompt(false);  };  const handleProjectorPromptSwitchToGrid = async () => {    await persistProjectorPromptPreferenceIfNeeded();    setViewMode('grid');    setShowProjectorGridPrompt(false);    setSkipProjectorGridPrompt(false);  };  const handleToggleProjector = async () => {    try {      if (isProjectorOpen) {        await closeSecondaryWindow();        setShowProjectorGridPrompt(false);        setSkipProjectorGridPrompt(false);      } else {        await openSecondaryWindow();        if (promptProjectorGridOnOpen && viewMode !== 'grid') {          setSkipProjectorGridPrompt(false);          setShowProjectorGridPrompt(true);        }      }      await refreshProjectorState();      recordToolbarActionUsage('projector');      closeOverflowMenus();    } catch (err) {      console.error('Failed to toggle projector mode:', err);      await message(        isProjectorOpen          ? 'Unable to close projector mode right now.'          : 'Unable to open projector mode. Please try again after reconnecting the display.',        {          title: 'Projector mode',          kind: 'error',        }      );    }  };  const handleToggleCrop = () => {    if (isCropMode) {      exitCropMode();      recordToolbarActionUsage('crop');      closeOverflowMenus();      return;    }    if (pendingCropPreview) {      clearCropPreview();    }    enterCropMode();    recordToolbarActionUsage('crop');    closeOverflowMenus();  };  const handleSaveCroppedCopy = async () => {    if (!currentImagePath || !cropRect) {      return;    }    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;    const imageWidth = activeImage?.naturalWidth ?? 0;    const imageHeight = activeImage?.naturalHeight ?? 0;    if (imageWidth <= 0 || imageHeight <= 0) {      await message('Unable to determine image dimensions for crop export.', {        title: 'Error',        kind: 'error',      });      return;    }    const pixelCropRect = normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight);    const originalName = getFileName(currentImagePath);    const dotIndex = originalName.lastIndexOf('.');    const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;    const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';    const outputPath = await save({      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),    });    if (!outputPath) {      return;    }    try {      await saveCroppedCopy(currentImagePath, pixelCropRect, outputPath, rotation);      await message(`Saved cropped copy to:\n${outputPath}`, {        title: 'Cropped Copy Saved',        kind: 'info',      });    } catch (err) {      console.error('Failed to save cropped copy:', err);      await message(`Failed to save cropped copy: ${err}`, {        title: 'Error',        kind: 'error',      });    }  };  const handleOverwriteCrop = async () => {    if (!currentImagePath || !cropRect) {      return;    }    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;    const imageWidth = activeImage?.naturalWidth ?? 0;    const imageHeight = activeImage?.naturalHeight ?? 0;    if (imageWidth <= 0 || imageHeight <= 0) {      await message('Unable to determine image dimensions for crop overwrite.', {        title: 'Error',        kind: 'error',      });      return;    }    const confirmed = await confirm(      `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,      {        title: 'Overwrite Cropped Image',        kind: 'warning',      }    );    if (!confirmed) {      return;    }    try {      await overwriteWithCrop(        currentImagePath,        normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight),        rotation      );      invalidateImageAsset(currentImagePath);      invalidateThumbnail(currentImagePath);      clearPendingEdits(currentImagePath);      useViewerStore.setState({ cacheBuster: Date.now() });      setExifRefreshToken((value) => value + 1);      await message('Original image updated with the cropped selection.', {        title: 'Crop Saved',        kind: 'info',      });    } catch (err) {      console.error('Failed to overwrite cropped image:', err);      await message(`Failed to overwrite cropped image: ${err}`, {        title: 'Error',        kind: 'error',      });    }  };  const getZoomDisplay = () => {    if (zoomMode === 'fit') return 'Fit';    if (zoomMode === 'fill') return 'Fill';    if (zoomMode === 'actual') return '100%';    return `${Math.round(zoomLevel * 100)}%`;  };  if (!currentImagePath) return null;  const secondaryActionSortOrder: Record<SecondaryToolbarActionId, number> = {    refresh: 0,    reveal: 1,    copy: 2,    'copy-to': 3,    'move-to': 4,    edit: 5,    delete: 6,    projector: 7,    info: 8,    settings: 9,    crop: 10,  };  const secondaryActions = [    {      id: 'refresh' as const,      node: (        <button          className="top-bar-menu-item"          onClick={handleRefresh}          type="button"          aria-label="Refresh folder"          disabled={!folderPath}        >          Refresh        </button>      ),    },    {      id: 'reveal' as const,      node: (        <button          className="top-bar-menu-item"          onClick={() => void handleReveal()}          type="button"          aria-label="Show in folder"        >          Reveal        </button>      ),    },    {      id: 'copy' as const,      node: (        <button          className="top-bar-menu-item"          onClick={() => void handleCopy()}          type="button"          aria-label="Copy to Clipboard"        >          Copy        </button>      ),    },    {      id: 'copy-to' as const,      node: (        <details className="top-bar-submenu" ref={copyToMenuRef}>          <summary className="top-bar-menu-item" aria-label="Copy image to destination">            Copy To          </summary>          <div className="top-bar-submenu-panel">            {quickDestinations.length === 0 ? (              <>                <span className="top-bar-menu-empty">                  No destinations configured. Add folders in Settings {'>'} Quick Destinations.                </span>                <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">                  Open Settings                </button>              </>            ) : (              quickDestinations.map((destination) => (                <button                  key={destination.id}                  className="top-bar-menu-item"                  onClick={() => void handleQuickTransfer(destination, 'copy')}                  type="button"                >                  {destination.label}                </button>              ))            )}          </div>        </details>      ),    },    {      id: 'move-to' as const,      node: (        <details className="top-bar-submenu" ref={moveToMenuRef}>          <summary className="top-bar-menu-item" aria-label="Move image to destination">            Move To          </summary>          <div className="top-bar-submenu-panel">            {quickDestinations.length === 0 ? (              <>                <span className="top-bar-menu-empty">                  No destinations configured. Add folders in Settings {'>'} Quick Destinations.                </span>                <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">                  Open Settings                </button>              </>            ) : (              quickDestinations.map((destination) => (                <button                  key={destination.id}                  className="top-bar-menu-item"                  onClick={() => void handleQuickTransfer(destination, 'move')}                  type="button"                >                  {destination.label}                </button>              ))            )}          </div>        </details>      ),    },    {      id: 'edit' as const,      node: (        <button          className="top-bar-menu-item"          onClick={() => void handleOpenInEditor()}          type="button"          aria-label="Open in external editor"        >          {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}        </button>      ),    },    {      id: 'delete' as const,      node: (        <button          className="top-bar-menu-item"          onClick={() => void handleDelete()}          type="button"          aria-label="Delete image"        >          Delete        </button>      ),    },    {      id: 'projector' as const,      node: (        <button          className="top-bar-menu-item"          onClick={() => void handleToggleProjector()}          type="button"          aria-label={isProjectorOpen ? 'Close projector mode' : 'Open projector mode'}        >          {isProjectorOpen ? 'Projector Off' : 'Projector'}        </button>      ),    },    {      id: 'info' as const,      node: (        <button          className="top-bar-menu-item"          onClick={handleToggleInfo}          type="button"          aria-label="Toggle image info panel"        >          {showExif ? 'Hide Info' : 'Info'}        </button>      ),    },    {      id: 'settings' as const,      node: (        <button          className="top-bar-menu-item"          onClick={handleOpenSettings}          type="button"          aria-label="Open settings"        >          Settings        </button>      ),    },  ].sort((a, b) => {    const usageDelta = (toolbarUsage[b.id] ?? 0) - (toolbarUsage[a.id] ?? 0);    if (usageDelta !== 0) {      return usageDelta;    }    return secondaryActionSortOrder[a.id] - secondaryActionSortOrder[b.id];  });  return (    <>      <div className="top-bar" role="toolbar" aria-label="Image information">        <div className="top-bar-left">          <span className="file-name" title={fileName}>            {fileName}          </span>          {images.length > 0 && (            <span className="image-counter">              {currentIndex + 1} / {images.length}              {isFolderScanning && ' �'}            </span>          )}          {isFavorite && <span className="image-counter">?</span>}          {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}          {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}        </div>        <div className="top-bar-right">          <div className="top-bar-group" aria-label="Navigation actions">            <button              className="top-bar-btn top-bar-btn--labeled has-tooltip"              onClick={onGoHome}              data-tooltip="Back to landing page"              title="Back to landing page"              aria-label="Back to landing page"              id="btn-home"            >              <span className="top-bar-btn-icon">�</span>              <span className="top-bar-btn-label">Home</span>            </button>            <button              className="top-bar-btn top-bar-btn--labeled has-tooltip"              onClick={onOpenFile}              data-tooltip="Open file (Ctrl+O)"              title="Open file (Ctrl+O)"              aria-label="Open file"              id="btn-open-file"            >              <span className="top-bar-btn-icon">??</span>              <span className="top-bar-btn-label">Open</span>            </button>            <button              className="top-bar-btn top-bar-btn--labeled has-tooltip"              onClick={onOpenFolder}              data-tooltip="Open folder"              title="Open folder"              aria-label="Open folder"              id="btn-open-folder"            >              <span className="top-bar-btn-icon">??</span>              <span className="top-bar-btn-label">Folder</span>            </button>          </div>          <div className="top-bar-separator" aria-hidden="true" />          <div className="top-bar-group" aria-label="Primary actions">            <button              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isFavorite ? 'active' : ''}`}              onClick={() => void handleToggleFavorite()}              data-tooltip="Toggle favorite (F)"              title="Toggle favorite (F)"              aria-label="Toggle favorite"              id="btn-favorite"            >              <span className="top-bar-btn-icon">{isFavorite ? '?' : '?'}</span>              <span className="top-bar-btn-label">Favorite</span>            </button>            <button              className="top-bar-btn top-bar-btn--labeled has-tooltip"              onClick={toggleFullscreen}              data-tooltip="Toggle fullscreen (F11)"              title="Toggle fullscreen (F11)"              aria-label="Toggle fullscreen"              id="btn-fullscreen"            >              <span className="top-bar-btn-icon">{isFullscreen ? '??' : '?'}</span>              <span className="top-bar-btn-label">Full</span>            </button>            <button              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${viewMode === 'grid' ? 'active' : ''}`}              onClick={() => setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer')}              data-tooltip="Grid view (G)"              title="Grid view (G)"              aria-label="Toggle grid view"              id="btn-grid"            >              <span className="top-bar-btn-icon">?</span>              <span className="top-bar-btn-label">Grid</span>            </button>            <button              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${viewMode === 'compare' ? 'active' : ''}`}              onClick={() => {                if (viewMode === 'compare') {                  exitCompareMode();                  return;                }                enterCompareMode();              }}              title={                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'              }              data-tooltip={                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'              }              aria-label="Toggle compare view"              id="btn-compare"              disabled={!canEnterCompareMode}            >              <span className="top-bar-btn-icon">=</span>              <span className="top-bar-btn-label">Compare</span>            </button>            <button              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCropMode || pendingCropPreview ? 'active' : ''}`}              onClick={handleToggleCrop}              data-tooltip={                cropDisabledByRotation                  ? viewMode === 'compare'                    ? 'Crop is unavailable in compare view'                    : 'Crop is unavailable while rotation preview is active'                  : 'Crop image'              }              title={                cropDisabledByRotation                  ? viewMode === 'compare'                    ? 'Crop is unavailable in compare view'                    : 'Crop is unavailable while rotation preview is active'                  : 'Crop image'              }              aria-label="Toggle crop mode"              id="btn-crop"              disabled={cropDisabledByRotation}            >              <span className="top-bar-btn-icon">?</span>              <span className="top-bar-btn-label">Crop</span>            </button>            <details className="top-bar-menu" ref={moreMenuRef}>              <summary                className="top-bar-btn top-bar-btn--labeled has-tooltip"                aria-label="More actions"                data-tooltip="More actions"                title="More actions"                id="btn-more-actions"              >                <span className="top-bar-btn-icon">...</span>                <span className="top-bar-btn-label">More</span>              </summary>              <div className="top-bar-menu-panel top-bar-menu-panel--stacked">                {secondaryActions.map((action) => (                  <div key={action.id} className="top-bar-menu-entry">                    {action.node}                  </div>                ))}              </div>            </details>          </div>        </div>      </div>      {showProjectorGridPrompt && (        <div className="projector-grid-prompt-overlay" role="presentation">          <div className="projector-grid-prompt" role="dialog" aria-label="Projector mode setup">            <div className="projector-grid-prompt-header">              <h3>Projector mode works best with grid view</h3>            </div>            <div className="projector-grid-prompt-body">              <p>                Switch the main window to grid view so you can keep browsing there while the                projector updates on the second screen?              </p>              <label className="projector-grid-prompt-checkbox">                <input                  checked={skipProjectorGridPrompt}                  onChange={(event) => setSkipProjectorGridPrompt(event.target.checked)}                  type="checkbox"                />                <span>Don&apos;t show this again</span>              </label>            </div>            <div className="projector-grid-prompt-actions">              <button                className="setting-button-secondary"                onClick={() => void handleProjectorPromptKeepCurrentView()}                type="button"              >                Keep Current View              </button>              <button                className="setting-button-primary"                onClick={() => void handleProjectorPromptSwitchToGrid()}                type="button"              >                Switch to Grid              </button>            </div>          </div>        </div>      )}      {showExif && currentImagePath && (        <ExifPanel          filePath={currentImagePath}          hasThumbnails={showThumbnails && viewMode === 'viewer'}          refreshToken={exifRefreshToken}          onClose={() => setShowExif(false)}        />      )}      {images.length > 1 && (        <>          <button            className="nav-arrow left"            onClick={onPrev}            aria-label="Previous image"            id="btn-prev"          >            �          </button>          <button            className="nav-arrow right"            onClick={onNext}            aria-label="Next image"            id="btn-next"          >            �          </button>        </>      )}      {isSlideshowActive && (        <div className={`slideshow-indicator ${isSlideshowPaused ? 'paused' : ''}`}>          {isSlideshowPaused ? '? Paused' : '? Slideshow'}        </div>      )}      <div className="bottom-controls" role="toolbar" aria-label="Image controls">        <button          className="control-btn has-tooltip"          onClick={onPrev}          data-tooltip="Previous (Left Arrow)"          title="Previous (?)"          aria-label="Previous image"          id="btn-ctrl-prev"        >          ?        </button>        {!isSlideshowActive ? (          <button            className="control-btn has-tooltip"            onClick={onStartSlideshow}            data-tooltip="Start slideshow (F5)"            title="Start slideshow (F5)"            aria-label="Start slideshow"            id="btn-start-slideshow"          >            ?          </button>        ) : (          <button            className={`control-btn has-tooltip ${isSlideshowPaused ? '' : 'active'}`}            onClick={onTogglePause}            data-tooltip="Pause or resume slideshow (Space)"            title="Pause/Resume slideshow (Space)"            aria-label="Toggle slideshow pause"            id="btn-toggle-slideshow"          >            {isSlideshowPaused ? '?' : '?'}          </button>        )}        <button          className="control-btn has-tooltip"          onClick={onNext}          data-tooltip="Next (Right Arrow)"          title="Next (?)"          aria-label="Next image"          id="btn-ctrl-next"        >          ?        </button>        <div className="control-divider" />        <button          className="control-btn has-tooltip"          onClick={zoomOut}          data-tooltip="Zoom out (-)"          title="Zoom out (-)"          aria-label="Zoom out"          id="btn-zoom-out"        >          -        </button>        <span className="zoom-display">{getZoomDisplay()}</span>        <button          className="control-btn has-tooltip"          onClick={zoomIn}          data-tooltip="Zoom in (+)"          title="Zoom in (+)"          aria-label="Zoom in"          id="btn-zoom-in"        >          +        </button>        <div className="control-divider" />        <button          className="control-btn has-tooltip"          onClick={() => useViewerStore.getState().rotateCounterClockwise()}          data-tooltip="Rotate counter-clockwise (L)"          title="Rotate counter-clockwise (L)"          aria-label="Rotate counter-clockwise"          id="btn-rotate-l"        >          ?        </button>        <button          className="control-btn has-tooltip"          onClick={() => useViewerStore.getState().rotateClockwise()}          data-tooltip="Rotate clockwise (R)"          title="Rotate clockwise (R)"          aria-label="Rotate clockwise"          id="btn-rotate-r"        >          ?        </button>        {hasPendingEdits && (          <button            className="control-btn has-tooltip"            onClick={() => {              if (currentImagePath) {                clearPendingEdits(currentImagePath);              }            }}            title="Reset pending edits"            aria-label="Reset pending edits"            id="btn-reset-edits"          >            Reset          </button>        )}        {canCommitPendingEdits && (          <button            className="control-btn active has-tooltip"            onClick={() => {              if (currentImagePath) {                void commitPendingEdits(currentImagePath);              }            }}            title="Save pending edits"            aria-label="Save pending edits"            id="btn-save-edits"          >            ??          </button>        )}        <div className="control-divider" />        <button          className={`control-btn has-tooltip ${zoomMode === 'fit' ? 'active' : ''}`}          onClick={() => setZoomMode('fit')}          data-tooltip="Fit to screen (0)"          title="Fit to screen (0)"          aria-label="Fit to screen"          id="btn-zoom-fit"        >          ?        </button>        <button          className={`control-btn has-tooltip ${zoomMode === 'actual' ? 'active' : ''}`}          onClick={() => setZoomMode('actual')}          data-tooltip="Actual size (1)"          title="Actual size (1)"          aria-label="Actual size"          id="btn-zoom-actual"        >          1:1        </button>        {(isCropMode || pendingCropPreview) && (          <>            <div className="control-divider" />            <select              className="crop-aspect-select"              aria-label="Crop aspect ratio"              value={cropAspectRatio}              onChange={(event) =>                setCropAspectRatio(event.target.value as 'free' | '1:1' | '4:3' | '3:2' | '16:9')              }              disabled={!isCropMode}            >              <option value="free">Free</option>              <option value="1:1">1:1</option>              <option value="4:3">4:3</option>              <option value="3:2">3:2</option>              <option value="16:9">16:9</option>            </select>            <button              className="control-btn has-tooltip"              onClick={resetCrop}              data-tooltip="Reset crop"              title="Reset crop"              aria-label="Reset crop"              id="btn-crop-reset"            >              Reset            </button>            {isCropMode ? (              <button                className="control-btn active has-tooltip"                onClick={applyCropPreview}                data-tooltip="Preview crop (Enter)"                title="Preview crop (Enter)"                aria-label="Preview crop"                id="btn-crop-preview"                disabled={!canPreviewCrop}              >                Preview              </button>            ) : (              <button                className="control-btn has-tooltip"                onClick={clearCropPreview}                data-tooltip="Clear crop preview"                title="Clear crop preview"                aria-label="Clear crop preview"                id="btn-crop-clear-preview"              >                Clear              </button>            )}            {isCropMode && (              <button                className="control-btn active has-tooltip"                onClick={() => void handleSaveCroppedCopy()}                data-tooltip="Save cropped copy"                title="Save cropped copy"                aria-label="Save cropped copy"                id="btn-crop-save-copy"                disabled={!cropRect}              >                Save Copy              </button>            )}            {isCropMode && (              <button                className="control-btn has-tooltip"                onClick={() => void handleOverwriteCrop()}                data-tooltip="Overwrite original with crop"                title="Overwrite original with crop"                aria-label="Overwrite original with crop"                id="btn-crop-overwrite"                disabled={!cropRect}              >                Overwrite              </button>            )}          </>        )}        <div className="control-divider" />        <div className="rating-controls" role="group" aria-label="Image rating">          {[0, 1, 2, 3, 4, 5].map((value) => (            <button              key={value}              className={`control-btn rating-btn has-tooltip ${currentRating === value ? 'active' : ''}`}              onClick={() => void handleSetRating(value)}              data-tooltip={                value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`              }              title={value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`}              aria-label={value === 0 ? 'Clear rating' : `Set rating ${value}`}            >              {value}            </button>          ))}        </div>      </div>    </>  );}
+import { useEffect, useRef, useState } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { confirm, message, save } from '@tauri-apps/plugin-dialog';
+import { ExifPanel } from './ExifPanel';
+import {
+  closeSecondaryWindow,
+  getFileName,
+  openSecondaryWindow,
+  overwriteWithCrop,
+  saveCroppedCopy,
+} from '../services/tauriCommands';
+import { useViewerStore } from '../state/viewerStore';
+import {
+  canSaveRotationForPath,
+  copyCurrentImage,
+  deleteCurrentImage,
+  openCurrentImageInEditor,
+  revealCurrentImage,
+  showTransferResultMessage,
+  transferImagesToDestination,
+} from '../services/viewerActions';
+import { normalizedToIntegerPixelRect } from '../services/cropMath';
+import { invalidateImageAsset } from '../services/imageAssetCache';
+import { invalidateThumbnail } from '../services/thumbnailCache';
+import { useProjectorState } from '../hooks/useProjectorState';
+import { useCurationStore } from '../state/curationStore';
+import { useSettingsStore } from '../state/settingsStore';
+import type { QuickDestination } from '../types/settings';
+
+interface ViewerChromeProps {
+  onOpenFile: () => void;
+  onOpenFolder: () => void;
+  onRefreshFolder: () => void;
+  onGoHome: () => void;
+  onNext: () => void;
+  onPrev: () => void;
+  onStartSlideshow: () => void;
+  onTogglePause: () => void;
+}
+
+type SecondaryToolbarActionId =
+  | 'copy'
+  | 'copy-to'
+  | 'crop'
+  | 'delete'
+  | 'edit'
+  | 'info'
+  | 'move-to'
+  | 'projector'
+  | 'refresh'
+  | 'reveal'
+  | 'settings';
+
+const TOOLBAR_USAGE_STORAGE_KEY = 'lightframe.toolbar-usage.v1';
+
+function readToolbarUsage(): Partial<Record<SecondaryToolbarActionId, number>> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(TOOLBAR_USAGE_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const usage: Partial<Record<SecondaryToolbarActionId, number>> = {};
+
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        usage[key as SecondaryToolbarActionId] = value;
+      }
+    }
+
+    return usage;
+  } catch (err) {
+    console.error('Failed to read toolbar usage:', err);
+    return {};
+  }
+}
+
+/** Top bar and navigation overlay controls */
+// fallow-ignore-next-line complexity
+export function ViewerChrome({
+  onOpenFile,
+  onOpenFolder,
+  onRefreshFolder,
+  onGoHome,
+  onNext,
+  onPrev,
+  onStartSlideshow,
+  onTogglePause,
+}: ViewerChromeProps) {
+  const {
+    currentImagePath,
+    images,
+    currentIndex,
+    folderPath,
+    isFullscreen,
+    isSlideshowActive,
+    isSlideshowPaused,
+    zoomMode,
+    zoomLevel,
+    isFolderScanning,
+    setFullscreen,
+    setShowSettings,
+    setZoomMode,
+    zoomIn,
+    zoomOut,
+    removeImage,
+    rotation,
+    isCropMode,
+    cropRect,
+    pendingCropPreview,
+    pendingEditsByPath,
+    cropAspectRatio,
+    viewMode,
+    setViewMode,
+    enterCompareMode,
+    exitCompareMode,
+    enterCropMode,
+    exitCropMode,
+    setCropAspectRatio,
+    resetCrop,
+    applyCropPreview,
+    clearCropPreview,
+    clearPendingEdits,
+    commitPendingEdits,
+  } = useViewerStore();
+  const curationByPath = useCurationStore((state) => state.curationByPath);
+  const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
+  const setRating = useCurationStore((state) => state.setRating);
+  const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
+  const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
+  const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
+  const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
+  const promptProjectorGridOnOpen = useSettingsStore(
+    (state) => state.settings.promptProjectorGridOnOpen
+  );
+  const updateSettings = useSettingsStore((state) => state.updateSettings);
+
+  const [showExif, setShowExif] = useState(false);
+  const [exifRefreshToken, setExifRefreshToken] = useState(0);
+  const [toolbarUsage, setToolbarUsage] = useState<Partial<Record<SecondaryToolbarActionId, number>>>(
+    () => readToolbarUsage()
+  );
+  const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
+  const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
+  const { isProjectorOpen, refreshProjectorState } = useProjectorState();
+  const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const copyToMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const moveToMenuRef = useRef<HTMLDetailsElement | null>(null);
+
+  useEffect(() => {
+    const handler = () => setShowExif((value) => !value);
+    window.addEventListener('toggle-exif', handler);
+
+    return () => {
+      window.removeEventListener('toggle-exif', handler);
+    };
+  }, []);
+
+  const closeOverflowMenus = () => {
+    if (copyToMenuRef.current) {
+      copyToMenuRef.current.open = false;
+    }
+    if (moveToMenuRef.current) {
+      moveToMenuRef.current.open = false;
+    }
+    if (moreMenuRef.current) {
+      moreMenuRef.current.open = false;
+    }
+  };
+
+  const recordToolbarActionUsage = (actionId: SecondaryToolbarActionId) => {
+    setToolbarUsage((current) => {
+      const next = {
+        ...current,
+        [actionId]: (current[actionId] ?? 0) + 1,
+      };
+
+      try {
+        window.localStorage.setItem(TOOLBAR_USAGE_STORAGE_KEY, JSON.stringify(next));
+      } catch (err) {
+        console.error('Failed to persist toolbar usage:', err);
+      }
+
+      return next;
+    });
+  };
+
+  const persistProjectorPromptPreferenceIfNeeded = async () => {
+    if (!skipProjectorGridPrompt) {
+      return;
+    }
+
+    await updateSettings({ promptProjectorGridOnOpen: false });
+  };
+
+  const fileName = currentImagePath
+    ? currentImagePath.replace(/\\/g, '/').split('/').pop() || ''
+    : '';
+  const canSaveRotation = canSaveRotationForPath(currentImagePath);
+  const canEnterCompareMode = images.length > 1;
+  const cropDisabledByRotation = rotation !== 0 || viewMode === 'compare';
+  const canPreviewCrop = isCropMode && cropRect !== null;
+  const currentPendingEdit = currentImagePath ? pendingEditsByPath[currentImagePath] : undefined;
+  const hasPendingEdits = Boolean(currentPendingEdit);
+  const canCommitPendingEdits =
+    Boolean(currentPendingEdit?.cropRect) || (hasPendingEdits && canSaveRotation);
+  const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
+  const isFavorite = Boolean(currentCuration?.favorite);
+  const currentRating = currentCuration?.rating ?? 0;
+
+  const toggleFullscreen = async () => {
+    try {
+      const appWindow = getCurrentWindow();
+      const nextFullscreen = !isFullscreen;
+      await appWindow.setFullscreen(nextFullscreen);
+      setFullscreen(nextFullscreen);
+    } catch (err) {
+      console.error('Failed to toggle fullscreen:', err);
+    }
+  };
+
+  const handleDelete = async () => {
+    await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
+    recordToolbarActionUsage('delete');
+    closeOverflowMenus();
+  };
+
+  const handleCopy = async () => {
+    await copyCurrentImage(currentImagePath);
+    recordToolbarActionUsage('copy');
+    closeOverflowMenus();
+  };
+
+  const handleOpenInEditor = async () => {
+    await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
+    recordToolbarActionUsage('edit');
+    closeOverflowMenus();
+  };
+
+  const handleReveal = async () => {
+    await revealCurrentImage(currentImagePath);
+    recordToolbarActionUsage('reveal');
+    closeOverflowMenus();
+  };
+
+  const handleRefresh = () => {
+    onRefreshFolder();
+    recordToolbarActionUsage('refresh');
+    closeOverflowMenus();
+  };
+
+  const removeImageByPath = (path: string) => {
+    const state = useViewerStore.getState();
+    const index = state.images.findIndex((image) => image.path === path);
+    if (index >= 0) {
+      invalidateImageAsset(path);
+      invalidateThumbnail(path);
+      state.removeImage(index);
+    }
+  };
+
+  const handleQuickTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
+    if (!currentImagePath) {
+      return;
+    }
+
+    const result = await transferImagesToDestination([currentImagePath], destination, mode);
+    if (mode === 'move') {
+      for (const success of result.successes) {
+        removeImageByPath(success.sourcePath);
+      }
+    }
+    await showTransferResultMessage(result, destination, mode);
+    recordToolbarActionUsage(mode === 'copy' ? 'copy-to' : 'move-to');
+    closeOverflowMenus();
+  };
+
+  const handleToggleFavorite = async () => {
+    if (!currentImagePath) {
+      return;
+    }
+    await toggleFavorite(currentImagePath);
+  };
+
+  const handleSetRating = async (rating: number) => {
+    if (!currentImagePath) {
+      return;
+    }
+    await setRating(currentImagePath, rating);
+  };
+
+  const handleToggleInfo = () => {
+    setShowExif((value) => !value);
+    recordToolbarActionUsage('info');
+    closeOverflowMenus();
+  };
+
+  const handleOpenSettings = () => {
+    setShowSettings(true);
+    recordToolbarActionUsage('settings');
+    closeOverflowMenus();
+  };
+
+  const handleProjectorPromptKeepCurrentView = async () => {
+    await persistProjectorPromptPreferenceIfNeeded();
+    setShowProjectorGridPrompt(false);
+    setSkipProjectorGridPrompt(false);
+  };
+
+  const handleProjectorPromptSwitchToGrid = async () => {
+    await persistProjectorPromptPreferenceIfNeeded();
+    setViewMode('grid');
+    setShowProjectorGridPrompt(false);
+    setSkipProjectorGridPrompt(false);
+  };
+
+  const handleToggleProjector = async () => {
+    try {
+      if (isProjectorOpen) {
+        await closeSecondaryWindow();
+        setShowProjectorGridPrompt(false);
+        setSkipProjectorGridPrompt(false);
+      } else {
+        await openSecondaryWindow();
+        if (promptProjectorGridOnOpen && viewMode !== 'grid') {
+          setSkipProjectorGridPrompt(false);
+          setShowProjectorGridPrompt(true);
+        }
+      }
+      await refreshProjectorState();
+      recordToolbarActionUsage('projector');
+      closeOverflowMenus();
+    } catch (err) {
+      console.error('Failed to toggle projector mode:', err);
+      await message(
+        isProjectorOpen
+          ? 'Unable to close projector mode right now.'
+          : 'Unable to open projector mode. Please try again after reconnecting the display.',
+        {
+          title: 'Projector mode',
+          kind: 'error',
+        }
+      );
+    }
+  };
+
+  const handleToggleCrop = () => {
+    if (isCropMode) {
+      exitCropMode();
+      recordToolbarActionUsage('crop');
+      closeOverflowMenus();
+      return;
+    }
+
+    if (pendingCropPreview) {
+      clearCropPreview();
+    }
+    enterCropMode();
+    recordToolbarActionUsage('crop');
+    closeOverflowMenus();
+  };
+
+  const handleSaveCroppedCopy = async () => {
+    if (!currentImagePath || !cropRect) {
+      return;
+    }
+
+    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const imageWidth = activeImage?.naturalWidth ?? 0;
+    const imageHeight = activeImage?.naturalHeight ?? 0;
+
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      await message('Unable to determine image dimensions for crop export.', {
+        title: 'Error',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const pixelCropRect = normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight);
+    const originalName = getFileName(currentImagePath);
+    const dotIndex = originalName.lastIndexOf('.');
+    const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
+    const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
+    const outputPath = await save({
+      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),
+    });
+
+    if (!outputPath) {
+      return;
+    }
+
+    try {
+      await saveCroppedCopy(currentImagePath, pixelCropRect, outputPath, rotation);
+      await message(`Saved cropped copy to:\n${outputPath}`, {
+        title: 'Cropped Copy Saved',
+        kind: 'info',
+      });
+    } catch (err) {
+      console.error('Failed to save cropped copy:', err);
+      await message(`Failed to save cropped copy: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
+  };
+
+  const handleOverwriteCrop = async () => {
+    if (!currentImagePath || !cropRect) {
+      return;
+    }
+
+    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const imageWidth = activeImage?.naturalWidth ?? 0;
+    const imageHeight = activeImage?.naturalHeight ?? 0;
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      await message('Unable to determine image dimensions for crop overwrite.', {
+        title: 'Error',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const confirmed = await confirm(
+      `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
+      {
+        title: 'Overwrite Cropped Image',
+        kind: 'warning',
+      }
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await overwriteWithCrop(
+        currentImagePath,
+        normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight),
+        rotation
+      );
+      invalidateImageAsset(currentImagePath);
+      invalidateThumbnail(currentImagePath);
+      clearPendingEdits(currentImagePath);
+      useViewerStore.setState({ cacheBuster: Date.now() });
+      setExifRefreshToken((value) => value + 1);
+      await message('Original image updated with the cropped selection.', {
+        title: 'Crop Saved',
+        kind: 'info',
+      });
+    } catch (err) {
+      console.error('Failed to overwrite cropped image:', err);
+      await message(`Failed to overwrite cropped image: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
+  };
+
+  const getZoomDisplay = () => {
+    if (zoomMode === 'fit') return 'Fit';
+    if (zoomMode === 'fill') return 'Fill';
+    if (zoomMode === 'actual') return '100%';
+    return `${Math.round(zoomLevel * 100)}%`;
+  };
+
+  if (!currentImagePath) return null;
+
+  const secondaryActionSortOrder: Record<SecondaryToolbarActionId, number> = {
+    refresh: 0,
+    reveal: 1,
+    copy: 2,
+    'copy-to': 3,
+    'move-to': 4,
+    edit: 5,
+    delete: 6,
+    projector: 7,
+    info: 8,
+    settings: 9,
+    crop: 10,
+  };
+
+  const secondaryActions = [
+    {
+      id: 'refresh' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={handleRefresh}
+          type="button"
+          aria-label="Refresh folder"
+          disabled={!folderPath}
+        >
+          Refresh
+        </button>
+      ),
+    },
+    {
+      id: 'reveal' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleReveal()}
+          type="button"
+          aria-label="Show in folder"
+        >
+          Reveal
+        </button>
+      ),
+    },
+    {
+      id: 'copy' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleCopy()}
+          type="button"
+          aria-label="Copy to Clipboard"
+        >
+          Copy
+        </button>
+      ),
+    },
+    {
+      id: 'copy-to' as const,
+      node: (
+        <details className="top-bar-submenu" ref={copyToMenuRef}>
+          <summary className="top-bar-menu-item" aria-label="Copy image to destination">
+            Copy To
+          </summary>
+          <div className="top-bar-submenu-panel">
+            {quickDestinations.length === 0 ? (
+              <>
+                <span className="top-bar-menu-empty">
+                  No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+                </span>
+                <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">
+                  Open Settings
+                </button>
+              </>
+            ) : (
+              quickDestinations.map((destination) => (
+                <button
+                  key={destination.id}
+                  className="top-bar-menu-item"
+                  onClick={() => void handleQuickTransfer(destination, 'copy')}
+                  type="button"
+                >
+                  {destination.label}
+                </button>
+              ))
+            )}
+          </div>
+        </details>
+      ),
+    },
+    {
+      id: 'move-to' as const,
+      node: (
+        <details className="top-bar-submenu" ref={moveToMenuRef}>
+          <summary className="top-bar-menu-item" aria-label="Move image to destination">
+            Move To
+          </summary>
+          <div className="top-bar-submenu-panel">
+            {quickDestinations.length === 0 ? (
+              <>
+                <span className="top-bar-menu-empty">
+                  No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+                </span>
+                <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">
+                  Open Settings
+                </button>
+              </>
+            ) : (
+              quickDestinations.map((destination) => (
+                <button
+                  key={destination.id}
+                  className="top-bar-menu-item"
+                  onClick={() => void handleQuickTransfer(destination, 'move')}
+                  type="button"
+                >
+                  {destination.label}
+                </button>
+              ))
+            )}
+          </div>
+        </details>
+      ),
+    },
+    {
+      id: 'edit' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleOpenInEditor()}
+          type="button"
+          aria-label="Open in external editor"
+        >
+          {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+        </button>
+      ),
+    },
+    {
+      id: 'delete' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleDelete()}
+          type="button"
+          aria-label="Delete image"
+        >
+          Delete
+        </button>
+      ),
+    },
+    {
+      id: 'projector' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleToggleProjector()}
+          type="button"
+          aria-label={isProjectorOpen ? 'Close projector mode' : 'Open projector mode'}
+        >
+          {isProjectorOpen ? 'Projector Off' : 'Projector'}
+        </button>
+      ),
+    },
+    {
+      id: 'info' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={handleToggleInfo}
+          type="button"
+          aria-label="Toggle image info panel"
+        >
+          {showExif ? 'Hide Info' : 'Info'}
+        </button>
+      ),
+    },
+    {
+      id: 'settings' as const,
+      node: (
+        <button
+          className="top-bar-menu-item"
+          onClick={handleOpenSettings}
+          type="button"
+          aria-label="Open settings"
+        >
+          Settings
+        </button>
+      ),
+    },
+  ].sort((a, b) => {
+    const usageDelta = (toolbarUsage[b.id] ?? 0) - (toolbarUsage[a.id] ?? 0);
+    if (usageDelta !== 0) {
+      return usageDelta;
+    }
+
+    return secondaryActionSortOrder[a.id] - secondaryActionSortOrder[b.id];
+  });
+
+  return (
+    <>
+      <div className="top-bar" role="toolbar" aria-label="Image information">
+        <div className="top-bar-left">
+          <span className="file-name" title={fileName}>
+            {fileName}
+          </span>
+          {images.length > 0 && (
+            <span className="image-counter">
+              {currentIndex + 1} / {images.length}
+              {isFolderScanning && ' …'}
+            </span>
+          )}
+          {isFavorite && <span className="image-counter">★</span>}
+          {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
+          {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
+        </div>
+
+        <div className="top-bar-right">
+          <div className="top-bar-group" aria-label="Navigation actions">
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={onGoHome}
+              data-tooltip="Back to landing page"
+              title="Back to landing page"
+              aria-label="Back to landing page"
+              id="btn-home"
+            >
+              <span className="top-bar-btn-icon">⌂</span>
+              <span className="top-bar-btn-label">Home</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={onOpenFile}
+              data-tooltip="Open file (Ctrl+O)"
+              title="Open file (Ctrl+O)"
+              aria-label="Open file"
+              id="btn-open-file"
+            >
+              <span className="top-bar-btn-icon">📄</span>
+              <span className="top-bar-btn-label">Open</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={onOpenFolder}
+              data-tooltip="Open folder"
+              title="Open folder"
+              aria-label="Open folder"
+              id="btn-open-folder"
+            >
+              <span className="top-bar-btn-icon">📁</span>
+              <span className="top-bar-btn-label">Folder</span>
+            </button>
+          </div>
+
+          <div className="top-bar-separator" aria-hidden="true" />
+
+          <div className="top-bar-group" aria-label="Primary actions">
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isFavorite ? 'active' : ''}`}
+              onClick={() => void handleToggleFavorite()}
+              data-tooltip="Toggle favorite (F)"
+              title="Toggle favorite (F)"
+              aria-label="Toggle favorite"
+              id="btn-favorite"
+            >
+              <span className="top-bar-btn-icon">{isFavorite ? '★' : '☆'}</span>
+              <span className="top-bar-btn-label">Favorite</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={toggleFullscreen}
+              data-tooltip="Toggle fullscreen (F11)"
+              title="Toggle fullscreen (F11)"
+              aria-label="Toggle fullscreen"
+              id="btn-fullscreen"
+            >
+              <span className="top-bar-btn-icon">{isFullscreen ? '🗗' : '⛶'}</span>
+              <span className="top-bar-btn-label">Full</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${viewMode === 'grid' ? 'active' : ''}`}
+              onClick={() => setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer')}
+              data-tooltip="Grid view (G)"
+              title="Grid view (G)"
+              aria-label="Toggle grid view"
+              id="btn-grid"
+            >
+              <span className="top-bar-btn-icon">▦</span>
+              <span className="top-bar-btn-label">Grid</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${viewMode === 'compare' ? 'active' : ''}`}
+              onClick={() => {
+                if (viewMode === 'compare') {
+                  exitCompareMode();
+                  return;
+                }
+                enterCompareMode();
+              }}
+              title={
+                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'
+              }
+              data-tooltip={
+                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'
+              }
+              aria-label="Toggle compare view"
+              id="btn-compare"
+              disabled={!canEnterCompareMode}
+            >
+              <span className="top-bar-btn-icon">≡</span>
+              <span className="top-bar-btn-label">Compare</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCropMode || pendingCropPreview ? 'active' : ''}`}
+              onClick={handleToggleCrop}
+              data-tooltip={
+                cropDisabledByRotation
+                  ? viewMode === 'compare'
+                    ? 'Crop is unavailable in compare view'
+                    : 'Crop is unavailable while rotation preview is active'
+                  : 'Crop image'
+              }
+              title={
+                cropDisabledByRotation
+                  ? viewMode === 'compare'
+                    ? 'Crop is unavailable in compare view'
+                    : 'Crop is unavailable while rotation preview is active'
+                  : 'Crop image'
+              }
+              aria-label="Toggle crop mode"
+              id="btn-crop"
+              disabled={cropDisabledByRotation}
+            >
+              <span className="top-bar-btn-icon">✂</span>
+              <span className="top-bar-btn-label">Crop</span>
+            </button>
+            <details className="top-bar-menu" ref={moreMenuRef}>
+              <summary
+                className="top-bar-btn top-bar-btn--labeled has-tooltip"
+                aria-label="More actions"
+                data-tooltip="More actions"
+                title="More actions"
+                id="btn-more-actions"
+              >
+                <span className="top-bar-btn-icon">...</span>
+                <span className="top-bar-btn-label">More</span>
+              </summary>
+              <div className="top-bar-menu-panel top-bar-menu-panel--stacked">
+                {secondaryActions.map((action) => (
+                  <div key={action.id} className="top-bar-menu-entry">
+                    {action.node}
+                  </div>
+                ))}
+              </div>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      {showProjectorGridPrompt && (
+        <div className="projector-grid-prompt-overlay" role="presentation">
+          <div className="projector-grid-prompt" role="dialog" aria-label="Projector mode setup">
+            <div className="projector-grid-prompt-header">
+              <h3>Projector mode works best with grid view</h3>
+            </div>
+            <div className="projector-grid-prompt-body">
+              <p>
+                Switch the main window to grid view so you can keep browsing there while the
+                projector updates on the second screen?
+              </p>
+              <label className="projector-grid-prompt-checkbox">
+                <input
+                  checked={skipProjectorGridPrompt}
+                  onChange={(event) => setSkipProjectorGridPrompt(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Don&apos;t show this again</span>
+              </label>
+            </div>
+            <div className="projector-grid-prompt-actions">
+              <button
+                className="setting-button-secondary"
+                onClick={() => void handleProjectorPromptKeepCurrentView()}
+                type="button"
+              >
+                Keep Current View
+              </button>
+              <button
+                className="setting-button-primary"
+                onClick={() => void handleProjectorPromptSwitchToGrid()}
+                type="button"
+              >
+                Switch to Grid
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showExif && currentImagePath && (
+        <ExifPanel
+          filePath={currentImagePath}
+          hasThumbnails={showThumbnails && viewMode === 'viewer'}
+          refreshToken={exifRefreshToken}
+          onClose={() => setShowExif(false)}
+        />
+      )}
+
+      {images.length > 1 && (
+        <>
+          <button
+            className="nav-arrow left"
+            onClick={onPrev}
+            aria-label="Previous image"
+            id="btn-prev"
+          >
+            ‹
+          </button>
+          <button
+            className="nav-arrow right"
+            onClick={onNext}
+            aria-label="Next image"
+            id="btn-next"
+          >
+            ›
+          </button>
+        </>
+      )}
+
+      {isSlideshowActive && (
+        <div className={`slideshow-indicator ${isSlideshowPaused ? 'paused' : ''}`}>
+          {isSlideshowPaused ? '⏸ Paused' : '▶ Slideshow'}
+        </div>
+      )}
+
+      <div className="bottom-controls" role="toolbar" aria-label="Image controls">
+        <button
+          className="control-btn has-tooltip"
+          onClick={onPrev}
+          data-tooltip="Previous (Left Arrow)"
+          title="Previous (←)"
+          aria-label="Previous image"
+          id="btn-ctrl-prev"
+        >
+          ⏮
+        </button>
+
+        {!isSlideshowActive ? (
+          <button
+            className="control-btn has-tooltip"
+            onClick={onStartSlideshow}
+            data-tooltip="Start slideshow (F5)"
+            title="Start slideshow (F5)"
+            aria-label="Start slideshow"
+            id="btn-start-slideshow"
+          >
+            ▶
+          </button>
+        ) : (
+          <button
+            className={`control-btn has-tooltip ${isSlideshowPaused ? '' : 'active'}`}
+            onClick={onTogglePause}
+            data-tooltip="Pause or resume slideshow (Space)"
+            title="Pause/Resume slideshow (Space)"
+            aria-label="Toggle slideshow pause"
+            id="btn-toggle-slideshow"
+          >
+            {isSlideshowPaused ? '▶' : '⏸'}
+          </button>
+        )}
+
+        <button
+          className="control-btn has-tooltip"
+          onClick={onNext}
+          data-tooltip="Next (Right Arrow)"
+          title="Next (→)"
+          aria-label="Next image"
+          id="btn-ctrl-next"
+        >
+          ⏭
+        </button>
+
+        <div className="control-divider" />
+
+        <button
+          className="control-btn has-tooltip"
+          onClick={zoomOut}
+          data-tooltip="Zoom out (-)"
+          title="Zoom out (-)"
+          aria-label="Zoom out"
+          id="btn-zoom-out"
+        >
+          −
+        </button>
+
+        <span className="zoom-display">{getZoomDisplay()}</span>
+
+        <button
+          className="control-btn has-tooltip"
+          onClick={zoomIn}
+          data-tooltip="Zoom in (+)"
+          title="Zoom in (+)"
+          aria-label="Zoom in"
+          id="btn-zoom-in"
+        >
+          +
+        </button>
+
+        <div className="control-divider" />
+
+        <button
+          className="control-btn has-tooltip"
+          onClick={() => useViewerStore.getState().rotateCounterClockwise()}
+          data-tooltip="Rotate counter-clockwise (L)"
+          title="Rotate counter-clockwise (L)"
+          aria-label="Rotate counter-clockwise"
+          id="btn-rotate-l"
+        >
+          ↺
+        </button>
+
+        <button
+          className="control-btn has-tooltip"
+          onClick={() => useViewerStore.getState().rotateClockwise()}
+          data-tooltip="Rotate clockwise (R)"
+          title="Rotate clockwise (R)"
+          aria-label="Rotate clockwise"
+          id="btn-rotate-r"
+        >
+          ↻
+        </button>
+
+        {hasPendingEdits && (
+          <button
+            className="control-btn has-tooltip"
+            onClick={() => {
+              if (currentImagePath) {
+                clearPendingEdits(currentImagePath);
+              }
+            }}
+            title="Reset pending edits"
+            aria-label="Reset pending edits"
+            id="btn-reset-edits"
+          >
+            Reset
+          </button>
+        )}
+
+        {canCommitPendingEdits && (
+          <button
+            className="control-btn active has-tooltip"
+            onClick={() => {
+              if (currentImagePath) {
+                void commitPendingEdits(currentImagePath);
+              }
+            }}
+            title="Save pending edits"
+            aria-label="Save pending edits"
+            id="btn-save-edits"
+          >
+            💾
+          </button>
+        )}
+
+        <div className="control-divider" />
+
+        <button
+          className={`control-btn has-tooltip ${zoomMode === 'fit' ? 'active' : ''}`}
+          onClick={() => setZoomMode('fit')}
+          data-tooltip="Fit to screen (0)"
+          title="Fit to screen (0)"
+          aria-label="Fit to screen"
+          id="btn-zoom-fit"
+        >
+          ⊡
+        </button>
+
+        <button
+          className={`control-btn has-tooltip ${zoomMode === 'actual' ? 'active' : ''}`}
+          onClick={() => setZoomMode('actual')}
+          data-tooltip="Actual size (1)"
+          title="Actual size (1)"
+          aria-label="Actual size"
+          id="btn-zoom-actual"
+        >
+          1:1
+        </button>
+
+        {(isCropMode || pendingCropPreview) && (
+          <>
+            <div className="control-divider" />
+            <select
+              className="crop-aspect-select"
+              aria-label="Crop aspect ratio"
+              value={cropAspectRatio}
+              onChange={(event) =>
+                setCropAspectRatio(event.target.value as 'free' | '1:1' | '4:3' | '3:2' | '16:9')
+              }
+              disabled={!isCropMode}
+            >
+              <option value="free">Free</option>
+              <option value="1:1">1:1</option>
+              <option value="4:3">4:3</option>
+              <option value="3:2">3:2</option>
+              <option value="16:9">16:9</option>
+            </select>
+            <button
+              className="control-btn has-tooltip"
+              onClick={resetCrop}
+              data-tooltip="Reset crop"
+              title="Reset crop"
+              aria-label="Reset crop"
+              id="btn-crop-reset"
+            >
+              Reset
+            </button>
+            {isCropMode ? (
+              <button
+                className="control-btn active has-tooltip"
+                onClick={applyCropPreview}
+                data-tooltip="Preview crop (Enter)"
+                title="Preview crop (Enter)"
+                aria-label="Preview crop"
+                id="btn-crop-preview"
+                disabled={!canPreviewCrop}
+              >
+                Preview
+              </button>
+            ) : (
+              <button
+                className="control-btn has-tooltip"
+                onClick={clearCropPreview}
+                data-tooltip="Clear crop preview"
+                title="Clear crop preview"
+                aria-label="Clear crop preview"
+                id="btn-crop-clear-preview"
+              >
+                Clear
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn active has-tooltip"
+                onClick={() => void handleSaveCroppedCopy()}
+                data-tooltip="Save cropped copy"
+                title="Save cropped copy"
+                aria-label="Save cropped copy"
+                id="btn-crop-save-copy"
+                disabled={!cropRect}
+              >
+                Save Copy
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn has-tooltip"
+                onClick={() => void handleOverwriteCrop()}
+                data-tooltip="Overwrite original with crop"
+                title="Overwrite original with crop"
+                aria-label="Overwrite original with crop"
+                id="btn-crop-overwrite"
+                disabled={!cropRect}
+              >
+                Overwrite
+              </button>
+            )}
+          </>
+        )}
+
+        <div className="control-divider" />
+
+        <div className="rating-controls" role="group" aria-label="Image rating">
+          {[0, 1, 2, 3, 4, 5].map((value) => (
+            <button
+              key={value}
+              className={`control-btn rating-btn has-tooltip ${currentRating === value ? 'active' : ''}`}
+              onClick={() => void handleSetRating(value)}
+              data-tooltip={
+                value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`
+              }
+              title={value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`}
+              aria-label={value === 0 ? 'Clear rating' : `Set rating ${value}`}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
