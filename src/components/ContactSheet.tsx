@@ -229,6 +229,31 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     await showTransferResultMessage(result, destination, mode);
   };
 
+  const renderQuickDestinationMenu = (mode: 'copy' | 'move') => (
+    <div className="header-menu-panel">
+      {quickDestinations.length === 0 ? (
+        <>
+          <span className="header-menu-empty">
+            No destinations configured. Add folders in Settings {'>'} Quick Destinations.
+          </span>
+          <button className="header-menu-item" onClick={() => setShowSettings(true)} type="button">
+            Open Settings
+          </button>
+        </>
+      ) : (
+        quickDestinations.map((destination) => (
+          <button
+            key={destination.id}
+            className="header-menu-item"
+            onClick={() => void handleBulkTransfer(destination, mode)}
+          >
+            {destination.label}
+          </button>
+        ))
+      )}
+    </div>
+  );
+
   const handleCloseProjector = async () => {
     await closeSecondaryWindow();
     await refreshProjectorState();
@@ -295,32 +320,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             >
               Copy To
             </summary>
-            <div className="header-menu-panel">
-              {quickDestinations.length === 0 ? (
-                <>
-                  <span className="header-menu-empty">
-                    No destinations configured. Add folders in Settings {'>'} Quick Destinations.
-                  </span>
-                  <button
-                    className="header-menu-item"
-                    onClick={() => setShowSettings(true)}
-                    type="button"
-                  >
-                    Open Settings
-                  </button>
-                </>
-              ) : (
-                quickDestinations.map((destination) => (
-                  <button
-                    key={destination.id}
-                    className="header-menu-item"
-                    onClick={() => void handleBulkTransfer(destination, 'copy')}
-                  >
-                    {destination.label}
-                  </button>
-                ))
-              )}
-            </div>
+            {renderQuickDestinationMenu('copy')}
           </details>
           <details className="header-menu">
             <summary
@@ -339,32 +339,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             >
               Move To
             </summary>
-            <div className="header-menu-panel">
-              {quickDestinations.length === 0 ? (
-                <>
-                  <span className="header-menu-empty">
-                    No destinations configured. Add folders in Settings {'>'} Quick Destinations.
-                  </span>
-                  <button
-                    className="header-menu-item"
-                    onClick={() => setShowSettings(true)}
-                    type="button"
-                  >
-                    Open Settings
-                  </button>
-                </>
-              ) : (
-                quickDestinations.map((destination) => (
-                  <button
-                    key={destination.id}
-                    className="header-menu-item"
-                    onClick={() => void handleBulkTransfer(destination, 'move')}
-                  >
-                    {destination.label}
-                  </button>
-                ))
-              )}
-            </div>
+            {renderQuickDestinationMenu('move')}
           </details>
           <button
             className="header-btn has-tooltip"

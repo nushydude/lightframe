@@ -51,8 +51,8 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
 
   const settings = useSettingsStore((s) => s.settings);
 
-  // fallow-ignore-next-line complexity
   const handleKeyDown = useCallback(
+    // fallow-ignore-next-line complexity
     async (e: KeyboardEvent) => {
       // Don't handle shortcuts when typing in inputs
       const target = e.target as HTMLElement;

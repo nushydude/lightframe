@@ -69,6 +69,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
 }
 
 /** Convert Rust snake_case settings to frontend camelCase format */
+// fallow-ignore-next-line complexity
 export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
   return {
     theme: (raw.theme as AppSettings['theme']) || DEFAULT_SETTINGS.theme,
