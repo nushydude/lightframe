@@ -40,6 +40,7 @@ describe('ViewerChrome', () => {
       settings: {
         ...state.settings,
         promptProjectorGridOnOpen: true,
+        openProjectorInGridView: false,
       },
     }));
     projectorState.isProjectorOpen = false;
@@ -474,6 +475,41 @@ describe('ViewerChrome', () => {
     expect(useViewerStore.getState().viewMode).toBe('grid');
   });
 
+  it('remembers switching to grid view for later projector launches when opting out of the prompt', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', viewMode: 'viewer' });
+    vi.spyOn(tauriCommands, 'openSecondaryWindow').mockResolvedValue(undefined);
+
+    const { unmount } = render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Open projector mode'));
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /don't show this again/i }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Grid' }));
+    });
+
+    expect(useSettingsStore.getState().settings.promptProjectorGridOnOpen).toBe(false);
+    expect(useSettingsStore.getState().settings.openProjectorInGridView).toBe(true);
+
+    unmount();
+    useViewerStore.setState({ viewMode: 'viewer' });
+    projectorState.isProjectorOpen = false;
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Open projector mode'));
+    });
+
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+    expect(screen.queryByRole('dialog', { name: 'Projector mode setup' })).not.toBeInTheDocument();
+  });
+
   it('skips the projector grid prompt when the preference is disabled', async () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', viewMode: 'viewer' });
     useSettingsStore.setState((state) => ({
@@ -493,5 +529,27 @@ describe('ViewerChrome', () => {
     });
 
     expect(screen.queryByRole('dialog', { name: 'Projector mode setup' })).not.toBeInTheDocument();
+  });
+
+  it('can remember keeping the current view without enabling automatic grid mode', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', viewMode: 'viewer' });
+    vi.spyOn(tauriCommands, 'openSecondaryWindow').mockResolvedValue(undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Open projector mode'));
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /don't show this again/i }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Keep Current View' }));
+    });
+
+    expect(useSettingsStore.getState().settings.promptProjectorGridOnOpen).toBe(false);
+    expect(useSettingsStore.getState().settings.openProjectorInGridView).toBe(false);
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
   });
 });

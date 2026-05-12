@@ -138,6 +138,9 @@ export function ViewerChrome({
   const promptProjectorGridOnOpen = useSettingsStore(
     (state) => state.settings.promptProjectorGridOnOpen
   );
+  const openProjectorInGridView = useSettingsStore(
+    (state) => state.settings.openProjectorInGridView
+  );
   const updateSettings = useSettingsStore((state) => state.updateSettings);
 
   const [showExif, setShowExif] = useState(false);
@@ -190,12 +193,15 @@ export function ViewerChrome({
     });
   };
 
-  const persistProjectorPromptPreferenceIfNeeded = async () => {
+  const persistProjectorPromptPreferenceIfNeeded = async (nextOpenProjectorInGridView: boolean) => {
     if (!skipProjectorGridPrompt) {
       return;
     }
 
-    await updateSettings({ promptProjectorGridOnOpen: false });
+    await updateSettings({
+      promptProjectorGridOnOpen: false,
+      openProjectorInGridView: nextOpenProjectorInGridView,
+    });
   };
 
   const fileName = currentImagePath
@@ -307,13 +313,13 @@ export function ViewerChrome({
   };
 
   const handleProjectorPromptKeepCurrentView = async () => {
-    await persistProjectorPromptPreferenceIfNeeded();
+    await persistProjectorPromptPreferenceIfNeeded(false);
     setShowProjectorGridPrompt(false);
     setSkipProjectorGridPrompt(false);
   };
 
   const handleProjectorPromptSwitchToGrid = async () => {
-    await persistProjectorPromptPreferenceIfNeeded();
+    await persistProjectorPromptPreferenceIfNeeded(true);
     setViewMode('grid');
     setShowProjectorGridPrompt(false);
     setSkipProjectorGridPrompt(false);
@@ -326,8 +332,12 @@ export function ViewerChrome({
         setShowProjectorGridPrompt(false);
         setSkipProjectorGridPrompt(false);
       } else {
+        const shouldOpenInGridView = openProjectorInGridView && viewMode !== 'grid';
         await openSecondaryWindow();
-        if (promptProjectorGridOnOpen && viewMode !== 'grid') {
+        if (shouldOpenInGridView) {
+          setViewMode('grid');
+        }
+        if (promptProjectorGridOnOpen && !openProjectorInGridView && viewMode !== 'grid') {
           setSkipProjectorGridPrompt(false);
           setShowProjectorGridPrompt(true);
         }

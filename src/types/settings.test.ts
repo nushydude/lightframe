@@ -61,10 +61,12 @@ describe('settingsToRust', () => {
     const rust = settingsToRust({
       ...DEFAULT_SETTINGS,
       promptProjectorGridOnOpen: false,
+      openProjectorInGridView: true,
     });
 
     expect(rust).toMatchObject({
       prompt_projector_grid_on_open: false,
+      open_projector_in_grid_view: true,
     });
   });
 });
@@ -126,8 +128,10 @@ describe('settingsFromRust', () => {
   it('parses projector prompt preference from rust payloads', () => {
     const settings = settingsFromRust({
       prompt_projector_grid_on_open: false,
+      open_projector_in_grid_view: true,
     });
 
     expect(settings.promptProjectorGridOnOpen).toBe(false);
+    expect(settings.openProjectorInGridView).toBe(true);
   });
 });

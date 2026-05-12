@@ -1,6 +1,8 @@
 mod commands;
 mod thumbnails;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -16,6 +18,18 @@ pub fn run() {
     }
 
     builder
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                if let Some(projector_window) = window.app_handle().get_webview_window("secondary")
+                {
+                    let _ = projector_window.close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::is_dir,
             commands::scan_folder,

@@ -20,6 +20,7 @@ export interface AppSettings {
   sortOrder: 'name' | 'date' | 'size' | 'random';
   showThumbnails: boolean;
   promptProjectorGridOnOpen: boolean;
+  openProjectorInGridView: boolean;
   quickDestinations: QuickDestination[];
   externalEditorPath?: string;
   externalEditorLabel?: string;
@@ -37,6 +38,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sortOrder: 'name',
   showThumbnails: true,
   promptProjectorGridOnOpen: true,
+  openProjectorInGridView: false,
   quickDestinations: [],
 };
 
@@ -58,6 +60,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     sort_order: settings.sortOrder,
     show_thumbnails: settings.showThumbnails,
     prompt_projector_grid_on_open: settings.promptProjectorGridOnOpen,
+    open_projector_in_grid_view: settings.openProjectorInGridView,
     quick_destinations: settings.quickDestinations.map((destination) => ({
       id: destination.id,
       label: destination.label,
@@ -94,6 +97,8 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     showThumbnails: (raw.show_thumbnails as boolean) ?? DEFAULT_SETTINGS.showThumbnails,
     promptProjectorGridOnOpen:
       (raw.prompt_projector_grid_on_open as boolean) ?? DEFAULT_SETTINGS.promptProjectorGridOnOpen,
+    openProjectorInGridView:
+      (raw.open_projector_in_grid_view as boolean) ?? DEFAULT_SETTINGS.openProjectorInGridView,
     quickDestinations: Array.isArray(raw.quick_destinations)
       ? raw.quick_destinations
           .map((value) => {
