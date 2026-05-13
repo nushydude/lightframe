@@ -220,9 +220,7 @@ describe('imageAssetCache', () => {
     const { getPreviewAsset, preloadPreviewAsset } = await loadCacheModule();
     const path = 'C:/images/stale-preload-preview.jpg';
 
-    let resolvePreview:
-      | ((asset: { file_path: string; cache_key: string }) => void)
-      | undefined;
+    let resolvePreview: ((asset: { file_path: string; cache_key: string }) => void) | undefined;
     getPreviewImageMock.mockImplementationOnce(
       () =>
         new Promise<{ file_path: string; cache_key: string }>((resolve) => {

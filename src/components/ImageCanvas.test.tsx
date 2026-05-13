@@ -58,7 +58,9 @@ describe('ImageCanvas', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getPreviewAssetMock.mockImplementation(async () => 'asset://localhost/cache/preview.jpg?v=preview');
+    getPreviewAssetMock.mockImplementation(
+      async () => 'asset://localhost/cache/preview.jpg?v=preview'
+    );
     getFullAssetMock.mockImplementation(() => 'asset://localhost/full.jpg');
     getImageMetadataMock.mockImplementation(async () => ({
       width: 1200,

@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getThumbnailMock =
-  vi.fn<
-    (path: string, sizeBytes?: number, modifiedAt?: string) => Promise<{
-      file_path: string;
-      cache_key: string;
-    }>
-  >();
+const getThumbnailMock = vi.fn<
+  (
+    path: string,
+    sizeBytes?: number,
+    modifiedAt?: string
+  ) => Promise<{
+    file_path: string;
+    cache_key: string;
+  }>
+>();
 
 vi.mock('./tauriCommands', () => ({
   generatedImageAssetToUrl: (asset: { file_path: string; cache_key: string }) =>

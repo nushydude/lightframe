@@ -4,7 +4,9 @@ import { CompareView } from './CompareView';
 import { useViewerStore } from '../state/viewerStore';
 
 const { getPreviewAssetMock } = vi.hoisted(() => ({
-  getPreviewAssetMock: vi.fn(async (path: string) => `asset://localhost/cache/${encodeURIComponent(path)}.jpg`),
+  getPreviewAssetMock: vi.fn(
+    async (path: string) => `asset://localhost/cache/${encodeURIComponent(path)}.jpg`
+  ),
 }));
 
 vi.mock('../services/imageAssetCache', () => ({
