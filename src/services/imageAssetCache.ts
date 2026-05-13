@@ -136,6 +136,19 @@ function createAbortError(message: string): Error {
   return error;
 }
 
+function buildFullAssetEntry(path: string): ImageAssetEntry {
+  const startVersion = currentVersion(path);
+  const entry = createCacheEntry(path, startVersion);
+  const resolvedVersion = Math.max(startVersion, currentVersion(path));
+
+  if (resolvedVersion !== entry.version) {
+    entry.version = resolvedVersion;
+    entry.url = applyVersionToUrl(entry.url, resolvedVersion);
+  }
+
+  return entry;
+}
+
 function fullAssetWorkKey(path: string, version: number): string {
   return `full::${path}::${version}`;
 }
@@ -252,14 +265,7 @@ async function loadFullAssetWithPriority(
       }
 
       recordFullAssetCacheMiss();
-      const startVersion = currentVersion(path);
-      const entry = createCacheEntry(path, startVersion);
-
-      const resolvedVersion = Math.max(startVersion, currentVersion(path));
-      if (resolvedVersion !== entry.version) {
-        entry.version = resolvedVersion;
-        entry.url = applyVersionToUrl(entry.url, resolvedVersion);
-      }
+      const entry = buildFullAssetEntry(path);
 
       if (signal.aborted) {
         throw createAbortError('Full asset work aborted after execution.');
@@ -334,6 +340,7 @@ async function loadPreviewAssetWithPriority(
   }).promise;
 }
 
+// fallow-ignore-next-line unused-exports -- intentionally exercised through focused cache tests
 export function getFullAsset(path: string, options?: CacheReadOptions): string {
   const existing = fullImageAssetCache.get(path);
   if (existing) {
@@ -344,14 +351,7 @@ export function getFullAsset(path: string, options?: CacheReadOptions): string {
   }
 
   recordFullAssetCacheMiss();
-  const startVersion = currentVersion(path);
-  const entry = createCacheEntry(path, startVersion);
-
-  const resolvedVersion = Math.max(startVersion, currentVersion(path));
-  if (resolvedVersion !== entry.version) {
-    entry.version = resolvedVersion;
-    entry.url = applyVersionToUrl(entry.url, resolvedVersion);
-  }
+  const entry = buildFullAssetEntry(path);
 
   return storeFullAsset(path, entry, options);
 }

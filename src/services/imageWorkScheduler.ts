@@ -126,6 +126,7 @@ function compareJobs(left: ImageWorkJob<unknown>, right: ImageWorkJob<unknown>):
   return left.sequence - right.sequence;
 }
 
+// fallow-ignore-next-line unused-exports -- constructed directly in focused scheduler tests
 export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   const listeners = new Set<ImageWorkListener>();
   const queuedJobs: Array<ImageWorkJob<unknown>> = [];
@@ -487,26 +488,7 @@ const imageWorkTelemetryScheduler = createImageWorkScheduler({
 
 export const imageWorkScheduler = imageWorkTelemetryScheduler;
 
-export function scheduleImageWork<T>(options: ScheduleOptions<T>): ImageWorkHandle<T> {
-  return imageWorkScheduler.schedule(options);
-}
-
-export function cancelQueuedImageWork(filter: (task: ImageWorkTaskView) => boolean): number {
-  return imageWorkScheduler.cancelQueued(filter);
-}
-
-export function getImageWorkSchedulerSnapshot(): ImageWorkSnapshot {
-  return imageWorkScheduler.getSnapshot();
-}
-
-export function subscribeImageWorkScheduler(listener: ImageWorkListener): () => void {
-  return imageWorkScheduler.subscribe(listener);
-}
-
-export function configureImageWorkScheduler(options: SchedulerOptions): void {
-  imageWorkScheduler.configure(options);
-}
-
+// fallow-ignore-next-line unused-exports -- reset directly by cache tests
 export function resetImageWorkSchedulerForTests(): void {
   imageWorkScheduler.resetForTests();
 }
