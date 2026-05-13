@@ -108,7 +108,7 @@ function createPrioritySnapshot(): Record<ImageWorkPriority, number> {
   };
 }
 
-function compareJobs(left: ImageWorkJob<any>, right: ImageWorkJob<any>): number {
+function compareJobs(left: ImageWorkJob<unknown>, right: ImageWorkJob<unknown>): number {
   const priorityOrder: Record<ImageWorkPriority, number> = {
     [IMAGE_WORK_PRIORITY.currentPreview]: 0,
     [IMAGE_WORK_PRIORITY.currentFull]: 1,
@@ -187,7 +187,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     );
   }
 
-  function canStart(job: ImageWorkJob<any>): boolean {
+  function canStart(job: ImageWorkJob<unknown>): boolean {
     const runningTotal = Array.from(jobsByKey.values()).filter(
       (item) => item.state === 'running'
     ).length;
@@ -214,7 +214,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     );
   }
 
-  function removeQueuedJob(job: ImageWorkJob<any>): boolean {
+  function removeQueuedJob(job: ImageWorkJob<unknown>): boolean {
     const index = queuedJobs.indexOf(job);
     if (index < 0) {
       return false;
@@ -223,12 +223,12 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     return true;
   }
 
-  function settleJob(
-    job: ImageWorkJob<any>,
-    settle: (consumer: ImageWorkConsumer<any>) => void
+  function settleJob<T>(
+    job: ImageWorkJob<T>,
+    settle: (consumer: ImageWorkConsumer<T>) => void
   ): void {
     jobsByKey.delete(job.key);
-    removeQueuedJob(job);
+    removeQueuedJob(job as ImageWorkJob<unknown>);
     for (const consumer of job.consumers.values()) {
       if (!consumer.canceled) {
         settle(consumer);
@@ -272,7 +272,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     }
   }
 
-  function promoteJob(job: ImageWorkJob<any>, priority: ImageWorkPriority): void {
+  function promoteJob(job: ImageWorkJob<unknown>, priority: ImageWorkPriority): void {
     if (compareJobs({ ...job, priority }, job) < 0) {
       job.priority = priority;
     }
@@ -306,7 +306,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       jobsByKey.set(job.key, job as ImageWorkJob<unknown>);
       queuedJobs.push(job as ImageWorkJob<unknown>);
     } else {
-      promoteJob(job, options.priority);
+      promoteJob(job as ImageWorkJob<unknown>, options.priority);
     }
 
     const consumerId = nextConsumerId;
@@ -317,7 +317,6 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     const promise = new Promise<T>((resolve, reject) => {
       job.consumers.set(consumerId, { resolve, reject, canceled: false });
     });
-    void promise.catch(() => {});
     void promise.catch(() => {});
 
     const cancel = () => {
@@ -336,7 +335,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       job.consumers.delete(consumerId);
 
       if (job.consumers.size === 0 && job.state === 'queued') {
-        if (removeQueuedJob(job)) {
+        if (removeQueuedJob(job as ImageWorkJob<unknown>)) {
           droppedQueued += 1;
         }
         jobsByKey.delete(job.key);

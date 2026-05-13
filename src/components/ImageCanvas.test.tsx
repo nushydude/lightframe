@@ -200,7 +200,7 @@ describe('ImageCanvas', () => {
         preloadPreviewAssetMock.mock.calls as unknown as Array<
           [string, number, { priority?: string } | undefined]
         >
-      ).map(([path, _maxDimension, options]) => [path, options])
+      ).map(([path, , options]) => [path, options])
     );
 
     expect(callsByPath.get(images[4].path)).toMatchObject({
