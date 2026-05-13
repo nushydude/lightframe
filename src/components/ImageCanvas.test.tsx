@@ -13,7 +13,7 @@ const {
   invalidateImageAssetMock,
   getImageMetadataMock,
 } = vi.hoisted(() => ({
-  getPreviewAssetMock: vi.fn(async () => 'data:image/jpeg;base64,preview'),
+  getPreviewAssetMock: vi.fn(async () => 'asset://localhost/cache/preview.jpg?v=preview'),
   getFullAssetMock: vi.fn(() => 'asset://localhost/full.jpg'),
   preloadPreviewAssetMock: vi.fn(async () => undefined),
   preloadFullAssetMock: vi.fn(async () => undefined),
@@ -58,7 +58,7 @@ describe('ImageCanvas', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getPreviewAssetMock.mockImplementation(async () => 'data:image/jpeg;base64,preview');
+    getPreviewAssetMock.mockImplementation(async () => 'asset://localhost/cache/preview.jpg?v=preview');
     getFullAssetMock.mockImplementation(() => 'asset://localhost/full.jpg');
     getImageMetadataMock.mockImplementation(async () => ({
       width: 1200,
@@ -358,7 +358,7 @@ describe('ImageCanvas', () => {
     const visibleImage = container.querySelector('img:not(.image-full-loader)');
     const fullLoader = container.querySelector('img.image-full-loader');
 
-    expect(visibleImage?.getAttribute('src')).toBe('data:image/jpeg;base64,preview');
+    expect(visibleImage?.getAttribute('src')).toBe('asset://localhost/cache/preview.jpg?v=preview');
     expect(fullLoader?.getAttribute('src')).toBe('asset://localhost/full.jpg');
 
     await act(async () => {
@@ -367,7 +367,7 @@ describe('ImageCanvas', () => {
     });
 
     expect(container.querySelector('img:not(.image-full-loader)')?.getAttribute('src')).toBe(
-      'data:image/jpeg;base64,preview'
+      'asset://localhost/cache/preview.jpg?v=preview'
     );
     expect(useViewerStore.getState().errorMessage).toBeNull();
   });

@@ -1,11 +1,11 @@
-import { getThumbnail } from './tauriCommands';
+import { generatedImageAssetToUrl, getThumbnail } from './tauriCommands';
 
 const DEFAULT_MAX_ENTRIES = 1000;
 const DEFAULT_CONCURRENCY = 6;
 
 type ThumbnailCacheEntry = {
   token: string;
-  dataUrl?: string;
+  url?: string;
   lastAccessedAt: number;
   inFlightPromise?: Promise<string>;
 };
@@ -140,12 +140,12 @@ function notifyLoaded(path: string): void {
   listenersByPath.delete(path);
 }
 
-function resolveSuccess(path: string, token: string, dataUrl: string): void {
+function resolveSuccess(path: string, token: string, url: string): void {
   const entry = thumbnailCache.get(path);
   let isCurrentToken = false;
   if (entry && entry.token === token) {
     isCurrentToken = true;
-    entry.dataUrl = dataUrl;
+    entry.url = url;
     touchEntry(entry);
     entry.inFlightPromise = undefined;
   }
@@ -153,7 +153,7 @@ function resolveSuccess(path: string, token: string, dataUrl: string): void {
   const resolverKey = requestKey(path, token);
   const resolver = inFlightResolvers.get(resolverKey);
   inFlightResolvers.delete(resolverKey);
-  resolver?.resolve(dataUrl);
+  resolver?.resolve(url);
   if (isCurrentToken) {
     notifyLoaded(path);
   }
@@ -230,8 +230,8 @@ function pumpQueue(): void {
       continue;
     }
 
-    if (entry.dataUrl) {
-      resolveSuccess(path, token, entry.dataUrl);
+    if (entry.url) {
+      resolveSuccess(path, token, entry.url);
       continue;
     }
 
@@ -242,8 +242,8 @@ function pumpQueue(): void {
       continue;
     }
     getThumbnail(path, metadata?.sizeBytes, metadata?.modifiedAt ?? undefined)
-      .then((dataUrl) => {
-        resolveSuccess(path, token, dataUrl);
+      .then((asset) => {
+        resolveSuccess(path, token, generatedImageAssetToUrl(asset));
       })
       .catch((error) => {
         resolveError(path, token, error);
@@ -265,12 +265,12 @@ export function getCachedThumbnail(request: string | ThumbnailRequest): string |
   }
 
   const entry = thumbnailCache.get(path);
-  if (!entry?.dataUrl || entry.token !== metadataToken(normalized)) {
+  if (!entry?.url || entry.token !== metadataToken(normalized)) {
     return undefined;
   }
 
   touchEntry(entry);
-  return entry.dataUrl;
+  return entry.url;
 }
 
 // Direct loader is part of the cache test seam.

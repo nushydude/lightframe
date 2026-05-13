@@ -1,4 +1,4 @@
-import { convertFileSrc, getPreviewImage } from './tauriCommands';
+import { convertFileSrc, generatedImageAssetToUrl, getPreviewImage } from './tauriCommands';
 
 type ImageAssetEntry = {
   url: string;
@@ -7,7 +7,7 @@ type ImageAssetEntry = {
 };
 
 type PreviewAssetEntry = {
-  dataUrl: string;
+  url: string;
   version: number;
   maxDimension: number;
   lastUsedAt: number;
@@ -154,11 +154,12 @@ export async function getPreviewAsset(
   const existing = previewImageAssetCache.get(path);
   if (existing && existing.version === version && existing.maxDimension === maxDimension) {
     existing.lastUsedAt = Date.now();
-    return existing.dataUrl;
+    return existing.url;
   }
 
+  const previewBust = version > 0 ? version : undefined;
   let entry: PreviewAssetEntry = {
-    dataUrl: await getPreviewImage(path, maxDimension),
+    url: generatedImageAssetToUrl(await getPreviewImage(path, maxDimension, previewBust)),
     version,
     maxDimension,
     lastUsedAt: Date.now(),
@@ -166,8 +167,9 @@ export async function getPreviewAsset(
 
   const resolvedVersion = Math.max(version, currentVersion(path));
   if (resolvedVersion !== entry.version) {
+    const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
     entry = {
-      dataUrl: await getPreviewImage(path, maxDimension),
+      url: generatedImageAssetToUrl(await getPreviewImage(path, maxDimension, resolvedBust)),
       version: resolvedVersion,
       maxDimension,
       lastUsedAt: Date.now(),
@@ -175,13 +177,13 @@ export async function getPreviewAsset(
   }
 
   if (!shouldStore(options)) {
-    return entry.dataUrl;
+    return entry.url;
   }
 
   const current = previewImageAssetCache.get(path);
   if (current && current.version >= entry.version && current.maxDimension === entry.maxDimension) {
     current.lastUsedAt = Date.now();
-    return current.dataUrl;
+    return current.url;
   }
 
   previewImageAssetCache.set(path, entry);
@@ -193,7 +195,7 @@ export async function getPreviewAsset(
   }
 
   trimCacheEntries(previewImageAssetCache, new Set([path]), MAX_PREVIEW_CACHE_ENTRIES);
-  return entry.dataUrl;
+  return entry.url;
 }
 
 export async function preloadFullAsset(path: string, options?: CacheReadOptions): Promise<void> {
@@ -219,13 +221,13 @@ export async function preloadPreviewAsset(
     return;
   }
 
-  const dataUrl = await getPreviewAsset(path, maxDimension, options);
+  const url = await getPreviewAsset(path, maxDimension, options);
   if (!shouldStore(options)) {
     return;
   }
 
   const img = new Image();
-  img.src = dataUrl;
+  img.src = url;
 }
 
 export function invalidateImageAsset(path: string): void {
