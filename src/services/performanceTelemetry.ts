@@ -219,6 +219,7 @@ export class RollingLatencySummary {
     this.nextIndex = (this.nextIndex + 1) % this.limit;
   }
 
+  // fallow-ignore-next-line unused-class-members
   reset(): void {
     this.samples.length = 0;
     this.nextIndex = 0;
@@ -384,7 +385,7 @@ function completeNavigationVisibleSource(path: string, durationMs: number): void
   state.pendingNavigationKeydown = null;
 }
 
-export const noopPerformanceTelemetrySpan: PerformanceTelemetrySpan = {
+const noopPerformanceTelemetrySpan: PerformanceTelemetrySpan = {
   end: () => null,
   cancel: () => {},
 };
@@ -402,10 +403,6 @@ export function setPerformanceTelemetryEnabled(enabled: boolean): void {
   markSnapshotDirty();
 }
 
-export function isPerformanceTelemetryEnabled(): boolean {
-  return state.enabled;
-}
-
 export function resetPerformanceTelemetry(): void {
   const startupMetricRecorded = state.startupMetricRecorded;
   resetMutableMetrics();
@@ -418,7 +415,7 @@ export function getPerformanceTelemetrySnapshot(): PerformanceTelemetrySnapshot 
   return cachedSnapshot;
 }
 
-export function subscribePerformanceTelemetry(listener: TelemetryListener): () => void {
+function subscribePerformanceTelemetry(listener: TelemetryListener): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -481,11 +478,11 @@ export async function measurePerformanceSpan<T>(
   }
 }
 
-export function incrementPerformanceCounter(counter: CounterKey, amount = 1): void {
+function incrementPerformanceCounter(counter: CounterKey, amount = 1): void {
   updateCounter(counter, amount);
 }
 
-export function setPerformanceGauge(gauge: GaugeKey, value: number): void {
+function setPerformanceGauge(gauge: GaugeKey, value: number): void {
   updateGauge(gauge, value);
 }
 

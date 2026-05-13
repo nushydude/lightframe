@@ -124,6 +124,7 @@ function getImageStyle({
 }
 
 /** Main image display canvas with zoom/pan support */
+// fallow-ignore-next-line complexity
 export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
