@@ -23,6 +23,16 @@ async function loadCacheModule() {
   return import('./imageAssetCache');
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('imageAssetCache', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -242,5 +252,36 @@ describe('imageAssetCache', () => {
 
     await getPreviewAsset(path);
     expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels queued preview preload work before preview generation starts', async () => {
+    const { preloadPreviewAsset } = await loadCacheModule();
+
+    const firstDeferred = createDeferred<{ file_path: string; cache_key: string }>();
+    getPreviewImageMock
+      .mockImplementationOnce(() => firstDeferred.promise)
+      .mockImplementationOnce(async () => ({
+        file_path: 'C:/cache/should-not-run.jpg',
+        cache_key: 'should-not-run',
+      }));
+
+    const staleAbortController = new AbortController();
+
+    const firstPromise = preloadPreviewAsset('C:/images/active.jpg');
+    const stalePromise = preloadPreviewAsset('C:/images/stale.jpg', 2048, {
+      signal: staleAbortController.signal,
+    });
+
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
+
+    staleAbortController.abort();
+    firstDeferred.resolve({
+      file_path: 'C:/cache/active.jpg',
+      cache_key: 'active',
+    });
+
+    await firstPromise;
+    await expect(stalePromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
   });
 });

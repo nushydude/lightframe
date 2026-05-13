@@ -34,7 +34,13 @@ type GaugeKey =
   | 'thumbnailInFlight'
   | 'thumbnailCacheEntries'
   | 'previewAssetCacheEntries'
-  | 'fullAssetCacheEntries';
+  | 'fullAssetCacheEntries'
+  | 'imageWorkQueueDepth'
+  | 'imageWorkActiveCount'
+  | 'imageWorkActiveInteractive'
+  | 'imageWorkActiveVisible'
+  | 'imageWorkActiveBackground'
+  | 'imageWorkDroppedQueued';
 
 type ActiveSpan = {
   key: number;
@@ -108,6 +114,12 @@ export interface PerformanceTelemetrySnapshot {
   queues: {
     thumbnailQueueDepth: number;
     thumbnailInFlight: number;
+    imageWorkQueueDepth: number;
+    imageWorkActiveCount: number;
+    imageWorkActiveInteractive: number;
+    imageWorkActiveVisible: number;
+    imageWorkActiveBackground: number;
+    imageWorkDroppedQueued: number;
   };
 }
 
@@ -179,6 +191,12 @@ function createGaugeState(): Record<GaugeKey, number> {
     thumbnailCacheEntries: 0,
     previewAssetCacheEntries: 0,
     fullAssetCacheEntries: 0,
+    imageWorkQueueDepth: 0,
+    imageWorkActiveCount: 0,
+    imageWorkActiveInteractive: 0,
+    imageWorkActiveVisible: 0,
+    imageWorkActiveBackground: 0,
+    imageWorkDroppedQueued: 0,
   };
 }
 
@@ -299,6 +317,12 @@ function buildSnapshot(): PerformanceTelemetrySnapshot {
     queues: {
       thumbnailQueueDepth: state.gauges.thumbnailQueueDepth,
       thumbnailInFlight: state.gauges.thumbnailInFlight,
+      imageWorkQueueDepth: state.gauges.imageWorkQueueDepth,
+      imageWorkActiveCount: state.gauges.imageWorkActiveCount,
+      imageWorkActiveInteractive: state.gauges.imageWorkActiveInteractive,
+      imageWorkActiveVisible: state.gauges.imageWorkActiveVisible,
+      imageWorkActiveBackground: state.gauges.imageWorkActiveBackground,
+      imageWorkDroppedQueued: state.gauges.imageWorkDroppedQueued,
     },
   };
 }
@@ -686,6 +710,30 @@ export function setPreviewAssetCacheEntryCountTelemetry(value: number): void {
 
 export function setFullAssetCacheEntryCountTelemetry(value: number): void {
   setPerformanceGauge('fullAssetCacheEntries', value);
+}
+
+export function setImageWorkQueueDepthTelemetry(value: number): void {
+  setPerformanceGauge('imageWorkQueueDepth', value);
+}
+
+export function setImageWorkActiveCountTelemetry(value: number): void {
+  setPerformanceGauge('imageWorkActiveCount', value);
+}
+
+export function setImageWorkActiveInteractiveTelemetry(value: number): void {
+  setPerformanceGauge('imageWorkActiveInteractive', value);
+}
+
+export function setImageWorkActiveVisibleTelemetry(value: number): void {
+  setPerformanceGauge('imageWorkActiveVisible', value);
+}
+
+export function setImageWorkActiveBackgroundTelemetry(value: number): void {
+  setPerformanceGauge('imageWorkActiveBackground', value);
+}
+
+export function setImageWorkDroppedQueuedTelemetry(value: number): void {
+  setPerformanceGauge('imageWorkDroppedQueued', value);
 }
 
 export function resetPerformanceTelemetryForTests(): void {

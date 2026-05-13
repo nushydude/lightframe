@@ -1,15 +1,12 @@
 import { generatedImageAssetToUrl, getThumbnail } from './tauriCommands';
+import { imageWorkScheduler } from './imageWorkScheduler';
 import {
   recordThumbnailCacheHit,
   recordThumbnailCacheMiss,
   setThumbnailCacheEntryCountTelemetry,
-  setThumbnailInFlightTelemetry,
-  setThumbnailQueueDepthTelemetry,
 } from './performanceTelemetry';
 
 const DEFAULT_MAX_ENTRIES = 1000;
-const DEFAULT_CONCURRENCY = 6;
-
 type ThumbnailCacheEntry = {
   token: string;
   url?: string;
@@ -33,28 +30,13 @@ export type ThumbnailRequest = {
 
 const thumbnailCache = new Map<string, ThumbnailCacheEntry>();
 const requestMetadataByPath = new Map<string, ThumbnailRequest>();
-const queuedRequests = new Set<string>();
-const requestQueue: ThumbnailRequestQueueItem[] = [];
-const inFlightResolvers = new Map<
-  string,
-  { resolve: (dataUrl: string) => void; reject: (reason?: unknown) => void }
->();
 const listenersByPath = new Map<string, Map<ThumbnailLoadedCallback, PreloadThumbnailOptions>>();
 let latestKeepPaths = new Set<string>();
 
 let accessCounter = 0;
-let inFlightCount = 0;
 let maxEntries = DEFAULT_MAX_ENTRIES;
-let concurrencyLimit = DEFAULT_CONCURRENCY;
-
-type ThumbnailRequestQueueItem = {
-  path: string;
-  token: string;
-};
 
 function syncThumbnailTelemetry(): void {
-  setThumbnailQueueDepthTelemetry(requestQueue.length);
-  setThumbnailInFlightTelemetry(inFlightCount);
   setThumbnailCacheEntryCountTelemetry(thumbnailCache.size);
 }
 
@@ -66,11 +48,6 @@ function touchEntry(entry: ThumbnailCacheEntry): void {
 function normalizeLimit(value: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(0, Math.floor(value));
-}
-
-function normalizeConcurrency(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_CONCURRENCY;
-  return Math.max(1, Math.floor(value));
 }
 
 function getOrCreateEntry(path: string, token: string): ThumbnailCacheEntry {
@@ -108,15 +85,7 @@ function metadataToken(request: ThumbnailRequest): string {
 }
 
 function requestKey(path: string, token: string): string {
-  return `${path}::${token}`;
-}
-
-function enqueuePath(path: string, token: string): void {
-  const key = requestKey(path, token);
-  if (queuedRequests.has(key)) return;
-  queuedRequests.add(key);
-  requestQueue.push({ path, token });
-  syncThumbnailTelemetry();
+  return `thumbnail:${path}::${token}`;
 }
 
 function addListener(path: string, options: PreloadThumbnailOptions): void {
@@ -154,45 +123,6 @@ function notifyLoaded(path: string): void {
   listenersByPath.delete(path);
 }
 
-function resolveSuccess(path: string, token: string, url: string): void {
-  const entry = thumbnailCache.get(path);
-  let isCurrentToken = false;
-  if (entry && entry.token === token) {
-    isCurrentToken = true;
-    entry.url = url;
-    touchEntry(entry);
-    entry.inFlightPromise = undefined;
-  }
-
-  const resolverKey = requestKey(path, token);
-  const resolver = inFlightResolvers.get(resolverKey);
-  inFlightResolvers.delete(resolverKey);
-  resolver?.resolve(url);
-  if (isCurrentToken) {
-    notifyLoaded(path);
-  }
-  enforceCacheLimit();
-  syncThumbnailTelemetry();
-}
-
-function resolveError(path: string, token: string, error: unknown): void {
-  const entry = thumbnailCache.get(path);
-  if (entry?.token === token) {
-    thumbnailCache.delete(path);
-    requestMetadataByPath.delete(path);
-  }
-
-  const resolverKey = requestKey(path, token);
-  const resolver = inFlightResolvers.get(resolverKey);
-  inFlightResolvers.delete(resolverKey);
-  resolver?.reject(error);
-  if (entry?.token === token) {
-    clearListeners(path);
-  }
-  enforceCacheLimit();
-  syncThumbnailTelemetry();
-}
-
 function clearStaleListeners(keepPaths: Set<string>): void {
   for (const path of listenersByPath.keys()) {
     if (!keepPaths.has(path)) {
@@ -219,61 +149,108 @@ function enforceCacheLimit(): void {
     if (thumbnailCache.size <= maxEntries) {
       break;
     }
+
     thumbnailCache.delete(path);
-    for (const key of Array.from(queuedRequests)) {
-      if (key.startsWith(`${path}::`)) {
-        queuedRequests.delete(key);
-      }
-    }
     listenersByPath.delete(path);
     requestMetadataByPath.delete(path);
   }
+
   syncThumbnailTelemetry();
 }
 
-function pumpQueue(): void {
-  while (inFlightCount < concurrencyLimit && requestQueue.length > 0) {
-    const queued = requestQueue.shift();
-    if (!queued) {
-      return;
-    }
-    const { path, token } = queued;
-    const queuedKey = requestKey(path, token);
-
-    queuedRequests.delete(queuedKey);
-    syncThumbnailTelemetry();
-
-    const entry = thumbnailCache.get(path);
-    if (!entry?.inFlightPromise || entry.token !== token) {
-      continue;
-    }
-
-    if (entry.url) {
-      resolveSuccess(path, token, entry.url);
-      continue;
-    }
-
-    inFlightCount += 1;
-    syncThumbnailTelemetry();
-    const metadata = requestMetadataByPath.get(path);
-    if (!metadata || metadataToken(metadata) !== token) {
-      inFlightCount -= 1;
-      syncThumbnailTelemetry();
-      continue;
-    }
-    getThumbnail(path, metadata?.sizeBytes, metadata?.modifiedAt ?? undefined)
-      .then((asset) => {
-        resolveSuccess(path, token, generatedImageAssetToUrl(asset));
-      })
-      .catch((error) => {
-        resolveError(path, token, error);
-      })
-      .finally(() => {
-        inFlightCount -= 1;
-        syncThumbnailTelemetry();
-        pumpQueue();
-      });
+function resolveSuccess(path: string, token: string, url: string): string {
+  const entry = thumbnailCache.get(path);
+  let isCurrentToken = false;
+  if (entry && entry.token === token) {
+    isCurrentToken = true;
+    entry.url = url;
+    touchEntry(entry);
+    entry.inFlightPromise = undefined;
   }
+
+  if (isCurrentToken) {
+    notifyLoaded(path);
+  }
+
+  enforceCacheLimit();
+  syncThumbnailTelemetry();
+  return url;
+}
+
+function resolveError(path: string, token: string, error: unknown): never {
+  const entry = thumbnailCache.get(path);
+  if (entry?.token === token) {
+    thumbnailCache.delete(path);
+    requestMetadataByPath.delete(path);
+    clearListeners(path);
+  }
+
+  enforceCacheLimit();
+  syncThumbnailTelemetry();
+  throw error;
+}
+
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function loadThumbnailWithPriority(
+  request: string | ThumbnailRequest,
+  priority: 'visible-thumbnail' | 'background-preload' = 'visible-thumbnail'
+): Promise<string> {
+  const normalized = normalizeRequest(request);
+  const { path, sizeBytes, modifiedAt } = normalized;
+  const token = metadataToken(normalized);
+  const existingMetadata = requestMetadataByPath.get(path);
+  if (existingMetadata && metadataToken(existingMetadata) !== token) {
+    imageWorkScheduler.cancelQueued((job) => job.key.startsWith(`thumbnail:${path}::`));
+    thumbnailCache.delete(path);
+  }
+
+  const cached = getCachedThumbnail(normalized);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+
+  recordThumbnailCacheMiss();
+  const entry = getOrCreateEntry(path, token);
+  if (entry.inFlightPromise) {
+    return entry.inFlightPromise;
+  }
+
+  requestMetadataByPath.set(path, { path, sizeBytes, modifiedAt });
+  entry.inFlightPromise = imageWorkScheduler
+    .schedule({
+      key: requestKey(path, token),
+      sourcePath: path,
+      priority,
+      generationToken: token,
+      run: async ({ signal }) => {
+        if (signal.aborted) {
+          throw createAbortError('Thumbnail work aborted before execution.');
+        }
+
+        const latestRequest = requestMetadataByPath.get(path);
+        if (!latestRequest || metadataToken(latestRequest) !== token) {
+          throw createAbortError('Thumbnail request became stale before execution.');
+        }
+
+        const asset = await getThumbnail(path, sizeBytes, modifiedAt ?? undefined);
+        if (signal.aborted) {
+          throw createAbortError('Thumbnail work aborted after execution.');
+        }
+
+        return generatedImageAssetToUrl(asset);
+      },
+    })
+    .promise
+    .then((url) => resolveSuccess(path, token, url))
+    .catch((error) => resolveError(path, token, error));
+
+  syncThumbnailTelemetry();
+  return entry.inFlightPromise;
 }
 
 export function getCachedThumbnail(request: string | ThumbnailRequest): string | undefined {
@@ -299,37 +276,13 @@ export function getCachedThumbnail(request: string | ThumbnailRequest): string |
 // Direct loader is part of the cache test seam.
 // fallow-ignore-next-line unused-export
 export function loadThumbnail(request: string | ThumbnailRequest): Promise<string> {
-  const normalized = normalizeRequest(request);
-  const { path, sizeBytes, modifiedAt } = normalized;
-  const token = metadataToken(normalized);
-  const existingMetadata = requestMetadataByPath.get(path);
-  if (existingMetadata && metadataToken(existingMetadata) !== token) {
-    thumbnailCache.delete(path);
-  }
-  const cached = getCachedThumbnail(normalized);
-  if (cached) {
-    return Promise.resolve(cached);
-  }
-
-  recordThumbnailCacheMiss();
-  const entry = getOrCreateEntry(path, token);
-
-  if (entry.inFlightPromise) {
-    return entry.inFlightPromise;
-  }
-
-  entry.inFlightPromise = new Promise<string>((resolve, reject) => {
-    inFlightResolvers.set(requestKey(path, token), { resolve, reject });
-  });
-
-  requestMetadataByPath.set(path, { path, sizeBytes, modifiedAt });
-  enqueuePath(path, token);
-  syncThumbnailTelemetry();
-  pumpQueue();
-  return entry.inFlightPromise;
+  return loadThumbnailWithPriority(request, 'visible-thumbnail');
 }
 
 export function invalidateThumbnail(path: string): void {
+  imageWorkScheduler.cancelQueued(
+    (job) => job.sourcePath === path && job.key.startsWith(`thumbnail:${path}::`)
+  );
   thumbnailCache.delete(path);
   requestMetadataByPath.delete(path);
   listenersByPath.delete(path);
@@ -340,10 +293,6 @@ export function preloadThumbnails(
   requests: Array<string | ThumbnailRequest>,
   options: PreloadThumbnailOptions = {}
 ): void {
-  if (typeof options.concurrency === 'number') {
-    concurrencyLimit = normalizeConcurrency(options.concurrency);
-  }
-
   const uniqueRequests = new Map<string, ThumbnailRequest>();
   requests.forEach((request) => {
     const normalized = normalizeRequest(request);
@@ -355,7 +304,7 @@ export function preloadThumbnails(
       addListener(path, options);
     }
 
-    void loadThumbnail(request).catch(() => {
+    void loadThumbnailWithPriority(request, 'visible-thumbnail').catch(() => {
       // Ignore preload failures and let future attempts retry.
     });
   });
@@ -368,22 +317,24 @@ export function evictThumbnailsExcept(keepPaths: Set<string>, maxEntriesOverride
 
   latestKeepPaths = new Set(keepPaths);
   clearStaleListeners(latestKeepPaths);
+  imageWorkScheduler.cancelQueued(
+    (job) =>
+      job.priority === 'visible-thumbnail' &&
+      job.key.startsWith('thumbnail:') &&
+      !latestKeepPaths.has(job.sourcePath)
+  );
   enforceCacheLimit();
 }
 
 // Reset hook is intentionally test-only.
 // fallow-ignore-next-line unused-export
 export function clearThumbnailCacheForTests(): void {
+  imageWorkScheduler.resetForTests();
   thumbnailCache.clear();
-  queuedRequests.clear();
-  requestQueue.length = 0;
-  inFlightResolvers.clear();
   listenersByPath.clear();
   requestMetadataByPath.clear();
   latestKeepPaths = new Set();
   accessCounter = 0;
-  inFlightCount = 0;
   maxEntries = DEFAULT_MAX_ENTRIES;
-  concurrencyLimit = DEFAULT_CONCURRENCY;
   syncThumbnailTelemetry();
 }
