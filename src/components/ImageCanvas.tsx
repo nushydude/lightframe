@@ -348,29 +348,27 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     const loadImage = async () => {
       let imageMetadata: ImageMetadata | null = null;
       try {
-        imageMetadata = await imageWorkScheduler
-          .schedule({
-            key: `metadata::${currentImagePath}`,
-            priority: IMAGE_WORK_PRIORITY.currentMetadata,
-            sourcePath: currentImagePath,
-            generationToken: requestId,
-            signal: currentWorkAbortController.signal,
-            run: async ({ signal }) => {
-              if (signal.aborted) {
-                throw Object.assign(new Error('Metadata work aborted before execution.'), {
-                  name: 'AbortError',
-                });
-              }
-              const nextMetadata = await getImageMetadata(currentImagePath);
-              if (signal.aborted) {
-                throw Object.assign(new Error('Metadata work aborted after execution.'), {
-                  name: 'AbortError',
-                });
-              }
-              return nextMetadata;
-            },
-          })
-          .promise;
+        imageMetadata = await imageWorkScheduler.schedule({
+          key: `metadata::${currentImagePath}`,
+          priority: IMAGE_WORK_PRIORITY.currentMetadata,
+          sourcePath: currentImagePath,
+          generationToken: requestId,
+          signal: currentWorkAbortController.signal,
+          run: async ({ signal }) => {
+            if (signal.aborted) {
+              throw Object.assign(new Error('Metadata work aborted before execution.'), {
+                name: 'AbortError',
+              });
+            }
+            const nextMetadata = await getImageMetadata(currentImagePath);
+            if (signal.aborted) {
+              throw Object.assign(new Error('Metadata work aborted after execution.'), {
+                name: 'AbortError',
+              });
+            }
+            return nextMetadata;
+          },
+        }).promise;
         if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
@@ -394,7 +392,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         }
         console.error('Failed to load preview image:', err);
         if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
-          ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
+          ensureFullResolutionLoaded(
+            currentImagePath,
+            requestId,
+            currentWorkAbortController.signal
+          );
         }
         return;
       }
@@ -409,7 +411,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         )
       ) {
         if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
-          ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
+          ensureFullResolutionLoaded(
+            currentImagePath,
+            requestId,
+            currentWorkAbortController.signal
+          );
         }
       }
     };

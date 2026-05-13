@@ -245,8 +245,7 @@ function loadThumbnailWithPriority(
         return generatedImageAssetToUrl(asset);
       },
     })
-    .promise
-    .then((url) => resolveSuccess(path, token, url))
+    .promise.then((url) => resolveSuccess(path, token, url))
     .catch((error) => resolveError(path, token, error));
 
   syncThumbnailTelemetry();

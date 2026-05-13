@@ -18,8 +18,7 @@ export const IMAGE_WORK_PRIORITY = {
   backgroundPreload: 'background-preload',
 } as const;
 
-export type ImageWorkPriority =
-  (typeof IMAGE_WORK_PRIORITY)[keyof typeof IMAGE_WORK_PRIORITY];
+export type ImageWorkPriority = (typeof IMAGE_WORK_PRIORITY)[keyof typeof IMAGE_WORK_PRIORITY];
 
 export type ImageWorkHandle<T> = {
   key: string;
@@ -189,8 +188,9 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   }
 
   function canStart(job: ImageWorkJob<any>): boolean {
-    const runningTotal = Array.from(jobsByKey.values()).filter((item) => item.state === 'running')
-      .length;
+    const runningTotal = Array.from(jobsByKey.values()).filter(
+      (item) => item.state === 'running'
+    ).length;
     if (runningTotal >= maxConcurrent) {
       return false;
     }
@@ -202,7 +202,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
 
     if (bucket === 'visible') {
       return (
-        (!(hasQueuedInteractiveWork() && countRunning('interactive') < maxInteractiveConcurrent)) &&
+        !(hasQueuedInteractiveWork() && countRunning('interactive') < maxInteractiveConcurrent) &&
         countRunning('visible') < maxVisibleConcurrent
       );
     }
@@ -223,7 +223,10 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     return true;
   }
 
-  function settleJob(job: ImageWorkJob<any>, settle: (consumer: ImageWorkConsumer<any>) => void): void {
+  function settleJob(
+    job: ImageWorkJob<any>,
+    settle: (consumer: ImageWorkConsumer<any>) => void
+  ): void {
     jobsByKey.delete(job.key);
     removeQueuedJob(job);
     for (const consumer of job.consumers.values()) {
@@ -347,8 +350,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     if (options.signal) {
       const abortListener = () => cancel();
       options.signal.addEventListener('abort', abortListener, { once: true });
-      removeAbortListener = () =>
-        options.signal?.removeEventListener('abort', abortListener);
+      removeAbortListener = () => options.signal?.removeEventListener('abort', abortListener);
     }
 
     void promise.then(
@@ -471,7 +473,9 @@ const imageWorkTelemetryScheduler = createImageWorkScheduler({
       snapshot.activeByPriority[IMAGE_WORK_PRIORITY.adjacentDirectional] +
       snapshot.activeByPriority[IMAGE_WORK_PRIORITY.backgroundPreload];
 
-    setThumbnailQueueDepthTelemetry(snapshot.queuedByPriority[IMAGE_WORK_PRIORITY.visibleThumbnail]);
+    setThumbnailQueueDepthTelemetry(
+      snapshot.queuedByPriority[IMAGE_WORK_PRIORITY.visibleThumbnail]
+    );
     setThumbnailInFlightTelemetry(visibleCount);
     setImageWorkQueueDepthTelemetry(snapshot.queueDepth);
     setImageWorkActiveCountTelemetry(snapshot.inFlight);
@@ -488,9 +492,7 @@ export function scheduleImageWork<T>(options: ScheduleOptions<T>): ImageWorkHand
   return imageWorkScheduler.schedule(options);
 }
 
-export function cancelQueuedImageWork(
-  filter: (task: ImageWorkTaskView) => boolean
-): number {
+export function cancelQueuedImageWork(filter: (task: ImageWorkTaskView) => boolean): number {
   return imageWorkScheduler.cancelQueued(filter);
 }
 

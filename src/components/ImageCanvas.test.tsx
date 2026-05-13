@@ -54,7 +54,13 @@ vi.mock('../services/imageWorkScheduler', () => ({
     backgroundPreload: 'background-preload',
   },
   imageWorkScheduler: {
-    schedule: ({ key, run }: { key: string; run: (context: { signal: AbortSignal; key: string }) => unknown }) => ({
+    schedule: ({
+      key,
+      run,
+    }: {
+      key: string;
+      run: (context: { signal: AbortSignal; key: string }) => unknown;
+    }) => ({
       promise: Promise.resolve().then(() => run({ signal: new AbortController().signal, key })),
     }),
   },
@@ -205,7 +211,9 @@ describe('ImageCanvas', () => {
     });
     const backgroundPreviewCall = callsByPath.get(images[2].path);
     const backgroundFullCall = (
-      preloadFullAssetMock.mock.calls as unknown as Array<[string, { priority?: string } | undefined]>
+      preloadFullAssetMock.mock.calls as unknown as Array<
+        [string, { priority?: string } | undefined]
+      >
     ).find(([path]) => path === images[2].path)?.[1];
 
     expect(backgroundPreviewCall ?? backgroundFullCall).toMatchObject({

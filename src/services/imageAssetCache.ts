@@ -151,7 +151,11 @@ function workScope(priority: ImageWorkPriority): 'interactive' | 'background' {
     : 'background';
 }
 
-function scopedFullAssetWorkKey(path: string, version: number, priority: ImageWorkPriority): string {
+function scopedFullAssetWorkKey(
+  path: string,
+  version: number,
+  priority: ImageWorkPriority
+): string {
   return `${fullAssetWorkKey(path, version)}::${workScope(priority)}`;
 }
 
@@ -236,36 +240,34 @@ async function loadFullAssetWithPriority(
     return cached.url;
   }
 
-  return imageWorkScheduler
-    .schedule({
-      key: scopedFullAssetWorkKey(path, version, priority),
-      priority,
-      sourcePath: path,
-      generationToken: version,
-      signal: options?.signal,
-      run: ({ signal }) => {
-        if (signal.aborted) {
-          throw createAbortError('Full asset work aborted before execution.');
-        }
+  return imageWorkScheduler.schedule({
+    key: scopedFullAssetWorkKey(path, version, priority),
+    priority,
+    sourcePath: path,
+    generationToken: version,
+    signal: options?.signal,
+    run: ({ signal }) => {
+      if (signal.aborted) {
+        throw createAbortError('Full asset work aborted before execution.');
+      }
 
-        recordFullAssetCacheMiss();
-        const startVersion = currentVersion(path);
-        const entry = createCacheEntry(path, startVersion);
+      recordFullAssetCacheMiss();
+      const startVersion = currentVersion(path);
+      const entry = createCacheEntry(path, startVersion);
 
-        const resolvedVersion = Math.max(startVersion, currentVersion(path));
-        if (resolvedVersion !== entry.version) {
-          entry.version = resolvedVersion;
-          entry.url = applyVersionToUrl(entry.url, resolvedVersion);
-        }
+      const resolvedVersion = Math.max(startVersion, currentVersion(path));
+      if (resolvedVersion !== entry.version) {
+        entry.version = resolvedVersion;
+        entry.url = applyVersionToUrl(entry.url, resolvedVersion);
+      }
 
-        if (signal.aborted) {
-          throw createAbortError('Full asset work aborted after execution.');
-        }
+      if (signal.aborted) {
+        throw createAbortError('Full asset work aborted after execution.');
+      }
 
-        return storeFullAsset(path, entry, options);
-      },
-    })
-    .promise;
+      return storeFullAsset(path, entry, options);
+    },
+  }).promise;
 }
 
 async function loadPreviewAssetWithPriority(
@@ -283,55 +285,53 @@ async function loadPreviewAssetWithPriority(
     return existing.url;
   }
 
-  return imageWorkScheduler
-    .schedule({
-      key: scopedPreviewAssetWorkKey(path, maxDimension, version, priority),
-      priority,
-      sourcePath: path,
-      generationToken: version,
-      signal: options?.signal,
-      run: async ({ signal }) => {
-        if (signal.aborted) {
-          throw createAbortError('Preview work aborted before execution.');
-        }
+  return imageWorkScheduler.schedule({
+    key: scopedPreviewAssetWorkKey(path, maxDimension, version, priority),
+    priority,
+    sourcePath: path,
+    generationToken: version,
+    signal: options?.signal,
+    run: async ({ signal }) => {
+      if (signal.aborted) {
+        throw createAbortError('Preview work aborted before execution.');
+      }
 
-        recordPreviewAssetCacheMiss();
-        const initialVersion = currentVersion(path);
-        const initialBust = initialVersion > 0 ? initialVersion : undefined;
-        let entry: PreviewAssetEntry = {
+      recordPreviewAssetCacheMiss();
+      const initialVersion = currentVersion(path);
+      const initialBust = initialVersion > 0 ? initialVersion : undefined;
+      let entry: PreviewAssetEntry = {
+        url: generatedImageAssetToUrl(
+          await measurePerformanceSpan('previewGeneration', () =>
+            getPreviewImage(path, maxDimension, initialBust)
+          )
+        ),
+        version: initialVersion,
+        maxDimension,
+        lastUsedAt: Date.now(),
+      };
+
+      const resolvedVersion = Math.max(initialVersion, currentVersion(path));
+      if (resolvedVersion !== entry.version) {
+        const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
+        entry = {
           url: generatedImageAssetToUrl(
             await measurePerformanceSpan('previewGeneration', () =>
-              getPreviewImage(path, maxDimension, initialBust)
+              getPreviewImage(path, maxDimension, resolvedBust)
             )
           ),
-          version: initialVersion,
+          version: resolvedVersion,
           maxDimension,
           lastUsedAt: Date.now(),
         };
+      }
 
-        const resolvedVersion = Math.max(initialVersion, currentVersion(path));
-        if (resolvedVersion !== entry.version) {
-          const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
-          entry = {
-            url: generatedImageAssetToUrl(
-              await measurePerformanceSpan('previewGeneration', () =>
-                getPreviewImage(path, maxDimension, resolvedBust)
-              )
-            ),
-            version: resolvedVersion,
-            maxDimension,
-            lastUsedAt: Date.now(),
-          };
-        }
+      if (signal.aborted) {
+        throw createAbortError('Preview work aborted after execution.');
+      }
 
-        if (signal.aborted) {
-          throw createAbortError('Preview work aborted after execution.');
-        }
-
-        return storePreviewAsset(path, entry, options);
-      },
-    })
-    .promise;
+      return storePreviewAsset(path, entry, options);
+    },
+  }).promise;
 }
 
 export function getFullAsset(path: string, options?: CacheReadOptions): string {
@@ -365,7 +365,12 @@ export async function getPreviewAsset(
   maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION,
   options?: CacheReadOptions
 ): Promise<string> {
-  return loadPreviewAssetWithPriority(path, maxDimension, IMAGE_WORK_PRIORITY.currentPreview, options);
+  return loadPreviewAssetWithPriority(
+    path,
+    maxDimension,
+    IMAGE_WORK_PRIORITY.currentPreview,
+    options
+  );
 }
 
 export async function preloadFullAsset(

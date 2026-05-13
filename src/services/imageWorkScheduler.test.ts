@@ -154,7 +154,9 @@ describe('imageWorkScheduler', () => {
     expect(scheduler.getSnapshot().queueDepth).toBe(1);
 
     expect(
-      scheduler.cancelQueued((task: { sourcePath: string }) => task.sourcePath === 'C:/images/stale.jpg')
+      scheduler.cancelQueued(
+        (task: { sourcePath: string }) => task.sourcePath === 'C:/images/stale.jpg'
+      )
     ).toBe(1);
 
     blocker.resolve();
