@@ -2,12 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const convertFileSrcMock = vi.fn((path: string) => `asset://localhost/${path}`);
 const getPreviewImageMock = vi.fn(
-  async (path: string, maxDimension: number) =>
-    `data:image/jpeg;base64,preview-${maxDimension}-${path}`
+  async (
+    path: string,
+    maxDimension: number,
+    invalidationBust?: number
+  ): Promise<{ file_path: string; cache_key: string }> => ({
+    file_path: `C:/cache/preview-${maxDimension}-${path.replace(/[:/]/g, '_')}-${invalidationBust ?? 'base'}.jpg`,
+    cache_key: `preview-${maxDimension}-${path}-${invalidationBust ?? 'base'}`,
+  })
 );
 
 vi.mock('./tauriCommands', () => ({
   convertFileSrc: convertFileSrcMock,
+  generatedImageAssetToUrl: (asset: { file_path: string; cache_key: string }) =>
+    `${convertFileSrcMock(asset.file_path)}?v=${encodeURIComponent(asset.cache_key)}`,
   getPreviewImage: getPreviewImageMock,
 }));
 
@@ -134,7 +142,7 @@ describe('imageAssetCache', () => {
     expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
   });
 
-  it('caches preview data URLs and reuses them for repeated reads', async () => {
+  it('caches preview asset URLs and reuses them for repeated reads', async () => {
     const { getPreviewAsset } = await loadCacheModule();
     const path = 'C:/images/preview-a.jpg';
 
@@ -142,18 +150,37 @@ describe('imageAssetCache', () => {
     const second = await getPreviewAsset(path);
 
     expect(first).toBe(second);
+    expect(first).toContain('asset://localhost/');
+    expect(first).toContain('v=preview-2048-C%3A%2Fimages%2Fpreview-a.jpg-base');
     expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
+    expect(getPreviewImageMock).toHaveBeenCalledWith(path, 2048, undefined);
   });
 
   it('invalidateImageAsset clears stale preview cache for that path', async () => {
     const { getPreviewAsset, invalidateImageAsset } = await loadCacheModule();
     const path = 'C:/images/preview-invalidate.jpg';
 
-    await getPreviewAsset(path);
-    invalidateImageAsset(path);
-    await getPreviewAsset(path);
+    getPreviewImageMock
+      .mockResolvedValueOnce({
+        file_path: 'C:/cache/preview-before.jpg',
+        cache_key: 'before-edit',
+      })
+      .mockResolvedValueOnce({
+        file_path: 'C:/cache/preview-after.jpg',
+        cache_key: 'after-edit-busted',
+      });
 
+    const first = await getPreviewAsset(path);
+    vi.setSystemTime(new Date('2026-01-01T00:00:05.000Z'));
+    const invalidationVersion = Date.now();
+    invalidateImageAsset(path);
+    const second = await getPreviewAsset(path);
+
+    expect(first).toContain('v=before-edit');
+    expect(second).toContain('v=after-edit-busted');
+    expect(second).not.toBe(first);
     expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
+    expect(getPreviewImageMock).toHaveBeenLastCalledWith(path, 2048, invalidationVersion);
   });
 
   it('keeps preview cache bounded and evicts least-recently-used entries', async () => {
@@ -193,10 +220,10 @@ describe('imageAssetCache', () => {
     const { getPreviewAsset, preloadPreviewAsset } = await loadCacheModule();
     const path = 'C:/images/stale-preload-preview.jpg';
 
-    let resolvePreview: ((dataUrl: string) => void) | undefined;
+    let resolvePreview: ((asset: { file_path: string; cache_key: string }) => void) | undefined;
     getPreviewImageMock.mockImplementationOnce(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<{ file_path: string; cache_key: string }>((resolve) => {
           resolvePreview = resolve;
         })
     );
@@ -207,7 +234,10 @@ describe('imageAssetCache', () => {
     });
 
     isCurrentGeneration = false;
-    resolvePreview?.(`data:image/jpeg;base64,preview-2048-${path}`);
+    resolvePreview?.({
+      file_path: 'C:/cache/stale-preload-preview.jpg',
+      cache_key: `preview-2048-${path}`,
+    });
     await pendingPreload;
 
     await getPreviewAsset(path);

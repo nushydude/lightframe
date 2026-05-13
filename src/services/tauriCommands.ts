@@ -33,6 +33,11 @@ export interface CropRect {
   height: number;
 }
 
+export interface GeneratedImageAsset {
+  file_path: string;
+  cache_key: string;
+}
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });
@@ -48,9 +53,17 @@ export async function getImageMetadata(filePath: string): Promise<ImageMetadata>
   return invoke<ImageMetadata>('get_image_metadata', { filePath });
 }
 
-/** Generate a downscaled preview image and return it as a data URL */
-export async function getPreviewImage(filePath: string, maxDimension: number): Promise<string> {
-  return invoke<string>('get_preview_image', { filePath, maxDimension });
+/** Generate a downscaled preview image and return a cached file-backed asset */
+export async function getPreviewImage(
+  filePath: string,
+  maxDimension: number,
+  invalidationBust?: number
+): Promise<GeneratedImageAsset> {
+  return invoke<GeneratedImageAsset>('get_preview_image', {
+    filePath,
+    maxDimension,
+    invalidationBust,
+  });
 }
 
 /** Read persisted application settings */
@@ -138,13 +151,13 @@ export async function overwriteWithCrop(
   return invoke('overwrite_with_crop', { filePath, cropRect, rotationDegrees });
 }
 
-/** Get a small base64 thumbnail for an image */
+/** Get a small cached thumbnail asset for an image */
 export async function getThumbnail(
   filePath: string,
   sizeBytes?: number,
   modifiedAt?: string
-): Promise<string> {
-  return invoke<string>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
+): Promise<GeneratedImageAsset> {
+  return invoke<GeneratedImageAsset>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
 }
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
@@ -274,6 +287,13 @@ export async function openUrlExternal(url: string): Promise<void> {
 /** Convert a local file path to a Tauri asset protocol URL */
 export function convertFileSrc(path: string): string {
   return tauriConvertFileSrc(path);
+}
+
+/** Convert a generated cached image asset into a URL with a stable cache-busting token */
+export function generatedImageAssetToUrl(asset: GeneratedImageAsset): string {
+  const url = new URL(convertFileSrc(asset.file_path));
+  url.searchParams.set('v', asset.cache_key);
+  return url.toString();
 }
 
 /** Extract the parent directory from a file path */

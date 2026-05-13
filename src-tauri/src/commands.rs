@@ -1,5 +1,4 @@
 use crate::thumbnails;
-use base64::Engine;
 use image::GenericImageView;
 use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
 use little_exif::exif_tag::ExifTag;
@@ -414,46 +413,39 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
         .map_err(|err| format!("Image metadata worker failed: {}", err))?
 }
 
-fn get_preview_image_blocking(file_path: String, max_dimension: u32) -> Result<String, String> {
-    if max_dimension == 0 {
-        return Err("max_dimension must be greater than zero".to_string());
-    }
-
+fn get_preview_image_blocking(
+    file_path: String,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+    app_cache_dir: PathBuf,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
-    let img = image::open(path).map_err(|e| format!("Failed to open image for preview: {}", e))?;
-    let (width, height) = img.dimensions();
-    let preview = if width > max_dimension || height > max_dimension {
-        img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
-    } else {
-        img
-    };
-    let has_alpha = preview.color().has_alpha();
-    let mime_type = if has_alpha { "image/png" } else { "image/jpeg" };
-
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    if has_alpha {
-        preview
-            .write_to(&mut buffer, image::ImageFormat::Png)
-            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
-    } else {
-        image::DynamicImage::ImageRgb8(preview.to_rgb8())
-            .write_to(&mut buffer, image::ImageFormat::Jpeg)
-            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
-    }
-
-    let bytes = buffer.into_inner();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Ok(format!("data:{};base64,{}", mime_type, encoded))
+    let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
+    let preview_cache_dir = app_cache_dir.join("previews");
+    thumbnails::get_or_create_preview(
+        path,
+        &metadata,
+        &preview_cache_dir,
+        max_dimension,
+        invalidation_bust,
+    )
 }
 
 #[tauri::command]
-pub async fn get_preview_image(file_path: String, max_dimension: u32) -> Result<String, String> {
+pub async fn get_preview_image(
+    app: AppHandle,
+    file_path: String,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let app_cache_dir =
+        app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
     tauri::async_runtime::spawn_blocking(move || {
-        get_preview_image_blocking(file_path, max_dimension)
+        get_preview_image_blocking(file_path, max_dimension, invalidation_bust, app_cache_dir)
     })
     .await
     .map_err(|err| format!("Preview image worker failed: {}", err))?
@@ -1290,27 +1282,27 @@ pub async fn overwrite_with_crop(
     .map_err(|err| format!("Crop overwrite worker failed: {}", err))?
 }
 
-/// Generate a small base64 thumbnail for high-performance navigation
+/// Generate a small cached thumbnail asset for high-performance navigation
 fn get_thumbnail_blocking(
     file_path: String,
     size_bytes: Option<u64>,
     modified_at: Option<String>,
     app_cache_dir: PathBuf,
-) -> Result<String, String> {
+) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     let metadata = thumbnails::resolve_source_metadata(path, size_bytes, modified_at.as_deref())?;
     let thumbnail_cache_dir = app_cache_dir.join("thumbnails");
     thumbnails::get_or_create_thumbnail(path, &metadata, &thumbnail_cache_dir)
 }
 
-/// Generate a small base64 thumbnail for high-performance navigation
+/// Generate a small cached thumbnail asset for high-performance navigation
 #[tauri::command]
 pub async fn get_thumbnail(
     app: AppHandle,
     file_path: String,
     size_bytes: Option<u64>,
     modified_at: Option<String>,
-) -> Result<String, String> {
+) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1790,28 +1782,28 @@ mod tests {
         assert_eq!(rotated.dimensions(), (46, 30));
     }
 
-    fn decode_data_url(data_url: &str) -> Vec<u8> {
-        let (_, payload) = data_url.split_once(',').unwrap();
-        base64::engine::general_purpose::STANDARD.decode(payload).unwrap()
-    }
-
     #[test]
     fn test_get_preview_image_blocking_respects_max_dimension() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("large.jpg");
+        let cache_dir = dir.path().join("cache");
         image::RgbImage::from_pixel(5000, 3000, image::Rgb([200, 50, 50]))
             .save(&image_path)
             .unwrap();
 
-        let preview_data_url =
-            get_preview_image_blocking(image_path.to_string_lossy().to_string(), 2048).unwrap();
-        let bytes = decode_data_url(&preview_data_url);
+        let preview_asset = get_preview_image_blocking(
+            image_path.to_string_lossy().to_string(),
+            2048,
+            None,
+            cache_dir,
+        )
+        .unwrap();
+        let bytes = fs::read(&preview_asset.file_path).unwrap();
         let preview = image::load_from_memory(&bytes).unwrap();
         let (width, height) = preview.dimensions();
 
         assert!(
-            preview_data_url.starts_with("data:image/jpeg;base64,")
-                || preview_data_url.starts_with("data:image/png;base64,")
+            preview_asset.file_path.ends_with(".jpg") || preview_asset.file_path.ends_with(".png")
         );
         assert!(width <= 2048);
         assert!(height <= 2048);
@@ -1821,16 +1813,23 @@ mod tests {
     fn test_get_preview_image_blocking_does_not_upscale_small_images() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("small.png");
+        let cache_dir = dir.path().join("cache");
         image::RgbaImage::from_pixel(640, 360, image::Rgba([0, 120, 220, 255]))
             .save(&image_path)
             .unwrap();
 
-        let preview_data_url =
-            get_preview_image_blocking(image_path.to_string_lossy().to_string(), 2048).unwrap();
-        let bytes = decode_data_url(&preview_data_url);
+        let preview_asset = get_preview_image_blocking(
+            image_path.to_string_lossy().to_string(),
+            2048,
+            None,
+            cache_dir,
+        )
+        .unwrap();
+        let bytes = fs::read(&preview_asset.file_path).unwrap();
         let preview = image::load_from_memory(&bytes).unwrap();
         let (width, height) = preview.dimensions();
 
+        assert!(preview_asset.file_path.ends_with(".png"));
         assert_eq!(width, 640);
         assert_eq!(height, 360);
     }

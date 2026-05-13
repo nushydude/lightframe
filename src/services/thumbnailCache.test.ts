@@ -1,9 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getThumbnailMock =
-  vi.fn<(path: string, sizeBytes?: number, modifiedAt?: string) => Promise<string>>();
+const getThumbnailMock = vi.fn<
+  (
+    path: string,
+    sizeBytes?: number,
+    modifiedAt?: string
+  ) => Promise<{
+    file_path: string;
+    cache_key: string;
+  }>
+>();
 
 vi.mock('./tauriCommands', () => ({
+  generatedImageAssetToUrl: (asset: { file_path: string; cache_key: string }) =>
+    `asset://localhost/${asset.file_path}?v=${encodeURIComponent(asset.cache_key)}`,
   getThumbnail: getThumbnailMock,
 }));
 
@@ -31,34 +41,40 @@ describe('thumbnailCache', () => {
     const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
       await loadThumbnailCacheModule();
 
-    getThumbnailMock.mockResolvedValueOnce('data:image/jpeg;base64,AAA');
+    getThumbnailMock.mockResolvedValueOnce({
+      file_path: 'C:/cache/a.jpg',
+      cache_key: 'AAA',
+    });
 
     const first = await loadThumbnail('C:/images/a.jpg');
     const cached = getCachedThumbnail('C:/images/a.jpg');
     const second = await loadThumbnail('C:/images/a.jpg');
 
-    expect(first).toBe('data:image/jpeg;base64,AAA');
-    expect(cached).toBe('data:image/jpeg;base64,AAA');
-    expect(second).toBe('data:image/jpeg;base64,AAA');
+    expect(first).toBe('asset://localhost/C:/cache/a.jpg?v=AAA');
+    expect(cached).toBe('asset://localhost/C:/cache/a.jpg?v=AAA');
+    expect(second).toBe('asset://localhost/C:/cache/a.jpg?v=AAA');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
 
     clearThumbnailCacheForTests();
   });
 
-  it('treats known fallback data URLs as cacheable thumbnail results', async () => {
+  it('treats known fallback assets as cacheable thumbnail results', async () => {
     const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
       await loadThumbnailCacheModule();
 
     const request = { path: 'C:/images/unsupported.heic', sizeBytes: 128, modifiedAt: '42' };
-    getThumbnailMock.mockResolvedValueOnce('data:image/svg+xml;base64,FALLBACK');
+    getThumbnailMock.mockResolvedValueOnce({
+      file_path: 'C:/cache/fallback.svg',
+      cache_key: 'FALLBACK',
+    });
 
     const first = await loadThumbnail(request);
     const cached = getCachedThumbnail(request);
     const second = await loadThumbnail(request);
 
-    expect(first).toBe('data:image/svg+xml;base64,FALLBACK');
-    expect(cached).toBe('data:image/svg+xml;base64,FALLBACK');
-    expect(second).toBe('data:image/svg+xml;base64,FALLBACK');
+    expect(first).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
+    expect(cached).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
+    expect(second).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
     expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/unsupported.heic', 128, '42');
 
@@ -67,14 +83,17 @@ describe('thumbnailCache', () => {
 
   it('reuses cached thumbnails for identical structured requests', async () => {
     const { clearThumbnailCacheForTests, loadThumbnail } = await loadThumbnailCacheModule();
-    getThumbnailMock.mockResolvedValueOnce('data:image/jpeg;base64,STRUCTURED');
+    getThumbnailMock.mockResolvedValueOnce({
+      file_path: 'C:/cache/structured.jpg',
+      cache_key: 'STRUCTURED',
+    });
 
     const request = { path: 'C:/images/structured.jpg', sizeBytes: 300, modifiedAt: '10' };
     const first = await loadThumbnail(request);
     const second = await loadThumbnail(request);
 
-    expect(first).toBe('data:image/jpeg;base64,STRUCTURED');
-    expect(second).toBe('data:image/jpeg;base64,STRUCTURED');
+    expect(first).toBe('asset://localhost/C:/cache/structured.jpg?v=STRUCTURED');
+    expect(second).toBe('asset://localhost/C:/cache/structured.jpg?v=STRUCTURED');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
     expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/structured.jpg', 300, '10');
 
@@ -86,13 +105,13 @@ describe('thumbnailCache', () => {
       await loadThumbnailCacheModule();
 
     getThumbnailMock
-      .mockResolvedValueOnce('data:image/jpeg;base64,OLD')
-      .mockResolvedValueOnce('data:image/jpeg;base64,NEW');
+      .mockResolvedValueOnce({ file_path: 'C:/cache/old.jpg', cache_key: 'OLD' })
+      .mockResolvedValueOnce({ file_path: 'C:/cache/new.jpg', cache_key: 'NEW' });
 
     await loadThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' });
 
     expect(getCachedThumbnail({ path: 'C:/images/a.jpg', sizeBytes: 100, modifiedAt: '1' })).toBe(
-      'data:image/jpeg;base64,OLD'
+      'asset://localhost/C:/cache/old.jpg?v=OLD'
     );
 
     expect(
@@ -105,7 +124,7 @@ describe('thumbnailCache', () => {
       modifiedAt: '2',
     });
 
-    expect(refreshed).toBe('data:image/jpeg;base64,NEW');
+    expect(refreshed).toBe('asset://localhost/C:/cache/new.jpg?v=NEW');
     expect(getThumbnailMock).toHaveBeenNthCalledWith(1, 'C:/images/a.jpg', 100, '1');
     expect(getThumbnailMock).toHaveBeenNthCalledWith(2, 'C:/images/a.jpg', 100, '2');
 
@@ -115,8 +134,8 @@ describe('thumbnailCache', () => {
   it('ignores stale in-flight completions when metadata changes mid-flight', async () => {
     const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
       await loadThumbnailCacheModule();
-    const deferredA = createDeferred<string>();
-    const deferredB = createDeferred<string>();
+    const deferredA = createDeferred<{ file_path: string; cache_key: string }>();
+    const deferredB = createDeferred<{ file_path: string; cache_key: string }>();
 
     getThumbnailMock
       .mockImplementationOnce(() => deferredA.promise)
@@ -131,20 +150,20 @@ describe('thumbnailCache', () => {
     expect(promiseA).not.toBe(promiseB);
     expect(getThumbnailMock).toHaveBeenCalledTimes(2);
 
-    deferredA.resolve('data:image/jpeg;base64,OLD');
-    await expect(promiseA).resolves.toBe('data:image/jpeg;base64,OLD');
+    deferredA.resolve({ file_path: 'C:/cache/old.jpg', cache_key: 'OLD' });
+    await expect(promiseA).resolves.toBe('asset://localhost/C:/cache/old.jpg?v=OLD');
     expect(getCachedThumbnail(requestB)).toBeUndefined();
 
-    deferredB.resolve('data:image/jpeg;base64,NEW');
-    await expect(promiseB).resolves.toBe('data:image/jpeg;base64,NEW');
-    expect(getCachedThumbnail(requestB)).toBe('data:image/jpeg;base64,NEW');
+    deferredB.resolve({ file_path: 'C:/cache/new.jpg', cache_key: 'NEW' });
+    await expect(promiseB).resolves.toBe('asset://localhost/C:/cache/new.jpg?v=NEW');
+    expect(getCachedThumbnail(requestB)).toBe('asset://localhost/C:/cache/new.jpg?v=NEW');
 
     clearThumbnailCacheForTests();
   });
 
   it('deduplicates in-flight thumbnail requests for the same path', async () => {
     const { clearThumbnailCacheForTests, loadThumbnail } = await loadThumbnailCacheModule();
-    const deferred = createDeferred<string>();
+    const deferred = createDeferred<{ file_path: string; cache_key: string }>();
     getThumbnailMock.mockImplementationOnce(() => deferred.promise);
 
     const firstPromise = loadThumbnail('C:/images/in-flight.jpg');
@@ -153,9 +172,9 @@ describe('thumbnailCache', () => {
     expect(firstPromise).toBe(secondPromise);
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
 
-    deferred.resolve('data:image/jpeg;base64,INFLIGHT');
-    await expect(firstPromise).resolves.toBe('data:image/jpeg;base64,INFLIGHT');
-    await expect(secondPromise).resolves.toBe('data:image/jpeg;base64,INFLIGHT');
+    deferred.resolve({ file_path: 'C:/cache/inflight.jpg', cache_key: 'INFLIGHT' });
+    await expect(firstPromise).resolves.toBe('asset://localhost/C:/cache/inflight.jpg?v=INFLIGHT');
+    await expect(secondPromise).resolves.toBe('asset://localhost/C:/cache/inflight.jpg?v=INFLIGHT');
 
     clearThumbnailCacheForTests();
   });
@@ -169,22 +188,22 @@ describe('thumbnailCache', () => {
     } = await loadThumbnailCacheModule();
 
     getThumbnailMock
-      .mockResolvedValueOnce('data:image/jpeg;base64,A')
-      .mockResolvedValueOnce('data:image/jpeg;base64,B')
-      .mockResolvedValueOnce('data:image/jpeg;base64,C');
+      .mockResolvedValueOnce({ file_path: 'C:/cache/a.jpg', cache_key: 'A' })
+      .mockResolvedValueOnce({ file_path: 'C:/cache/b.jpg', cache_key: 'B' })
+      .mockResolvedValueOnce({ file_path: 'C:/cache/c.jpg', cache_key: 'C' });
 
     await loadThumbnail('C:/images/a.jpg');
     await loadThumbnail('C:/images/b.jpg');
     await loadThumbnail('C:/images/c.jpg');
 
     // Refresh A so B becomes the oldest evictable entry.
-    expect(getCachedThumbnail('C:/images/a.jpg')).toBe('data:image/jpeg;base64,A');
+    expect(getCachedThumbnail('C:/images/a.jpg')).toBe('asset://localhost/C:/cache/a.jpg?v=A');
 
     evictThumbnailsExcept(new Set(['C:/images/a.jpg']), 2);
 
-    expect(getCachedThumbnail('C:/images/a.jpg')).toBe('data:image/jpeg;base64,A');
+    expect(getCachedThumbnail('C:/images/a.jpg')).toBe('asset://localhost/C:/cache/a.jpg?v=A');
     expect(getCachedThumbnail('C:/images/b.jpg')).toBeUndefined();
-    expect(getCachedThumbnail('C:/images/c.jpg')).toBe('data:image/jpeg;base64,C');
+    expect(getCachedThumbnail('C:/images/c.jpg')).toBe('asset://localhost/C:/cache/c.jpg?v=C');
 
     clearThumbnailCacheForTests();
   });
@@ -193,11 +212,14 @@ describe('thumbnailCache', () => {
     const { clearThumbnailCacheForTests, loadThumbnail, preloadThumbnails } =
       await loadThumbnailCacheModule();
 
-    const deferredByPath = new Map<string, ReturnType<typeof createDeferred<string>>>();
+    const deferredByPath = new Map<
+      string,
+      ReturnType<typeof createDeferred<{ file_path: string; cache_key: string }>>
+    >();
     getThumbnailMock.mockImplementation((path: string) => {
       let deferred = deferredByPath.get(path);
       if (!deferred) {
-        deferred = createDeferred<string>();
+        deferred = createDeferred<{ file_path: string; cache_key: string }>();
         deferredByPath.set(path, deferred);
       }
       return deferred.promise;
@@ -216,7 +238,9 @@ describe('thumbnailCache', () => {
     });
 
     const visiblePromise = loadThumbnail('C:/images/visible.jpg');
-    deferredByPath.get('C:/images/visible.jpg')?.resolve('data:image/jpeg;base64,VISIBLE');
+    deferredByPath
+      .get('C:/images/visible.jpg')
+      ?.resolve({ file_path: 'C:/cache/visible.jpg', cache_key: 'VISIBLE' });
     await visiblePromise;
 
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
@@ -233,7 +257,9 @@ describe('thumbnailCache', () => {
 
     const unmountedPromise = loadThumbnail('C:/images/unmounted.jpg');
     isMounted = false;
-    deferredByPath.get('C:/images/unmounted.jpg')?.resolve('data:image/jpeg;base64,UNMOUNTED');
+    deferredByPath
+      .get('C:/images/unmounted.jpg')
+      ?.resolve({ file_path: 'C:/cache/unmounted.jpg', cache_key: 'UNMOUNTED' });
     await unmountedPromise;
 
     expect(onUnmountedLoaded).not.toHaveBeenCalled();
@@ -250,11 +276,14 @@ describe('thumbnailCache', () => {
       preloadThumbnails,
     } = await loadThumbnailCacheModule();
 
-    const deferredByPath = new Map<string, ReturnType<typeof createDeferred<string>>>();
+    const deferredByPath = new Map<
+      string,
+      ReturnType<typeof createDeferred<{ file_path: string; cache_key: string }>>
+    >();
     getThumbnailMock.mockImplementation((path: string) => {
       let deferred = deferredByPath.get(path);
       if (!deferred) {
-        deferred = createDeferred<string>();
+        deferred = createDeferred<{ file_path: string; cache_key: string }>();
         deferredByPath.set(path, deferred);
       }
       return deferred.promise;
@@ -278,17 +307,17 @@ describe('thumbnailCache', () => {
 
     evictThumbnailsExcept(new Set(['C:/images/c.jpg']), 2);
 
-    deferredByPath.get('C:/images/a.jpg')?.resolve('data:image/jpeg;base64,A');
-    deferredByPath.get('C:/images/b.jpg')?.resolve('data:image/jpeg;base64,B');
-    deferredByPath.get('C:/images/c.jpg')?.resolve('data:image/jpeg;base64,C');
-    deferredByPath.get('C:/images/d.jpg')?.resolve('data:image/jpeg;base64,D');
+    deferredByPath.get('C:/images/a.jpg')?.resolve({ file_path: 'C:/cache/a.jpg', cache_key: 'A' });
+    deferredByPath.get('C:/images/b.jpg')?.resolve({ file_path: 'C:/cache/b.jpg', cache_key: 'B' });
+    deferredByPath.get('C:/images/c.jpg')?.resolve({ file_path: 'C:/cache/c.jpg', cache_key: 'C' });
+    deferredByPath.get('C:/images/d.jpg')?.resolve({ file_path: 'C:/cache/d.jpg', cache_key: 'D' });
 
     await Promise.all(paths.map((path) => loadThumbnail(path).catch(() => undefined)));
 
     expect(getCachedThumbnail('C:/images/a.jpg')).toBeUndefined();
     expect(getCachedThumbnail('C:/images/b.jpg')).toBeUndefined();
-    expect(getCachedThumbnail('C:/images/c.jpg')).toBe('data:image/jpeg;base64,C');
-    expect(getCachedThumbnail('C:/images/d.jpg')).toBe('data:image/jpeg;base64,D');
+    expect(getCachedThumbnail('C:/images/c.jpg')).toBe('asset://localhost/C:/cache/c.jpg?v=C');
+    expect(getCachedThumbnail('C:/images/d.jpg')).toBe('asset://localhost/C:/cache/d.jpg?v=D');
     expect(droppedListener).not.toHaveBeenCalled();
     expect(keptListener).toHaveBeenCalledTimes(1);
 

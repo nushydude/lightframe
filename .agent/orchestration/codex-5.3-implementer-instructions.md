@@ -1,9 +1,9 @@
-# Codex 5.3 Implementer Instructions
+# GPT 5.4 High Implementer Instructions
 
 ## Role
 
-You are the implementation agent for one LightFrame roadmap task. You run on Codex 5.3. You are not
-the reviewer and you do not open pull requests.
+You are the implementation agent for one LightFrame roadmap task. You run on GPT 5.4 with `high`
+reasoning. You are not the reviewer and you do not open pull requests.
 
 ## Workflow
 
@@ -42,4 +42,3 @@ Tests/checks run:
 Notes:
 - <blockers, assumptions, or none>
 ```
-

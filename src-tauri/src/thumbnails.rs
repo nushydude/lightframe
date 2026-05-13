@@ -1,4 +1,5 @@
-use base64::Engine;
+use image::GenericImageView;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,13 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 const THUMBNAIL_SIZE: u32 = 160;
-const CACHE_VERSION: &str = "v1";
+const THUMBNAIL_CACHE_VERSION: &str = "thumb-v2";
+const PREVIEW_CACHE_VERSION: &str = "preview-v1";
 const MAX_CACHE_ENTRIES: usize = 2_000;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const CLEANUP_INTERVAL: usize = 32;
-const FALLBACK_PLACEHOLDER_MIME_TYPE: &str = "image/svg+xml";
-
-static THUMBNAIL_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
+static CACHE_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
+static CACHE_TMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatSupport {
@@ -26,7 +27,30 @@ pub struct FormatSupport {
 #[derive(Debug, Clone)]
 pub struct SourceMetadata {
     pub size_bytes: u64,
-    pub modified_seconds: u64,
+    pub modified_epoch_nanos: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GeneratedImageAsset {
+    pub file_path: String,
+    pub cache_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratedImageFormat {
+    Jpeg,
+    Png,
+    Svg,
+}
+
+impl GeneratedImageFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpg",
+            Self::Png => "png",
+            Self::Svg => "svg",
+        }
+    }
 }
 
 pub fn resolve_source_metadata(
@@ -40,29 +64,40 @@ pub fn resolve_source_metadata(
             .modified()
             .ok()
             .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
 
         return Ok(SourceMetadata {
             size_bytes: computed_size,
-            modified_seconds: computed_modified,
+            modified_epoch_nanos: computed_modified,
         });
     }
 
-    let parsed_modified = modified_at.and_then(parse_modified_seconds);
+    let parsed_modified = modified_at.and_then(parse_modified_epoch_nanos);
 
-    if let (Some(size_bytes), Some(modified_seconds)) = (size_bytes, parsed_modified) {
-        return Ok(SourceMetadata { size_bytes, modified_seconds });
+    if let (Some(size_bytes), Some(modified_epoch_nanos)) = (size_bytes, parsed_modified) {
+        return Ok(SourceMetadata { size_bytes, modified_epoch_nanos });
     }
 
     Err("Failed to read source metadata and no usable metadata was provided".to_string())
 }
 
 pub fn build_cache_key(file_path: &Path, metadata: &SourceMetadata) -> String {
-    let normalized = normalize_path_for_key(file_path);
-    format!(
-        "{}|{}|{}|{}",
-        CACHE_VERSION, normalized, metadata.modified_seconds, metadata.size_bytes
+    build_versioned_cache_key(THUMBNAIL_CACHE_VERSION, file_path, metadata, None, None)
+}
+
+pub fn build_preview_cache_key(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+) -> String {
+    build_versioned_cache_key(
+        PREVIEW_CACHE_VERSION,
+        file_path,
+        metadata,
+        Some(max_dimension),
+        invalidation_bust.filter(|value| *value > 0),
     )
 }
 
@@ -124,54 +159,129 @@ pub fn get_or_create_thumbnail(
     file_path: &Path,
     metadata: &SourceMetadata,
     cache_root: &Path,
-) -> Result<String, String> {
-    let cache_available = match fs::create_dir_all(cache_root) {
-        Ok(_) => {
-            maybe_cleanup_cache(cache_root);
-            true
-        }
-        Err(error) => {
-            eprintln!(
-                "Warning: thumbnail cache unavailable at '{}': {}",
-                cache_root.display(),
-                error
-            );
-            false
-        }
-    };
-
+) -> Result<GeneratedImageAsset, String> {
     let cache_key = build_cache_key(file_path, metadata);
-    let cache_file = cache_root.join(format!("{}.jpg", hash_cache_key(&cache_key)));
+    let cache_hash = hash_cache_key(&cache_key);
+    let cache_available = ensure_cache_root(cache_root);
 
     if cache_available {
-        if let Ok(bytes) = fs::read(&cache_file) {
-            return Ok(jpeg_data_url(&bytes));
+        if let Some(asset) = cached_asset_from_disk(
+            cache_root,
+            &cache_hash,
+            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg],
+        ) {
+            return Ok(asset);
         }
     }
 
     match generate_thumbnail_jpeg(file_path) {
-        Ok(jpeg_bytes) => {
-            if cache_available {
-                if let Err(error) = write_cache_file(&cache_file, &jpeg_bytes) {
-                    eprintln!(
-                        "Warning: failed to write thumbnail cache file '{}': {}",
-                        cache_file.display(),
-                        error
-                    );
-                }
-            }
-
-            Ok(jpeg_data_url(&jpeg_bytes))
-        }
+        Ok(jpeg_bytes) => cache_asset_bytes(
+            cache_root,
+            cache_available,
+            &cache_hash,
+            GeneratedImageFormat::Jpeg,
+            &jpeg_bytes,
+        ),
         Err(error) => {
-            if let Some(placeholder_data_url) = known_fallback_thumbnail_data_url(file_path, &error)
-            {
-                return Ok(placeholder_data_url);
+            if let Some(placeholder_svg) = known_fallback_thumbnail_svg(file_path, &error) {
+                return cache_asset_text(
+                    cache_root,
+                    cache_available,
+                    &cache_hash,
+                    GeneratedImageFormat::Svg,
+                    &placeholder_svg,
+                );
             }
 
             Err(format!("Failed to generate thumbnail: {}", error))
         }
     }
+    .map(|mut asset| {
+        asset.cache_key = cache_hash;
+        asset
+    })
+}
+
+pub fn get_or_create_preview(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+) -> Result<GeneratedImageAsset, String> {
+    if max_dimension == 0 {
+        return Err("max_dimension must be greater than zero".to_string());
+    }
+
+    let cache_key = build_preview_cache_key(file_path, metadata, max_dimension, invalidation_bust);
+    let cache_hash = hash_cache_key(&cache_key);
+    let cache_available = ensure_cache_root(cache_root);
+
+    if cache_available {
+        if let Some(asset) = cached_asset_from_disk(
+            cache_root,
+            &cache_hash,
+            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png],
+        ) {
+            return Ok(asset);
+        }
+    }
+
+    let img =
+        image::open(file_path).map_err(|e| format!("Failed to open image for preview: {}", e))?;
+    let (width, height) = img.dimensions();
+    let preview = if width > max_dimension || height > max_dimension {
+        img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let has_alpha = preview.color().has_alpha();
+
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    let format = if has_alpha {
+        preview
+            .write_to(&mut buffer, image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
+        GeneratedImageFormat::Png
+    } else {
+        image::DynamicImage::ImageRgb8(preview.to_rgb8())
+            .write_to(&mut buffer, image::ImageFormat::Jpeg)
+            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
+        GeneratedImageFormat::Jpeg
+    };
+
+    cache_asset_bytes(cache_root, cache_available, &cache_hash, format, &buffer.into_inner()).map(
+        |mut asset| {
+            asset.cache_key = cache_hash;
+            asset
+        },
+    )
+}
+
+fn build_versioned_cache_key(
+    version: &str,
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    max_dimension: Option<u32>,
+    invalidation_bust: Option<u64>,
+) -> String {
+    let normalized = normalize_path_for_key(file_path);
+    let mut parts = vec![
+        version.to_string(),
+        normalized,
+        metadata.modified_epoch_nanos.to_string(),
+        metadata.size_bytes.to_string(),
+    ];
+
+    if let Some(max_dimension) = max_dimension {
+        parts.push(max_dimension.to_string());
+    }
+
+    if let Some(invalidation_bust) = invalidation_bust {
+        parts.push(invalidation_bust.to_string());
+    }
+
+    parts.join("|")
 }
 
 fn normalize_path_for_key(path: &Path) -> String {
@@ -203,15 +313,7 @@ fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageErro
     Ok(buffer.into_inner())
 }
 
-fn jpeg_data_url(bytes: &[u8]) -> String {
-    let base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    format!("data:image/jpeg;base64,{}", base64)
-}
-
-fn known_fallback_thumbnail_data_url(
-    file_path: &Path,
-    error: &image::ImageError,
-) -> Option<String> {
+fn known_fallback_thumbnail_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
     if matches!(error, image::ImageError::IoError(_)) {
         return None;
     }
@@ -221,7 +323,7 @@ fn known_fallback_thumbnail_data_url(
         return None;
     }
 
-    Some(placeholder_thumbnail_data_url(&extension))
+    Some(placeholder_thumbnail_svg(&extension))
 }
 
 fn normalized_extension(path: &Path) -> Option<String> {
@@ -230,7 +332,7 @@ fn normalized_extension(path: &Path) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
-fn placeholder_thumbnail_data_url(extension: &str) -> String {
+fn placeholder_thumbnail_svg(extension: &str) -> String {
     let format_label = match extension {
         "heic" => "HEIC",
         "heif" => "HEIF",
@@ -241,7 +343,7 @@ fn placeholder_thumbnail_data_url(extension: &str) -> String {
 
     let canvas_size = THUMBNAIL_SIZE;
     let inner_size = THUMBNAIL_SIZE.saturating_sub(24);
-    let svg = format!(
+    format!(
         concat!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{canvas}\" height=\"{canvas}\" ",
             "viewBox=\"0 0 {canvas} {canvas}\">",
@@ -256,18 +358,35 @@ fn placeholder_thumbnail_data_url(extension: &str) -> String {
         canvas = canvas_size,
         inner = inner_size,
         label = format_label
-    );
-
-    let base64 = base64::engine::general_purpose::STANDARD.encode(svg.as_bytes());
-    format!("data:{};base64,{}", FALLBACK_PLACEHOLDER_MIME_TYPE, base64)
+    )
 }
 
-fn parse_modified_seconds(value: &str) -> Option<u64> {
-    value.parse::<u64>().ok()
+fn parse_modified_epoch_nanos(value: &str) -> Option<u128> {
+    value
+        .parse::<u128>()
+        .ok()
+        .map(|seconds_since_epoch| seconds_since_epoch.saturating_mul(1_000_000_000))
+}
+
+fn ensure_cache_root(cache_root: &Path) -> bool {
+    match fs::create_dir_all(cache_root) {
+        Ok(_) => {
+            maybe_cleanup_cache(cache_root);
+            true
+        }
+        Err(error) => {
+            eprintln!(
+                "Warning: generated image cache unavailable at '{}': {}",
+                cache_root.display(),
+                error
+            );
+            false
+        }
+    }
 }
 
 fn maybe_cleanup_cache(cache_root: &Path) {
-    let request_count = THUMBNAIL_REQUEST_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let request_count = CACHE_REQUEST_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if !request_count.is_multiple_of(CLEANUP_INTERVAL) {
         return;
     }
@@ -275,13 +394,114 @@ fn maybe_cleanup_cache(cache_root: &Path) {
     cleanup_cache_best_effort(cache_root);
 }
 
-fn write_cache_file(cache_file: &Path, jpeg_bytes: &[u8]) -> Result<(), std::io::Error> {
-    let tmp_path = cache_file.with_extension("jpg.tmp");
-    fs::write(&tmp_path, jpeg_bytes)?;
+fn cached_asset_from_disk(
+    cache_root: &Path,
+    cache_hash: &str,
+    formats: &[GeneratedImageFormat],
+) -> Option<GeneratedImageAsset> {
+    for format in formats {
+        let path = cache_root.join(format!("{}.{}", cache_hash, format.extension()));
+        if path.is_file() {
+            return Some(GeneratedImageAsset {
+                file_path: path.to_string_lossy().to_string(),
+                cache_key: cache_hash.to_string(),
+            });
+        }
+    }
+
+    None
+}
+
+fn generated_asset_path(root: &Path, cache_hash: &str, format: GeneratedImageFormat) -> PathBuf {
+    root.join(format!("{}.{}", cache_hash, format.extension()))
+}
+
+fn store_generated_asset(
+    root: &Path,
+    cache_hash: &str,
+    format: GeneratedImageFormat,
+    bytes: &[u8],
+) -> Result<GeneratedImageAsset, String> {
+    let asset_path = generated_asset_path(root, cache_hash, format);
+    if asset_path.is_file() {
+        return Ok(GeneratedImageAsset {
+            file_path: asset_path.to_string_lossy().to_string(),
+            cache_key: cache_hash.to_string(),
+        });
+    }
+
+    write_cache_file(&asset_path, bytes).map_err(|error| {
+        format!("Failed to write generated cache file '{}': {}", asset_path.display(), error)
+    })?;
+
+    Ok(GeneratedImageAsset {
+        file_path: asset_path.to_string_lossy().to_string(),
+        cache_key: cache_hash.to_string(),
+    })
+}
+
+fn temp_generated_asset_root() -> PathBuf {
+    std::env::temp_dir().join("lightframe-generated-assets")
+}
+
+fn cache_asset_bytes(
+    cache_root: &Path,
+    cache_available: bool,
+    cache_hash: &str,
+    format: GeneratedImageFormat,
+    bytes: &[u8],
+) -> Result<GeneratedImageAsset, String> {
+    if cache_available {
+        match store_generated_asset(cache_root, cache_hash, format, bytes) {
+            Ok(asset) => return Ok(asset),
+            Err(error) => {
+                eprintln!("Warning: {}. Falling back to temporary generated asset storage.", error);
+            }
+        }
+    } else {
+        eprintln!("Warning: generated image cache unavailable. Falling back to temporary generated asset storage.");
+    }
+
+    let temp_root = temp_generated_asset_root();
+    if !ensure_cache_root(&temp_root) {
+        return Err(format!(
+            "Generated image cache unavailable and temporary generated asset storage at '{}' could not be prepared",
+            temp_root.display()
+        ));
+    }
+
+    store_generated_asset(&temp_root, cache_hash, format, bytes)
+}
+
+fn cache_asset_text(
+    cache_root: &Path,
+    cache_available: bool,
+    cache_hash: &str,
+    format: GeneratedImageFormat,
+    content: &str,
+) -> Result<GeneratedImageAsset, String> {
+    cache_asset_bytes(cache_root, cache_available, cache_hash, format, content.as_bytes())
+}
+
+fn write_cache_file(cache_file: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let Some(parent) = cache_file.parent() else {
+        return fs::write(cache_file, bytes);
+    };
+
+    fs::create_dir_all(parent)?;
+
+    let tmp_suffix = CACHE_TMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = parent.join(format!(
+        "{}.{}.tmp",
+        cache_file.file_name().and_then(|value| value.to_str()).unwrap_or("generated-image"),
+        tmp_suffix
+    ));
+    fs::write(&tmp_path, bytes)?;
     fs::rename(&tmp_path, cache_file).or_else(|rename_error| {
         let _ = fs::remove_file(cache_file);
         fs::rename(&tmp_path, cache_file).map_err(|_| rename_error)
     })?;
+
     Ok(())
 }
 
@@ -306,7 +526,7 @@ fn cleanup_cache_best_effort(cache_root: &Path) {
     for entry in read_dir.flatten() {
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        if !is_cache_thumbnail_filename(&file_name) {
+        if !is_generated_cache_filename(&file_name) {
             continue;
         }
 
@@ -378,11 +598,14 @@ fn is_redirected_cache_root(cache_root: &Path) -> bool {
     false
 }
 
-fn is_cache_thumbnail_filename(file_name: &str) -> bool {
-    let Some(stem) = file_name.strip_suffix(".jpg") else {
+fn is_generated_cache_filename(file_name: &str) -> bool {
+    let Some((stem, extension)) = file_name.rsplit_once('.') else {
         return false;
     };
-    stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit())
+
+    matches!(extension, "jpg" | "png" | "svg")
+        && stem.len() == 64
+        && stem.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -391,18 +614,13 @@ mod tests {
     use base64::Engine;
     use tempfile::tempdir;
 
-    fn cache_file_name_for_index(index: usize) -> String {
-        format!("{index:064x}.jpg")
-    }
-
-    fn decode_data_url_payload(data_url: &str) -> Vec<u8> {
-        let (_, payload) = data_url.split_once(',').unwrap();
-        base64::engine::general_purpose::STANDARD.decode(payload).unwrap()
+    fn cache_file_name_for_index(index: usize, extension: &str) -> String {
+        format!("{index:064x}.{extension}")
     }
 
     #[test]
     fn cache_key_is_stable_for_same_input() {
-        let metadata = SourceMetadata { size_bytes: 42, modified_seconds: 123 };
+        let metadata = SourceMetadata { size_bytes: 42, modified_epoch_nanos: 123 };
         let path = Path::new("C:/images/photo.jpg");
         let key_a = build_cache_key(path, &metadata);
         let key_b = build_cache_key(path, &metadata);
@@ -414,13 +632,35 @@ mod tests {
     fn cache_key_changes_when_metadata_changes() {
         let path = Path::new("C:/images/photo.jpg");
         let key_a =
-            build_cache_key(path, &SourceMetadata { size_bytes: 42, modified_seconds: 123 });
+            build_cache_key(path, &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 123 });
         let key_b =
-            build_cache_key(path, &SourceMetadata { size_bytes: 43, modified_seconds: 123 });
+            build_cache_key(path, &SourceMetadata { size_bytes: 43, modified_epoch_nanos: 123 });
         let key_c =
-            build_cache_key(path, &SourceMetadata { size_bytes: 42, modified_seconds: 124 });
+            build_cache_key(path, &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 124 });
         assert_ne!(key_a, key_b);
         assert_ne!(key_a, key_c);
+    }
+
+    #[test]
+    fn preview_cache_key_changes_with_max_dimension() {
+        let metadata = SourceMetadata { size_bytes: 42, modified_epoch_nanos: 123 };
+        let path = Path::new("C:/images/photo.jpg");
+
+        let small = build_preview_cache_key(path, &metadata, 1024, None);
+        let large = build_preview_cache_key(path, &metadata, 2048, None);
+
+        assert_ne!(small, large);
+    }
+
+    #[test]
+    fn preview_cache_key_changes_with_invalidation_bust() {
+        let metadata = SourceMetadata { size_bytes: 42, modified_epoch_nanos: 123 };
+        let path = Path::new("C:/images/photo.jpg");
+
+        let base = build_preview_cache_key(path, &metadata, 2048, None);
+        let busted = build_preview_cache_key(path, &metadata, 2048, Some(1_767_225_605_000));
+
+        assert_ne!(base, busted);
     }
 
     #[test]
@@ -436,13 +676,37 @@ mod tests {
         let first = get_or_create_thumbnail(&image_path, &metadata, &cache_dir).unwrap();
         let second = get_or_create_thumbnail(&image_path, &metadata, &cache_dir).unwrap();
 
-        assert!(first.starts_with("data:image/jpeg;base64,"));
-        assert!(second.starts_with("data:image/jpeg;base64,"));
+        assert!(first.file_path.ends_with(".jpg"));
         assert_eq!(first, second);
+        assert!(Path::new(&first.file_path).exists());
 
         let files: Vec<_> = fs::read_dir(&cache_dir).unwrap().flatten().collect();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path().extension().and_then(|ext| ext.to_str()), Some("jpg"));
+    }
+
+    #[test]
+    fn preview_requests_write_atomically_and_reuse_cache_file() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.jpg");
+        let cache_dir = dir.path().join("previews");
+
+        image::RgbImage::from_pixel(3200, 1800, image::Rgb([12, 34, 56]))
+            .save(&image_path)
+            .unwrap();
+
+        let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+        let first = get_or_create_preview(&image_path, &metadata, &cache_dir, 2048, None).unwrap();
+        let second = get_or_create_preview(&image_path, &metadata, &cache_dir, 2048, None).unwrap();
+
+        assert!(first.file_path.ends_with(".jpg"));
+        assert_eq!(first, second);
+        assert!(Path::new(&first.file_path).exists());
+        assert!(fs::read_dir(&cache_dir).unwrap().flatten().all(|entry| entry
+            .path()
+            .extension()
+            .and_then(|ext| ext.to_str())
+            != Some("tmp")));
     }
 
     #[test]
@@ -451,11 +715,31 @@ mod tests {
             resolve_source_metadata(Path::new("missing-file.jpg"), Some(42), Some("123")).unwrap();
 
         assert_eq!(metadata.size_bytes, 42);
-        assert_eq!(metadata.modified_seconds, 123);
+        assert_eq!(metadata.modified_epoch_nanos, 123_000_000_000);
     }
 
     #[test]
-    fn thumbnail_generation_falls_back_when_cache_setup_fails() {
+    fn preview_invalidation_bust_creates_distinct_preview_asset() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.jpg");
+        let cache_dir = dir.path().join("previews");
+
+        image::RgbImage::from_pixel(3200, 1800, image::Rgb([12, 34, 56]))
+            .save(&image_path)
+            .unwrap();
+
+        let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+        let first = get_or_create_preview(&image_path, &metadata, &cache_dir, 2048, None).unwrap();
+        let second =
+            get_or_create_preview(&image_path, &metadata, &cache_dir, 2048, Some(42)).unwrap();
+
+        assert_ne!(first.cache_key, second.cache_key);
+        assert_ne!(first.file_path, second.file_path);
+        assert!(Path::new(&second.file_path).exists());
+    }
+
+    #[test]
+    fn thumbnail_generation_falls_back_to_temp_storage_when_cache_setup_fails() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("sample.png");
         let cache_root_file = dir.path().join("cache-root-is-file");
@@ -466,13 +750,34 @@ mod tests {
         fs::write(&cache_root_file, b"not-a-directory").unwrap();
 
         let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
-        let result = get_or_create_thumbnail(&image_path, &metadata, &invalid_cache_dir).unwrap();
+        let asset = get_or_create_thumbnail(&image_path, &metadata, &invalid_cache_dir).unwrap();
 
-        assert!(result.starts_with("data:image/jpeg;base64,"));
+        assert!(asset.file_path.ends_with(".jpg"));
+        assert!(asset.file_path.contains("lightframe-generated-assets"));
+        assert!(Path::new(&asset.file_path).exists());
     }
 
     #[test]
-    fn unsupported_formats_return_stable_placeholder_thumbnail_data_url() {
+    fn preview_generation_falls_back_to_temp_storage_when_cache_setup_fails() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.jpg");
+        let cache_root_file = dir.path().join("cache-root-is-file");
+        let invalid_cache_dir = cache_root_file.join("previews");
+
+        image::RgbImage::from_pixel(1024, 768, image::Rgb([12, 34, 56])).save(&image_path).unwrap();
+        fs::write(&cache_root_file, b"not-a-directory").unwrap();
+
+        let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+        let asset =
+            get_or_create_preview(&image_path, &metadata, &invalid_cache_dir, 2048, None).unwrap();
+
+        assert!(asset.file_path.ends_with(".jpg"));
+        assert!(asset.file_path.contains("lightframe-generated-assets"));
+        assert!(Path::new(&asset.file_path).exists());
+    }
+
+    #[test]
+    fn unsupported_formats_return_stable_placeholder_thumbnail_asset() {
         let dir = tempdir().unwrap();
         let cache_dir = dir.path().join("thumbs");
 
@@ -486,10 +791,10 @@ mod tests {
             let first = get_or_create_thumbnail(&image_path, &metadata, &cache_dir).unwrap();
             let second = get_or_create_thumbnail(&image_path, &metadata, &cache_dir).unwrap();
 
-            assert!(first.starts_with("data:image/svg+xml;base64,"));
+            assert!(first.file_path.ends_with(".svg"));
             assert_eq!(first, second);
 
-            let decoded = String::from_utf8(decode_data_url_payload(&first)).unwrap();
+            let decoded = fs::read_to_string(&first.file_path).unwrap();
             assert!(decoded.contains(&format!(">{}<", expected_label)));
         }
 
@@ -506,7 +811,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cache_dir = dir.path().join("thumbs");
         let missing = dir.path().join("missing.heic");
-        let metadata = SourceMetadata { size_bytes: 1, modified_seconds: 1 };
+        let metadata = SourceMetadata { size_bytes: 1, modified_epoch_nanos: 1 };
 
         let error = get_or_create_thumbnail(&missing, &metadata, &cache_dir).unwrap_err();
         assert!(error.contains("Failed to generate thumbnail"));
@@ -531,7 +836,7 @@ mod tests {
         fs::create_dir_all(&cache_dir).unwrap();
 
         for i in 0..=MAX_CACHE_ENTRIES {
-            let hashed_name = cache_file_name_for_index(i);
+            let hashed_name = cache_file_name_for_index(i, "jpg");
             fs::write(cache_dir.join(hashed_name), b"1").unwrap();
         }
         fs::write(cache_dir.join("family-photo.jpg"), b"do-not-delete").unwrap();
@@ -541,7 +846,7 @@ mod tests {
         let remaining_hashed = fs::read_dir(&cache_dir)
             .unwrap()
             .flatten()
-            .filter(|entry| is_cache_thumbnail_filename(&entry.file_name().to_string_lossy()))
+            .filter(|entry| is_generated_cache_filename(&entry.file_name().to_string_lossy()))
             .count();
         assert!(remaining_hashed <= MAX_CACHE_ENTRIES);
         assert!(cache_dir.join("family-photo.jpg").exists());
@@ -554,7 +859,7 @@ mod tests {
         fs::create_dir_all(&target_dir).unwrap();
 
         for i in 0..=MAX_CACHE_ENTRIES {
-            let hashed_name = cache_file_name_for_index(i);
+            let hashed_name = cache_file_name_for_index(i, "jpg");
             fs::write(target_dir.join(hashed_name), b"1").unwrap();
         }
         let victim = target_dir.join("vacation.jpg");
@@ -578,7 +883,7 @@ mod tests {
         let hashed_count = fs::read_dir(&target_dir)
             .unwrap()
             .flatten()
-            .filter(|entry| is_cache_thumbnail_filename(&entry.file_name().to_string_lossy()))
+            .filter(|entry| is_generated_cache_filename(&entry.file_name().to_string_lossy()))
             .count();
         assert_eq!(hashed_count, MAX_CACHE_ENTRIES + 1);
     }
@@ -596,5 +901,41 @@ mod tests {
         }
 
         assert!(is_redirected_cache_root(&link_path));
+    }
+
+    #[test]
+    fn placeholder_svg_stays_ascii_safe() {
+        let svg = placeholder_thumbnail_svg("svg");
+        assert!(svg.is_ascii());
+        let encoded = base64::engine::general_purpose::STANDARD.encode(svg.as_bytes());
+        assert!(!encoded.is_empty());
+    }
+
+    #[test]
+    fn cache_key_changes_for_same_second_edits_with_subsecond_mtime() {
+        let path = Path::new("C:/images/photo.jpg");
+        let key_a = build_cache_key(
+            path,
+            &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 1_700_000_000_000_000_100 },
+        );
+        let key_b = build_cache_key(
+            path,
+            &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 1_700_000_000_000_000_900 },
+        );
+        let preview_key_a = build_preview_cache_key(
+            path,
+            &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 1_700_000_000_000_000_100 },
+            2048,
+            None,
+        );
+        let preview_key_b = build_preview_cache_key(
+            path,
+            &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 1_700_000_000_000_000_900 },
+            2048,
+            None,
+        );
+
+        assert_ne!(key_a, key_b);
+        assert_ne!(preview_key_a, preview_key_b);
     }
 }
