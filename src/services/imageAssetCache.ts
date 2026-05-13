@@ -1,4 +1,13 @@
 import { convertFileSrc, generatedImageAssetToUrl, getPreviewImage } from './tauriCommands';
+import {
+  measurePerformanceSpan,
+  recordFullAssetCacheHit,
+  recordFullAssetCacheMiss,
+  recordPreviewAssetCacheHit,
+  recordPreviewAssetCacheMiss,
+  setFullAssetCacheEntryCountTelemetry,
+  setPreviewAssetCacheEntryCountTelemetry,
+} from './performanceTelemetry';
 
 type ImageAssetEntry = {
   url: string;
@@ -29,6 +38,11 @@ const pendingInvalidations = new Map<string, number>();
 const latestMutationVersions = new Map<string, number>();
 const DEFAULT_PREVIEW_MAX_DIMENSION = 2048;
 const MAX_PREVIEW_CACHE_ENTRIES = 12;
+
+function syncImageAssetTelemetry(): void {
+  setFullAssetCacheEntryCountTelemetry(fullImageAssetCache.size);
+  setPreviewAssetCacheEntryCountTelemetry(previewImageAssetCache.size);
+}
 
 function applyVersionToUrl(url: string, version: number): string {
   if (version <= 0) {
@@ -110,9 +124,12 @@ export function getFullAsset(path: string, options?: CacheReadOptions): string {
   const existing = fullImageAssetCache.get(path);
   if (existing) {
     existing.lastUsedAt = Date.now();
+    recordFullAssetCacheHit();
+    syncImageAssetTelemetry();
     return existing.url;
   }
 
+  recordFullAssetCacheMiss();
   const startVersion = currentVersion(path);
   const entry = createCacheEntry(path, startVersion);
 
@@ -123,12 +140,15 @@ export function getFullAsset(path: string, options?: CacheReadOptions): string {
   }
 
   if (!shouldStore(options)) {
+    syncImageAssetTelemetry();
     return entry.url;
   }
 
   const current = fullImageAssetCache.get(path);
   if (current && current.version >= entry.version) {
     current.lastUsedAt = Date.now();
+    recordFullAssetCacheHit();
+    syncImageAssetTelemetry();
     return current.url;
   }
 
@@ -142,6 +162,7 @@ export function getFullAsset(path: string, options?: CacheReadOptions): string {
     pendingInvalidations.delete(path);
   }
 
+  syncImageAssetTelemetry();
   return entry.url;
 }
 
@@ -154,12 +175,19 @@ export async function getPreviewAsset(
   const existing = previewImageAssetCache.get(path);
   if (existing && existing.version === version && existing.maxDimension === maxDimension) {
     existing.lastUsedAt = Date.now();
+    recordPreviewAssetCacheHit();
+    syncImageAssetTelemetry();
     return existing.url;
   }
 
+  recordPreviewAssetCacheMiss();
   const previewBust = version > 0 ? version : undefined;
   let entry: PreviewAssetEntry = {
-    url: generatedImageAssetToUrl(await getPreviewImage(path, maxDimension, previewBust)),
+    url: generatedImageAssetToUrl(
+      await measurePerformanceSpan('previewGeneration', () =>
+        getPreviewImage(path, maxDimension, previewBust)
+      )
+    ),
     version,
     maxDimension,
     lastUsedAt: Date.now(),
@@ -169,7 +197,11 @@ export async function getPreviewAsset(
   if (resolvedVersion !== entry.version) {
     const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
     entry = {
-      url: generatedImageAssetToUrl(await getPreviewImage(path, maxDimension, resolvedBust)),
+      url: generatedImageAssetToUrl(
+        await measurePerformanceSpan('previewGeneration', () =>
+          getPreviewImage(path, maxDimension, resolvedBust)
+        )
+      ),
       version: resolvedVersion,
       maxDimension,
       lastUsedAt: Date.now(),
@@ -177,12 +209,15 @@ export async function getPreviewAsset(
   }
 
   if (!shouldStore(options)) {
+    syncImageAssetTelemetry();
     return entry.url;
   }
 
   const current = previewImageAssetCache.get(path);
   if (current && current.version >= entry.version && current.maxDimension === entry.maxDimension) {
     current.lastUsedAt = Date.now();
+    recordPreviewAssetCacheHit();
+    syncImageAssetTelemetry();
     return current.url;
   }
 
@@ -195,6 +230,7 @@ export async function getPreviewAsset(
   }
 
   trimCacheEntries(previewImageAssetCache, new Set([path]), MAX_PREVIEW_CACHE_ENTRIES);
+  syncImageAssetTelemetry();
   return entry.url;
 }
 
@@ -237,6 +273,7 @@ export function invalidateImageAsset(path: string): void {
 
   fullImageAssetCache.delete(path);
   previewImageAssetCache.delete(path);
+  syncImageAssetTelemetry();
 }
 
 export function trimImageAssetCache(
@@ -255,4 +292,5 @@ export function trimImageAssetCache(
     keepPaths,
     Math.min(maxEntries, MAX_PREVIEW_CACHE_ENTRIES)
   );
+  syncImageAssetTelemetry();
 }

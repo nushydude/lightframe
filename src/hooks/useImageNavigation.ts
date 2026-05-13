@@ -5,6 +5,12 @@ import { scanFolder, getParentFolder } from '../services/tauriCommands';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { sortImages } from '../services/imageSorting';
+import {
+  beginFolderOpenTelemetry,
+  clearPendingFolderOpenTelemetry,
+  measurePerformanceSpan,
+  setNextImageSelectionKind,
+} from '../services/performanceTelemetry';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 
@@ -87,7 +93,9 @@ export function useImageNavigation() {
   const scanFolderForImage = useCallback(
     async (loadGeneration: number, filePath: string, parentFolder: string) => {
       try {
-        let folderImages = await scanFolder(parentFolder);
+        let folderImages = await measurePerformanceSpan('folderScan', () =>
+          scanFolder(parentFolder)
+        );
         if (!isCurrentGeneration(loadGeneration)) return;
 
         if (settings.sortOrder !== 'name') {
@@ -133,6 +141,7 @@ export function useImageNavigation() {
       try {
         const parentFolder = getParentFolder(filePath);
         setFolderPath(parentFolder);
+        setNextImageSelectionKind(scanInBackground ? 'startup-open' : 'open-image');
         setCurrentImage(filePath, 0);
         setViewMode('viewer');
 
@@ -226,28 +235,43 @@ export function useImageNavigation() {
         setFolderScanning(true);
         setViewMode('viewer');
 
-        let folderImages = await scanFolder(nextFolderPath);
-        if (!isCurrentGeneration(loadGeneration)) return;
+        beginFolderOpenTelemetry(loadGeneration);
+        let folderImages = await measurePerformanceSpan('folderScan', () =>
+          scanFolder(nextFolderPath)
+        );
+        if (!isCurrentGeneration(loadGeneration)) {
+          clearPendingFolderOpenTelemetry(loadGeneration);
+          return;
+        }
 
         if (settings.sortOrder !== 'name') {
           folderImages = sortImages(folderImages, settings.sortOrder);
         }
-        if (!isCurrentGeneration(loadGeneration)) return;
+        if (!isCurrentGeneration(loadGeneration)) {
+          clearPendingFolderOpenTelemetry(loadGeneration);
+          return;
+        }
 
         setImages(folderImages);
 
         if (folderImages.length > 0) {
+          setNextImageSelectionKind('folder-open');
           setCurrentIndex(0);
 
           const appWindow = getCurrentWindow();
           const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
           await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
-          if (!isCurrentGeneration(loadGeneration)) return;
+          if (!isCurrentGeneration(loadGeneration)) {
+            clearPendingFolderOpenTelemetry(loadGeneration);
+            return;
+          }
         } else if (isCurrentGeneration(loadGeneration)) {
+          clearPendingFolderOpenTelemetry(loadGeneration);
           setError('No supported images found in the selected folder');
         }
       } catch (err) {
         console.error('Failed to open folder:', err);
+        clearPendingFolderOpenTelemetry(loadGeneration);
         if (isCurrentGeneration(loadGeneration)) {
           setError(`Failed to open folder: ${err}`);
         }
@@ -301,7 +325,9 @@ export function useImageNavigation() {
     try {
       setFolderScanning(true);
 
-      let refreshedImages = await scanFolder(folderPath);
+      let refreshedImages = await measurePerformanceSpan('folderScan', () =>
+        scanFolder(folderPath)
+      );
       if (!isCurrentGeneration(loadGeneration)) return;
 
       if (settings.sortOrder !== 'name') {

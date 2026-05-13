@@ -2221,6 +2221,111 @@ body,
   padding: 10px 12px;
 }
 
+.performance-telemetry-overlay {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: calc(var(--z-settings) + 1);
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-lg);
+  background: rgba(12, 18, 27, 0.92);
+  box-shadow: var(--shadow-lg);
+  color: #e8eef9;
+  backdrop-filter: blur(14px);
+  padding: 14px;
+  font-size: 12px;
+}
+
+.performance-telemetry-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.performance-telemetry-header h2,
+.performance-telemetry-section h3 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.performance-telemetry-header p {
+  margin: 4px 0 0;
+  color: rgba(232, 238, 249, 0.72);
+}
+
+.performance-telemetry-header button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.performance-telemetry-section + .performance-telemetry-section {
+  margin-top: 12px;
+}
+
+.performance-telemetry-section dl {
+  display: grid;
+  grid-template-columns: minmax(80px, 100px) 1fr;
+  gap: 6px 10px;
+  margin: 8px 0 0;
+}
+
+.performance-telemetry-section dl div {
+  display: contents;
+}
+
+.performance-telemetry-section dt {
+  color: rgba(232, 238, 249, 0.64);
+}
+
+.performance-telemetry-section dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.performance-telemetry-section table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.performance-telemetry-section th,
+.performance-telemetry-section td {
+  text-align: left;
+  padding: 4px 0;
+  vertical-align: top;
+}
+
+.performance-telemetry-section thead th {
+  color: rgba(232, 238, 249, 0.64);
+  font-weight: 600;
+}
+
+.performance-telemetry-section tbody tr + tr {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 640px) {
+  .performance-telemetry-overlay {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    width: auto;
+    max-height: calc(100vh - 24px);
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

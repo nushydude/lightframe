@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
+import { recordImageSelectedTelemetry } from '../services/performanceTelemetry';
 import {
   clampNormalizedRect,
   type CropAspectRatioPreset,
@@ -183,6 +184,7 @@ interface ViewerState {
   showControls: boolean;
   showSettings: boolean;
   showCommandPalette: boolean;
+  showPerformanceTelemetry: boolean;
   errorMessage: string | null;
   viewMode: ViewMode;
   comparePrimaryIndex: number;
@@ -230,6 +232,7 @@ interface ViewerState {
   setShowControls: (show: boolean) => void;
   setShowSettings: (show: boolean) => void;
   setShowCommandPalette: (show: boolean) => void;
+  setShowPerformanceTelemetry: (show: boolean) => void;
   setError: (msg: string | null) => void;
   saveRotation: () => Promise<void>;
   setViewMode: (mode: ViewMode) => void;
@@ -265,6 +268,7 @@ const initialState = {
   showControls: true,
   showSettings: false,
   showCommandPalette: false,
+  showPerformanceTelemetry: false,
   errorMessage: null,
   cacheBuster: 0,
   loadGeneration: 0,
@@ -414,6 +418,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     setCurrentImage: (path, index) => {
       const { defaultZoomMode, pendingEditsByPath } = get();
       const editFields = getEditFieldsForPath(path, pendingEditsByPath);
+      recordImageSelectedTelemetry(path);
       set({
         currentImagePath: path,
         currentIndex: index,
@@ -476,6 +481,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
       set((state) => {
         const path = images[index].path;
+        recordImageSelectedTelemetry(path);
         const editFields = getEditFieldsForPath(path, state.pendingEditsByPath);
         const updates: Partial<ViewerState> = {
           currentIndex: index,
@@ -814,6 +820,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     setShowControls: (show) => set({ showControls: show }),
     setShowSettings: (show) => set({ showSettings: show }),
     setShowCommandPalette: (show) => set({ showCommandPalette: show }),
+    setShowPerformanceTelemetry: (show) => set({ showPerformanceTelemetry: show }),
     setError: (msg) => set({ errorMessage: msg }),
 
     saveRotation: async () => {
@@ -1045,6 +1052,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       set((state) => ({
         ...initialState,
         defaultZoomMode: state.defaultZoomMode,
+        showPerformanceTelemetry: state.showPerformanceTelemetry,
         loadGeneration: state.loadGeneration + 1,
       })),
   };

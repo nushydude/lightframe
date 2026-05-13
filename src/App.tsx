@@ -11,6 +11,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
+import { PerformanceTelemetryOverlay } from './components/PerformanceTelemetryOverlay';
 import { useImageNavigation } from './hooks/useImageNavigation';
 import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -18,6 +19,11 @@ import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
+import {
+  recordStartupFirstImageKnownTelemetry,
+  resetPerformanceTelemetry,
+  setPerformanceTelemetryEnabled,
+} from './services/performanceTelemetry';
 import {
   copyCurrentImage,
   deleteCurrentImage,
@@ -35,12 +41,14 @@ function App() {
     currentImagePath,
     showSettings,
     showCommandPalette,
+    showPerformanceTelemetry,
     errorMessage,
     isFullscreen,
     viewMode,
     setError,
     setShowControls,
     setShowCommandPalette,
+    setShowPerformanceTelemetry,
     setFullscreen,
     setDefaultZoomMode,
     reset,
@@ -75,6 +83,7 @@ function App() {
   const [startupShowAttempted, setStartupShowAttempted] = useState(false);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupShowAttemptedRef = useRef(false);
+  const firstImagePathTelemetryRecordedRef = useRef(false);
   const appWindowRef = useRef(getCurrentWindow());
   const isMainWindowRef = useRef(appWindowRef.current.label === 'main');
   const settingsRef = useRef(settings);
@@ -373,6 +382,16 @@ function App() {
     }
   }, [setFullscreen]);
 
+  const handleTogglePerformanceTelemetry = useCallback(() => {
+    const nextValue = !useViewerStore.getState().showPerformanceTelemetry;
+    setPerformanceTelemetryEnabled(nextValue);
+    setShowPerformanceTelemetry(nextValue);
+  }, [setShowPerformanceTelemetry]);
+
+  const handleResetPerformanceTelemetry = useCallback(() => {
+    resetPerformanceTelemetry();
+  }, []);
+
   const commandPaletteCommands = useMemo(
     () =>
       createViewerCommands({
@@ -414,6 +433,8 @@ function App() {
           }
           state.enterCompareMode();
         },
+        togglePerformanceTelemetry: handleTogglePerformanceTelemetry,
+        resetPerformanceTelemetry: handleResetPerformanceTelemetry,
       }),
     [
       openFilePicker,
@@ -423,9 +444,24 @@ function App() {
       goFirst,
       goLast,
       handleToggleFullscreen,
+      handleTogglePerformanceTelemetry,
+      handleResetPerformanceTelemetry,
       startSlideshow,
     ]
   );
+
+  useEffect(() => {
+    setPerformanceTelemetryEnabled(showPerformanceTelemetry);
+  }, [showPerformanceTelemetry]);
+
+  useEffect(() => {
+    if (firstImagePathTelemetryRecordedRef.current || !currentImagePath) {
+      return;
+    }
+
+    firstImagePathTelemetryRecordedRef.current = true;
+    recordStartupFirstImageKnownTelemetry();
+  }, [currentImagePath]);
 
   // Register keyboard shortcuts
   useKeyboardShortcuts({
@@ -441,6 +477,7 @@ function App() {
     stopSlideshow,
     toggleSlideshowPause,
     openCommandPalette: () => setShowCommandPalette(true),
+    togglePerformanceTelemetry: handleTogglePerformanceTelemetry,
     toggleFavoriteCurrent: () => {
       const path = useViewerStore.getState().currentImagePath;
       if (path) {
@@ -573,6 +610,9 @@ function App() {
           isOpen={showCommandPalette}
           onClose={() => setShowCommandPalette(false)}
         />
+      )}
+      {showPerformanceTelemetry && (
+        <PerformanceTelemetryOverlay onReset={handleResetPerformanceTelemetry} />
       )}
       <UpdateNotification />
 

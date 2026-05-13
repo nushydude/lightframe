@@ -15,6 +15,11 @@ import {
   trimImageAssetCache,
 } from '../services/imageAssetCache';
 import {
+  recordFullResolutionReadyTelemetry,
+  recordPreviewVisibleTelemetry,
+  recordVisibleImageSourceUpdatedTelemetry,
+} from '../services/performanceTelemetry';
+import {
   NAVIGATION_CACHE_MAX_FULL_ASSET_ENTRIES,
   NAVIGATION_CACHE_NEXT_IMAGES,
   NAVIGATION_CACHE_PRELOAD_DEBOUNCE_MS,
@@ -35,6 +40,11 @@ import { getPreviewClipPath } from './cropPreview';
 type ImageCanvasProps = {
   onWheelNext?: () => void;
   onWheelPrev?: () => void;
+};
+
+type LoadedImageAsset = {
+  path: string;
+  url: string;
 };
 
 type ImageStyleOptions = {
@@ -147,8 +157,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const { zoomLevel, panX, panY, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } =
     useZoomPan(containerRef, { onWheelNext, onWheelPrev });
 
-  const [previewSrc, setPreviewSrc] = useState('');
-  const [fullSrc, setFullSrc] = useState('');
+  const [previewAsset, setPreviewAsset] = useState<LoadedImageAsset | null>(null);
+  const [fullAsset, setFullAsset] = useState<LoadedImageAsset | null>(null);
   const [isFullResolutionReady, setIsFullResolutionReady] = useState(false);
   const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -201,7 +211,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           return;
         }
 
-        setFullSrc(url);
+        setFullAsset({ path, url });
         setFullLoadFailed(false);
       } catch (err) {
         if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
@@ -219,8 +229,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   // Load preview first, then full-resolution pixels on demand.
   useEffect(() => {
     if (!currentImagePath) {
-      setPreviewSrc('');
-      setFullSrc('');
+      setPreviewAsset(null);
+      setFullAsset(null);
       setMetadata(null);
       setIsFullResolutionReady(false);
       setFullLoadFailed(false);
@@ -235,8 +245,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     activeRequestIdRef.current = requestId;
     fullLoadKeyRef.current = null;
 
-    setPreviewSrc('');
-    setFullSrc('');
+    setPreviewAsset(null);
+    setFullAsset(null);
     setMetadata(null);
     setIsFullResolutionReady(false);
     setFullLoadFailed(false);
@@ -261,7 +271,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       try {
         const preview = await getPreviewAsset(currentImagePath, PREVIEW_MAX_DIMENSION);
         if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
-          setPreviewSrc(preview);
+          setPreviewAsset({ path: currentImagePath, url: preview });
         }
       } catch (err) {
         console.error('Failed to load preview image:', err);
@@ -363,16 +373,49 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     };
   }, [currentImagePath, currentIndex, images, loadGeneration]);
 
+  const previewSrc = previewAsset?.url ?? '';
+  const fullSrc = fullAsset?.url ?? '';
   const fullFallbackSrc = fullLoadFailed ? '' : fullSrc;
   const imageSrc = isFullResolutionReady ? fullSrc : previewSrc || fullFallbackSrc;
   const isImageLoading = isLoading && !previewSrc && !isFullResolutionReady;
 
-  const handleFullResolutionLoad = useCallback(() => {
-    setFullLoadFailed(false);
-    setIsFullResolutionReady(true);
-    setIsLoading(false);
-    clearImageDisplayError();
-  }, [clearImageDisplayError]);
+  useEffect(() => {
+    if (!currentImagePath || !imageSrc) {
+      return;
+    }
+
+    const visibleSourcePath =
+      imageSrc === fullSrc
+        ? (fullAsset?.path ?? null)
+        : imageSrc === previewSrc
+          ? (previewAsset?.path ?? null)
+          : imageSrc === fullFallbackSrc
+            ? (fullAsset?.path ?? null)
+            : null;
+
+    if (visibleSourcePath !== currentImagePath) {
+      return;
+    }
+
+    recordVisibleImageSourceUpdatedTelemetry(currentImagePath);
+  }, [currentImagePath, fullAsset, fullFallbackSrc, fullSrc, imageSrc, previewAsset, previewSrc]);
+
+  const handleFullResolutionLoad = useCallback(
+    (loadedPath = fullAsset?.path ?? null) => {
+      if (loadedPath !== currentImagePath) {
+        return;
+      }
+
+      setFullLoadFailed(false);
+      setIsFullResolutionReady(true);
+      setIsLoading(false);
+      if (loadedPath) {
+        recordFullResolutionReadyTelemetry(loadedPath);
+      }
+      clearImageDisplayError();
+    },
+    [clearImageDisplayError, currentImagePath, fullAsset?.path]
+  );
 
   const handleFullResolutionError = useCallback(() => {
     setFullLoadFailed(true);
@@ -387,15 +430,27 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const handleImageLoad = useCallback(
     (event: SyntheticEvent<HTMLImageElement>) => {
       if (fullSrc && event.currentTarget.getAttribute('src') === fullSrc) {
-        handleFullResolutionLoad();
+        handleFullResolutionLoad(fullAsset?.path ?? null);
+        return;
+      }
+
+      if (previewAsset?.path !== currentImagePath || !previewAsset?.path) {
         return;
       }
 
       setIsLoading(false);
       setPreviewDisplayFailed(false);
+      recordPreviewVisibleTelemetry(previewAsset.path);
       clearImageDisplayError();
     },
-    [clearImageDisplayError, fullSrc, handleFullResolutionLoad]
+    [
+      clearImageDisplayError,
+      currentImagePath,
+      fullAsset?.path,
+      fullSrc,
+      handleFullResolutionLoad,
+      previewAsset,
+    ]
   );
 
   const handleImageError = useCallback(
@@ -505,6 +560,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     >
       {imageSrc && (
         <img
+          key={imageSrc}
           ref={imgRef}
           src={imageSrc}
           alt=""
@@ -520,10 +576,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       )}
       {shouldPreloadFullImage && (
         <img
+          key={fullSrc}
           src={fullSrc}
           alt=""
           className="image-full-loader"
-          onLoad={handleFullResolutionLoad}
+          onLoad={() => handleFullResolutionLoad(fullAsset?.path ?? null)}
           onError={handleFullResolutionError}
           aria-hidden="true"
           draggable={false}

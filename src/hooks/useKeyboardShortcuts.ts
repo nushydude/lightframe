@@ -3,6 +3,10 @@ import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nudgeCropRectInDirection } from '../services/cropMath';
+import {
+  beginNavigationKeydownTelemetry,
+  cancelPendingNavigationKeydownTelemetry,
+} from '../services/performanceTelemetry';
 import { revealCurrentImage } from '../services/viewerActions';
 
 interface KeyboardHandlers {
@@ -17,6 +21,7 @@ interface KeyboardHandlers {
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
   openCommandPalette: () => void;
+  togglePerformanceTelemetry: () => void;
   toggleFavoriteCurrent: () => void;
   setRatingCurrent: (rating: number) => void;
 }
@@ -103,6 +108,12 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         if (!showCommandPalette) {
           handlers.openCommandPalette();
         }
+        return;
+      }
+
+      if (e.ctrlKey && e.shiftKey && e.key === 'F12') {
+        e.preventDefault();
+        handlers.togglePerformanceTelemetry();
         return;
       }
 
@@ -278,7 +289,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         if (isSlideshowActive) {
           handlers.toggleSlideshowPause();
         } else {
-          handlers.goNext();
+          beginNavigationKeydownTelemetry('next');
+          if (!handlers.goNext()) {
+            cancelPendingNavigationKeydownTelemetry();
+          }
         }
         return;
       }
@@ -286,14 +300,20 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       // Right Arrow: next image
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        handlers.goNext(settings.loopSlideshow);
+        beginNavigationKeydownTelemetry('next');
+        if (!handlers.goNext(settings.loopSlideshow)) {
+          cancelPendingNavigationKeydownTelemetry();
+        }
         return;
       }
 
       // Left Arrow: previous image
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        handlers.goPrev(settings.loopSlideshow);
+        beginNavigationKeydownTelemetry('prev');
+        if (!handlers.goPrev(settings.loopSlideshow)) {
+          cancelPendingNavigationKeydownTelemetry();
+        }
         return;
       }
 

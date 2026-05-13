@@ -1,4 +1,11 @@
 import { generatedImageAssetToUrl, getThumbnail } from './tauriCommands';
+import {
+  recordThumbnailCacheHit,
+  recordThumbnailCacheMiss,
+  setThumbnailCacheEntryCountTelemetry,
+  setThumbnailInFlightTelemetry,
+  setThumbnailQueueDepthTelemetry,
+} from './performanceTelemetry';
 
 const DEFAULT_MAX_ENTRIES = 1000;
 const DEFAULT_CONCURRENCY = 6;
@@ -44,6 +51,12 @@ type ThumbnailRequestQueueItem = {
   path: string;
   token: string;
 };
+
+function syncThumbnailTelemetry(): void {
+  setThumbnailQueueDepthTelemetry(requestQueue.length);
+  setThumbnailInFlightTelemetry(inFlightCount);
+  setThumbnailCacheEntryCountTelemetry(thumbnailCache.size);
+}
 
 function touchEntry(entry: ThumbnailCacheEntry): void {
   accessCounter += 1;
@@ -103,6 +116,7 @@ function enqueuePath(path: string, token: string): void {
   if (queuedRequests.has(key)) return;
   queuedRequests.add(key);
   requestQueue.push({ path, token });
+  syncThumbnailTelemetry();
 }
 
 function addListener(path: string, options: PreloadThumbnailOptions): void {
@@ -158,6 +172,7 @@ function resolveSuccess(path: string, token: string, url: string): void {
     notifyLoaded(path);
   }
   enforceCacheLimit();
+  syncThumbnailTelemetry();
 }
 
 function resolveError(path: string, token: string, error: unknown): void {
@@ -175,6 +190,7 @@ function resolveError(path: string, token: string, error: unknown): void {
     clearListeners(path);
   }
   enforceCacheLimit();
+  syncThumbnailTelemetry();
 }
 
 function clearStaleListeners(keepPaths: Set<string>): void {
@@ -212,6 +228,7 @@ function enforceCacheLimit(): void {
     listenersByPath.delete(path);
     requestMetadataByPath.delete(path);
   }
+  syncThumbnailTelemetry();
 }
 
 function pumpQueue(): void {
@@ -224,6 +241,7 @@ function pumpQueue(): void {
     const queuedKey = requestKey(path, token);
 
     queuedRequests.delete(queuedKey);
+    syncThumbnailTelemetry();
 
     const entry = thumbnailCache.get(path);
     if (!entry?.inFlightPromise || entry.token !== token) {
@@ -236,9 +254,11 @@ function pumpQueue(): void {
     }
 
     inFlightCount += 1;
+    syncThumbnailTelemetry();
     const metadata = requestMetadataByPath.get(path);
     if (!metadata || metadataToken(metadata) !== token) {
       inFlightCount -= 1;
+      syncThumbnailTelemetry();
       continue;
     }
     getThumbnail(path, metadata?.sizeBytes, metadata?.modifiedAt ?? undefined)
@@ -250,6 +270,7 @@ function pumpQueue(): void {
       })
       .finally(() => {
         inFlightCount -= 1;
+        syncThumbnailTelemetry();
         pumpQueue();
       });
   }
@@ -270,6 +291,8 @@ export function getCachedThumbnail(request: string | ThumbnailRequest): string |
   }
 
   touchEntry(entry);
+  recordThumbnailCacheHit();
+  syncThumbnailTelemetry();
   return entry.url;
 }
 
@@ -288,6 +311,7 @@ export function loadThumbnail(request: string | ThumbnailRequest): Promise<strin
     return Promise.resolve(cached);
   }
 
+  recordThumbnailCacheMiss();
   const entry = getOrCreateEntry(path, token);
 
   if (entry.inFlightPromise) {
@@ -300,6 +324,7 @@ export function loadThumbnail(request: string | ThumbnailRequest): Promise<strin
 
   requestMetadataByPath.set(path, { path, sizeBytes, modifiedAt });
   enqueuePath(path, token);
+  syncThumbnailTelemetry();
   pumpQueue();
   return entry.inFlightPromise;
 }
@@ -308,6 +333,7 @@ export function invalidateThumbnail(path: string): void {
   thumbnailCache.delete(path);
   requestMetadataByPath.delete(path);
   listenersByPath.delete(path);
+  syncThumbnailTelemetry();
 }
 
 export function preloadThumbnails(
@@ -359,4 +385,5 @@ export function clearThumbnailCacheForTests(): void {
   inFlightCount = 0;
   maxEntries = DEFAULT_MAX_ENTRIES;
   concurrencyLimit = DEFAULT_CONCURRENCY;
+  syncThumbnailTelemetry();
 }
