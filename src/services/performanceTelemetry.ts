@@ -219,13 +219,6 @@ export class RollingLatencySummary {
     this.nextIndex = (this.nextIndex + 1) % this.limit;
   }
 
-  // fallow-ignore-next-line unused-class-members
-  reset(): void {
-    this.samples.length = 0;
-    this.nextIndex = 0;
-    this.currentMs = null;
-  }
-
   snapshot(): TelemetryLatencySummarySnapshot {
     if (this.samples.length === 0) {
       return {
@@ -367,7 +360,7 @@ function updateGauge(gauge: GaugeKey, value: number): void {
 }
 
 function resetMutableMetrics(): void {
-  Object.values(state.latencies).forEach((summary) => summary.reset());
+  state.latencies = createLatencySummaries();
   state.counters = createCounterState();
   state.gauges = createGaugeState();
   state.currentImage = createCurrentImageState();
