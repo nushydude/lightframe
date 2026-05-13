@@ -37,6 +37,8 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
     });
 
     const state = useViewerStore.getState();
@@ -89,6 +91,8 @@ describe('createViewerCommands', () => {
       enterCropMode,
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
     });
 
     const cropCommand = commands.find((command) => command.id === 'crop-image');
@@ -120,6 +124,8 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
     });
 
     const cropCommand = commands.find((command) => command.id === 'crop-image');
@@ -145,6 +151,8 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode,
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
     });
 
     const compareCommand = commands.find((command) => command.id === 'toggle-compare');
@@ -210,6 +218,8 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
     });
 
     const editCommand = commands.find((command) => command.id === 'open-in-editor');
@@ -218,5 +228,41 @@ describe('createViewerCommands', () => {
 
     await editCommand?.run();
     expect(openCurrentImageInEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes performance telemetry commands', () => {
+    const togglePerformanceTelemetry = vi.fn();
+    const resetPerformanceTelemetry = vi.fn();
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
+      togglePerformanceTelemetry,
+      resetPerformanceTelemetry,
+    });
+
+    const toggleCommand = commands.find((command) => command.id === 'toggle-performance-telemetry');
+    const resetCommand = commands.find((command) => command.id === 'reset-performance-telemetry');
+
+    expect(toggleCommand?.shortcut).toBe('Ctrl+Shift+F12');
+
+    void toggleCommand?.run();
+    void resetCommand?.run();
+
+    expect(togglePerformanceTelemetry).toHaveBeenCalledTimes(1);
+    expect(resetPerformanceTelemetry).toHaveBeenCalledTimes(1);
   });
 });

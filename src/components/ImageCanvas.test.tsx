@@ -12,6 +12,10 @@ const {
   trimImageAssetCacheMock,
   invalidateImageAssetMock,
   getImageMetadataMock,
+  recordFullResolutionReadyTelemetryMock,
+  recordPreviewVisibleTelemetryMock,
+  recordVisibleImageSourceUpdatedTelemetryMock,
+  recordImageSelectedTelemetryMock,
 } = vi.hoisted(() => ({
   getPreviewAssetMock: vi.fn(async () => 'asset://localhost/cache/preview.jpg?v=preview'),
   getFullAssetMock: vi.fn(() => 'asset://localhost/full.jpg'),
@@ -25,6 +29,10 @@ const {
     file_size_bytes: 1024,
     format: 'JPEG',
   })),
+  recordFullResolutionReadyTelemetryMock: vi.fn(),
+  recordPreviewVisibleTelemetryMock: vi.fn(),
+  recordVisibleImageSourceUpdatedTelemetryMock: vi.fn(),
+  recordImageSelectedTelemetryMock: vi.fn(),
 }));
 
 vi.mock('../services/imageAssetCache', () => ({
@@ -38,6 +46,13 @@ vi.mock('../services/imageAssetCache', () => ({
 
 vi.mock('../services/tauriCommands', () => ({
   getImageMetadata: getImageMetadataMock,
+}));
+
+vi.mock('../services/performanceTelemetry', () => ({
+  recordFullResolutionReadyTelemetry: recordFullResolutionReadyTelemetryMock,
+  recordPreviewVisibleTelemetry: recordPreviewVisibleTelemetryMock,
+  recordVisibleImageSourceUpdatedTelemetry: recordVisibleImageSourceUpdatedTelemetryMock,
+  recordImageSelectedTelemetry: recordImageSelectedTelemetryMock,
 }));
 
 vi.mock('../hooks/useZoomPan', () => ({
@@ -333,6 +348,127 @@ describe('ImageCanvas', () => {
 
     expect(getFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg');
     expect(container.querySelector('img')?.getAttribute('src')).toBe('asset://localhost/full.jpg');
+  });
+
+  it('does not record visible-source telemetry from a stale prior image during navigation', async () => {
+    getPreviewAssetMock.mockImplementation((async (path: string) => {
+      if (path === 'C:/images/next.jpg') {
+        return new Promise<string>(() => {});
+      }
+
+      return 'asset://localhost/cache/current-preview.jpg?v=current';
+    }) as unknown as () => Promise<string>);
+    getFullAssetMock.mockImplementation(((path: string) => {
+      return path === 'C:/images/next.jpg'
+        ? 'asset://localhost/next-full.jpg'
+        : 'asset://localhost/current-full.jpg';
+    }) as unknown as () => string);
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    recordVisibleImageSourceUpdatedTelemetryMock.mockClear();
+
+    act(() => {
+      useViewerStore.getState().setCurrentImage('C:/images/next.jpg', 1);
+    });
+
+    expect(recordVisibleImageSourceUpdatedTelemetryMock).toHaveBeenCalledTimes(1);
+    expect(recordVisibleImageSourceUpdatedTelemetryMock).toHaveBeenCalledWith('C:/images/next.jpg');
+  });
+
+  it('ignores stale prior-image load events after navigation until the next source loads', async () => {
+    getPreviewAssetMock.mockImplementation((async (path: string) => {
+      if (path === 'C:/images/next.jpg') {
+        return new Promise<string>(() => {});
+      }
+
+      return 'asset://localhost/cache/current-preview.jpg?v=current';
+    }) as unknown as () => Promise<string>);
+    getFullAssetMock.mockImplementation(((path: string) => {
+      return path === 'C:/images/next.jpg'
+        ? 'asset://localhost/next-full.jpg'
+        : 'asset://localhost/current-full.jpg';
+    }) as unknown as () => string);
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const visibleImage = container.querySelector('img:not(.image-full-loader)');
+    const fullLoaderImage = container.querySelector('img.image-full-loader');
+    expect(visibleImage?.getAttribute('src')).toBe(
+      'asset://localhost/cache/current-preview.jpg?v=current'
+    );
+
+    recordPreviewVisibleTelemetryMock.mockClear();
+    recordFullResolutionReadyTelemetryMock.mockClear();
+
+    act(() => {
+      useViewerStore.getState().setCurrentImage('C:/images/next.jpg', 1);
+    });
+
+    expect(container.querySelector('img:not(.image-full-loader)')?.getAttribute('src')).toBe(
+      'asset://localhost/next-full.jpg'
+    );
+
+    await act(async () => {
+      fireEvent.load(visibleImage as HTMLImageElement);
+      fireEvent.load(fullLoaderImage as HTMLImageElement);
+      await Promise.resolve();
+    });
+
+    expect(recordPreviewVisibleTelemetryMock).not.toHaveBeenCalledWith('C:/images/next.jpg');
+    expect(recordFullResolutionReadyTelemetryMock).not.toHaveBeenCalledWith('C:/images/next.jpg');
   });
 
   it('keeps the preview visible when the full asset cannot render', async () => {

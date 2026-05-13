@@ -28,6 +28,8 @@ interface CreateViewerCommandsOptions {
   enterCropMode: () => void;
   startSlideshow: () => void;
   toggleCompareMode: () => void;
+  togglePerformanceTelemetry: () => void;
+  resetPerformanceTelemetry: () => void;
 }
 
 export function createViewerCommands(options: CreateViewerCommandsOptions): ViewerCommand[] {
@@ -216,6 +218,21 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       shortcut: 'F5',
       isEnabled: (state) => Boolean(state.currentImagePath) && !state.isSlideshowActive,
       run: () => options.startSlideshow(),
+    },
+    {
+      id: 'toggle-performance-telemetry',
+      label: 'Toggle Performance Telemetry',
+      keywords: ['performance', 'telemetry', 'overlay', 'profiling'],
+      shortcut: 'Ctrl+Shift+F12',
+      isEnabled: () => true,
+      run: () => options.togglePerformanceTelemetry(),
+    },
+    {
+      id: 'reset-performance-telemetry',
+      label: 'Reset Performance Telemetry',
+      keywords: ['performance', 'telemetry', 'reset', 'overlay'],
+      isEnabled: () => true,
+      run: () => options.resetPerformanceTelemetry(),
     },
   ];
 }
