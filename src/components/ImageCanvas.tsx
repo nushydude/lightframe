@@ -68,8 +68,146 @@ type AdjacentPreloadPlan = {
   leadingIndices: Set<number>;
 };
 
+type DirectionalWindow = {
+  backwardCount: number;
+  forwardCount: number;
+};
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function getDirectionalWindow(direction: NavigationDirection): DirectionalWindow {
+  const totalWindow = NAVIGATION_CACHE_PREVIOUS_IMAGES + NAVIGATION_CACHE_NEXT_IMAGES;
+
+  if (direction === 'forward') {
+    const backwardCount = 1;
+    return {
+      backwardCount,
+      forwardCount: Math.max(1, totalWindow - backwardCount),
+    };
+  }
+
+  if (direction === 'backward') {
+    const forwardCount = 1;
+    return {
+      backwardCount: Math.max(1, totalWindow - forwardCount),
+      forwardCount,
+    };
+  }
+
+  return {
+    backwardCount: NAVIGATION_CACHE_PREVIOUS_IMAGES,
+    forwardCount: NAVIGATION_CACHE_NEXT_IMAGES,
+  };
+}
+
+function appendPreloadIndex(
+  currentIndex: number,
+  imageCount: number,
+  preloadIndices: number[],
+  leadingIndices: Set<number>,
+  queued: Set<number>,
+  index: number,
+  isLeading: boolean
+): void {
+  if (index < 0 || index >= imageCount || index === currentIndex || queued.has(index)) {
+    return;
+  }
+
+  queued.add(index);
+  preloadIndices.push(index);
+  if (isLeading) {
+    leadingIndices.add(index);
+  }
+}
+
+function collectDirectionalPreloads(
+  currentIndex: number,
+  imageCount: number,
+  preloadIndices: number[],
+  leadingIndices: Set<number>,
+  queued: Set<number>,
+  direction: NavigationDirection,
+  window: DirectionalWindow
+): void {
+  if (direction === 'forward') {
+    for (let offset = 1; offset <= window.forwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex + offset,
+        true
+      );
+    }
+    for (let offset = 1; offset <= window.backwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex - offset,
+        false
+      );
+    }
+    return;
+  }
+
+  if (direction === 'backward') {
+    for (let offset = 1; offset <= window.backwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex - offset,
+        true
+      );
+    }
+    for (let offset = 1; offset <= window.forwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex + offset,
+        false
+      );
+    }
+    return;
+  }
+
+  const maxOffset = Math.max(window.backwardCount, window.forwardCount);
+  for (let offset = 1; offset <= maxOffset; offset += 1) {
+    if (offset <= window.forwardCount) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex + offset,
+        false
+      );
+    }
+    if (offset <= window.backwardCount) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex - offset,
+        false
+      );
+    }
+  }
 }
 
 function getAdjacentPreloadPlan(
@@ -77,57 +215,20 @@ function getAdjacentPreloadPlan(
   imageCount: number,
   direction: NavigationDirection
 ): AdjacentPreloadPlan {
-  const totalWindow = NAVIGATION_CACHE_PREVIOUS_IMAGES + NAVIGATION_CACHE_NEXT_IMAGES;
-  let backwardCount = NAVIGATION_CACHE_PREVIOUS_IMAGES;
-  let forwardCount = NAVIGATION_CACHE_NEXT_IMAGES;
-
-  if (direction === 'forward') {
-    backwardCount = 1;
-    forwardCount = Math.max(1, totalWindow - backwardCount);
-  } else if (direction === 'backward') {
-    forwardCount = 1;
-    backwardCount = Math.max(1, totalWindow - forwardCount);
-  }
-
+  const window = getDirectionalWindow(direction);
   const preloadIndices: number[] = [];
   const leadingIndices = new Set<number>();
   const queued = new Set<number>();
-  const pushIndex = (index: number, isLeading: boolean) => {
-    if (index < 0 || index >= imageCount || index === currentIndex || queued.has(index)) {
-      return;
-    }
-    queued.add(index);
-    preloadIndices.push(index);
-    if (isLeading) {
-      leadingIndices.add(index);
-    }
-  };
 
-  if (direction === 'forward') {
-    for (let offset = 1; offset <= forwardCount; offset += 1) {
-      pushIndex(currentIndex + offset, true);
-    }
-    for (let offset = 1; offset <= backwardCount; offset += 1) {
-      pushIndex(currentIndex - offset, false);
-    }
-  } else if (direction === 'backward') {
-    for (let offset = 1; offset <= backwardCount; offset += 1) {
-      pushIndex(currentIndex - offset, true);
-    }
-    for (let offset = 1; offset <= forwardCount; offset += 1) {
-      pushIndex(currentIndex + offset, false);
-    }
-  } else {
-    const maxOffset = Math.max(backwardCount, forwardCount);
-    for (let offset = 1; offset <= maxOffset; offset += 1) {
-      if (offset <= forwardCount) {
-        pushIndex(currentIndex + offset, false);
-      }
-      if (offset <= backwardCount) {
-        pushIndex(currentIndex - offset, false);
-      }
-    }
-  }
+  collectDirectionalPreloads(
+    currentIndex,
+    imageCount,
+    preloadIndices,
+    leadingIndices,
+    queued,
+    direction,
+    window
+  );
 
   return {
     keepIndices: [currentIndex, ...preloadIndices],
@@ -310,6 +411,45 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     [setImageDisplayError]
   );
 
+  const isActiveRequest = useCallback(
+    (requestId: number) => isMountedRef.current && activeRequestIdRef.current === requestId,
+    []
+  );
+
+  const loadMetadataForPath = useCallback(
+    async (path: string, requestId: number, signal: AbortSignal) =>
+      imageWorkScheduler.schedule({
+        key: `metadata::${path}`,
+        priority: IMAGE_WORK_PRIORITY.currentMetadata,
+        sourcePath: path,
+        generationToken: requestId,
+        signal,
+        run: async ({ signal: workSignal }) => {
+          if (workSignal.aborted) {
+            throw Object.assign(new Error('Metadata work aborted before execution.'), {
+              name: 'AbortError',
+            });
+          }
+          const nextMetadata = await getImageMetadata(path);
+          if (workSignal.aborted) {
+            throw Object.assign(new Error('Metadata work aborted after execution.'), {
+              name: 'AbortError',
+            });
+          }
+          return nextMetadata;
+        },
+      }).promise,
+    []
+  );
+
+  const loadPreviewForPath = useCallback(
+    (path: string, signal: AbortSignal) =>
+      getPreviewAsset(path, PREVIEW_MAX_DIMENSION, {
+        signal,
+      }),
+    []
+  );
+
   // Load preview first, then full-resolution pixels on demand.
   useEffect(() => {
     if (!currentImagePath) {
@@ -346,30 +486,16 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
 
     const loadImage = async () => {
+      const isCurrentRequest = () => !cancelled && isActiveRequest(requestId);
       let imageMetadata: ImageMetadata | null = null;
+
       try {
-        imageMetadata = await imageWorkScheduler.schedule({
-          key: `metadata::${currentImagePath}`,
-          priority: IMAGE_WORK_PRIORITY.currentMetadata,
-          sourcePath: currentImagePath,
-          generationToken: requestId,
-          signal: currentWorkAbortController.signal,
-          run: async ({ signal }) => {
-            if (signal.aborted) {
-              throw Object.assign(new Error('Metadata work aborted before execution.'), {
-                name: 'AbortError',
-              });
-            }
-            const nextMetadata = await getImageMetadata(currentImagePath);
-            if (signal.aborted) {
-              throw Object.assign(new Error('Metadata work aborted after execution.'), {
-                name: 'AbortError',
-              });
-            }
-            return nextMetadata;
-          },
-        }).promise;
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
+        imageMetadata = await loadMetadataForPath(
+          currentImagePath,
+          requestId,
+          currentWorkAbortController.signal
+        );
+        if (isCurrentRequest()) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
         }
@@ -380,10 +506,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       }
 
       try {
-        const preview = await getPreviewAsset(currentImagePath, PREVIEW_MAX_DIMENSION, {
-          signal: currentWorkAbortController.signal,
-        });
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
+        const preview = await loadPreviewForPath(currentImagePath, currentWorkAbortController.signal);
+        if (isCurrentRequest()) {
           setPreviewAsset({ path: currentImagePath, url: preview });
         }
       } catch (err) {
@@ -391,7 +515,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           return;
         }
         console.error('Failed to load preview image:', err);
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
+        if (isCurrentRequest()) {
           ensureFullResolutionLoaded(
             currentImagePath,
             requestId,
@@ -410,7 +534,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           PREVIEW_MAX_DIMENSION
         )
       ) {
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
+        if (isCurrentRequest()) {
           ensureFullResolutionLoaded(
             currentImagePath,
             requestId,
@@ -429,7 +553,14 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         activeWorkAbortControllerRef.current = null;
       }
     };
-  }, [currentImagePath, cacheBuster, ensureFullResolutionLoaded]);
+  }, [
+    cacheBuster,
+    currentImagePath,
+    ensureFullResolutionLoaded,
+    isActiveRequest,
+    loadMetadataForPath,
+    loadPreviewForPath,
+  ]);
 
   useEffect(() => {
     if (!currentImagePath || isFullResolutionReady) {
