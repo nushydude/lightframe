@@ -20,20 +20,20 @@ export const IMAGE_WORK_PRIORITY = {
 
 export type ImageWorkPriority = (typeof IMAGE_WORK_PRIORITY)[keyof typeof IMAGE_WORK_PRIORITY];
 
-export type ImageWorkHandle<T> = {
+type ImageWorkHandle<T> = {
   key: string;
   promise: Promise<T>;
   cancel: () => void;
 };
 
-export type ImageWorkTaskView = {
+type ImageWorkTaskView = {
   key: string;
   sourcePath: string;
   priority: ImageWorkPriority;
   state: 'queued' | 'running';
 };
 
-export type ImageWorkSnapshot = {
+type ImageWorkSnapshot = {
   queueDepth: number;
   inFlight: number;
   droppedQueued: number;
@@ -487,8 +487,3 @@ const imageWorkTelemetryScheduler = createImageWorkScheduler({
 });
 
 export const imageWorkScheduler = imageWorkTelemetryScheduler;
-
-// fallow-ignore-next-line unused-exports -- reset directly by cache tests
-export function resetImageWorkSchedulerForTests(): void {
-  imageWorkScheduler.resetForTests();
-}

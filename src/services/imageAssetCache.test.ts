@@ -46,10 +46,10 @@ describe('imageAssetCache', () => {
   });
 
   it('returns the same URL for repeated reads before invalidation', async () => {
-    const { getFullAsset } = await loadCacheModule();
+    const { requestFullAsset } = await loadCacheModule();
 
-    const first = await getFullAsset('C:/images/a.jpg');
-    const second = await getFullAsset('C:/images/a.jpg');
+    const first = await requestFullAsset('C:/images/a.jpg');
+    const second = await requestFullAsset('C:/images/a.jpg');
 
     expect(first).toBe(second);
     expect(first).not.toContain('v=');
@@ -57,19 +57,19 @@ describe('imageAssetCache', () => {
   });
 
   it('invalidateImageAsset changes only the invalidated path URL', async () => {
-    const { getFullAsset, invalidateImageAsset } = await loadCacheModule();
+    const { requestFullAsset, invalidateImageAsset } = await loadCacheModule();
 
     const pathA = 'C:/images/a.jpg';
     const pathB = 'C:/images/b.jpg';
 
-    const firstA = await getFullAsset(pathA);
-    const firstB = await getFullAsset(pathB);
+    const firstA = await requestFullAsset(pathA);
+    const firstB = await requestFullAsset(pathB);
 
     vi.setSystemTime(new Date('2026-01-01T00:00:05.000Z'));
     invalidateImageAsset(pathA);
 
-    const secondA = await getFullAsset(pathA);
-    const secondB = await getFullAsset(pathB);
+    const secondA = await requestFullAsset(pathA);
+    const secondB = await requestFullAsset(pathB);
 
     expect(secondA).not.toBe(firstA);
     expect(secondA).toContain('v=');
@@ -78,23 +78,23 @@ describe('imageAssetCache', () => {
   });
 
   it('applies invalidation version when path is invalidated before first read', async () => {
-    const { getFullAsset, invalidateImageAsset } = await loadCacheModule();
+    const { requestFullAsset, invalidateImageAsset } = await loadCacheModule();
     const path = 'C:/images/new.jpg';
 
     vi.setSystemTime(new Date('2026-01-01T00:00:09.000Z'));
     invalidateImageAsset(path);
 
-    const url = await getFullAsset(path);
+    const url = await requestFullAsset(path);
 
     expect(url).toContain('v=1767225609000');
     expect(convertFileSrcMock).toHaveBeenCalledTimes(1);
   });
 
   it('preserves invalidation version across trim eviction for future reads', async () => {
-    const { getFullAsset, invalidateImageAsset, trimImageAssetCache } = await loadCacheModule();
+    const { requestFullAsset, invalidateImageAsset, trimImageAssetCache } = await loadCacheModule();
     const path = 'C:/images/trim-race.jpg';
 
-    await getFullAsset(path);
+    await requestFullAsset(path);
 
     vi.setSystemTime(new Date('2026-01-01T00:00:12.000Z'));
     const invalidationVersion = Date.now();
@@ -102,53 +102,53 @@ describe('imageAssetCache', () => {
 
     trimImageAssetCache(new Set(), 0);
 
-    const urlAfterTrim = await getFullAsset(path);
+    const urlAfterTrim = await requestFullAsset(path);
     expect(urlAfterTrim).toContain(`v=${invalidationVersion}`);
   });
 
   it('trimImageAssetCache keeps requested paths and evicts distant entries deterministically', async () => {
-    const { getFullAsset, trimImageAssetCache } = await loadCacheModule();
+    const { requestFullAsset, trimImageAssetCache } = await loadCacheModule();
 
     const pathA = 'C:/images/a.jpg';
     const pathB = 'C:/images/b.jpg';
     const pathC = 'C:/images/c.jpg';
     const pathD = 'C:/images/d.jpg';
 
-    await getFullAsset(pathA);
+    await requestFullAsset(pathA);
     vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'));
-    await getFullAsset(pathB);
+    await requestFullAsset(pathB);
     vi.setSystemTime(new Date('2026-01-01T00:00:02.000Z'));
-    await getFullAsset(pathC);
+    await requestFullAsset(pathC);
     vi.setSystemTime(new Date('2026-01-01T00:00:03.000Z'));
-    await getFullAsset(pathD);
+    await requestFullAsset(pathD);
 
     expect(convertFileSrcMock).toHaveBeenCalledTimes(4);
 
     trimImageAssetCache(new Set([pathC]), 2);
 
-    await getFullAsset(pathC);
-    await getFullAsset(pathD);
+    await requestFullAsset(pathC);
+    await requestFullAsset(pathD);
     expect(convertFileSrcMock).toHaveBeenCalledTimes(4);
 
-    await getFullAsset(pathA);
-    await getFullAsset(pathB);
+    await requestFullAsset(pathA);
+    await requestFullAsset(pathB);
     expect(convertFileSrcMock).toHaveBeenCalledTimes(6);
   });
 
   it('trimImageAssetCache can prune non-keep paths even when cache is under max size', async () => {
-    const { getFullAsset, trimImageAssetCache } = await loadCacheModule();
+    const { requestFullAsset, trimImageAssetCache } = await loadCacheModule();
 
     const keepPath = 'C:/images/keep.jpg';
     const stalePath = 'C:/images/stale.jpg';
 
-    await getFullAsset(keepPath);
-    await getFullAsset(stalePath);
+    await requestFullAsset(keepPath);
+    await requestFullAsset(stalePath);
     expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
 
     trimImageAssetCache(new Set([keepPath]), 12, { pruneMissing: true });
 
-    await getFullAsset(keepPath);
-    await getFullAsset(stalePath);
+    await requestFullAsset(keepPath);
+    await requestFullAsset(stalePath);
     expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
   });
 
@@ -209,7 +209,7 @@ describe('imageAssetCache', () => {
   });
 
   it('does not persist full asset cache entry when stale preload guard expires', async () => {
-    const { getFullAsset, preloadFullAsset } = await loadCacheModule();
+    const { requestFullAsset, preloadFullAsset } = await loadCacheModule();
     const path = 'C:/images/stale-preload-full.jpg';
 
     let guardCalls = 0;
@@ -222,7 +222,7 @@ describe('imageAssetCache', () => {
 
     await pendingPreload;
 
-    await getFullAsset(path);
+    await requestFullAsset(path);
     expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
   });
 

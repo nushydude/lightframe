@@ -340,22 +340,6 @@ async function loadPreviewAssetWithPriority(
   }).promise;
 }
 
-// fallow-ignore-next-line unused-exports -- intentionally exercised through focused cache tests
-export function getFullAsset(path: string, options?: CacheReadOptions): string {
-  const existing = fullImageAssetCache.get(path);
-  if (existing) {
-    existing.lastUsedAt = Date.now();
-    recordFullAssetCacheHit();
-    syncImageAssetTelemetry();
-    return existing.url;
-  }
-
-  recordFullAssetCacheMiss();
-  const entry = buildFullAssetEntry(path);
-
-  return storeFullAsset(path, entry, options);
-}
-
 export function requestFullAsset(path: string, options?: CacheReadOptions): Promise<string> {
   return loadFullAssetWithPriority(path, IMAGE_WORK_PRIORITY.currentFull, options);
 }
