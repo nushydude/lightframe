@@ -315,11 +315,53 @@ describe('thumbnailCache', () => {
     await Promise.all(paths.map((path) => loadThumbnail(path).catch(() => undefined)));
 
     expect(getCachedThumbnail('C:/images/a.jpg')).toBeUndefined();
-    expect(getCachedThumbnail('C:/images/b.jpg')).toBeUndefined();
+    expect(getCachedThumbnail('C:/images/b.jpg')).toBe('asset://localhost/C:/cache/b.jpg?v=B');
     expect(getCachedThumbnail('C:/images/c.jpg')).toBe('asset://localhost/C:/cache/c.jpg?v=C');
-    expect(getCachedThumbnail('C:/images/d.jpg')).toBe('asset://localhost/C:/cache/d.jpg?v=D');
+    expect(getCachedThumbnail('C:/images/d.jpg')).toBeUndefined();
     expect(droppedListener).not.toHaveBeenCalled();
     expect(keptListener).toHaveBeenCalledTimes(1);
+
+    clearThumbnailCacheForTests();
+  });
+
+  it('cancels queued stale thumbnails before invoking Tauri thumbnail generation', async () => {
+    const { clearThumbnailCacheForTests, evictThumbnailsExcept, loadThumbnail } =
+      await loadThumbnailCacheModule();
+
+    const deferredByPath = new Map<
+      string,
+      ReturnType<typeof createDeferred<{ file_path: string; cache_key: string }>>
+    >();
+    getThumbnailMock.mockImplementation((path: string) => {
+      let deferred = deferredByPath.get(path);
+      if (!deferred) {
+        deferred = createDeferred<{ file_path: string; cache_key: string }>();
+        deferredByPath.set(path, deferred);
+      }
+      return deferred.promise;
+    });
+
+    const activePaths = ['C:/images/a.jpg', 'C:/images/b.jpg', 'C:/images/c.jpg'];
+    const stalePath = 'C:/images/stale.jpg';
+
+    const activePromises = activePaths.map((path) => loadThumbnail(path));
+    const stalePromise = loadThumbnail(stalePath);
+
+    expect(getThumbnailMock).toHaveBeenCalledTimes(3);
+    expect(getThumbnailMock).not.toHaveBeenCalledWith(stalePath, undefined, undefined);
+
+    evictThumbnailsExcept(new Set(activePaths), 10);
+
+    await expect(stalePromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getThumbnailMock).toHaveBeenCalledTimes(3);
+
+    activePaths.forEach((path, index) => {
+      deferredByPath
+        .get(path)
+        ?.resolve({ file_path: `C:/cache/${index}.jpg`, cache_key: String(index) });
+    });
+
+    await Promise.all(activePromises);
 
     clearThumbnailCacheForTests();
   });

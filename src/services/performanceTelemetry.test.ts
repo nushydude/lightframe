@@ -21,6 +21,12 @@ import {
   resetPerformanceTelemetry,
   resetPerformanceTelemetryForTests,
   setFullAssetCacheEntryCountTelemetry,
+  setImageWorkActiveBackgroundTelemetry,
+  setImageWorkActiveCountTelemetry,
+  setImageWorkActiveInteractiveTelemetry,
+  setImageWorkActiveVisibleTelemetry,
+  setImageWorkDroppedQueuedTelemetry,
+  setImageWorkQueueDepthTelemetry,
   setNextImageSelectionKind,
   setPerformanceTelemetryEnabled,
   setPreviewAssetCacheEntryCountTelemetry,
@@ -92,6 +98,12 @@ describe('performanceTelemetry', () => {
     setThumbnailCacheEntryCountTelemetry(8);
     setPreviewAssetCacheEntryCountTelemetry(3);
     setFullAssetCacheEntryCountTelemetry(5);
+    setImageWorkQueueDepthTelemetry(6);
+    setImageWorkActiveCountTelemetry(4);
+    setImageWorkActiveInteractiveTelemetry(2);
+    setImageWorkActiveVisibleTelemetry(1);
+    setImageWorkActiveBackgroundTelemetry(1);
+    setImageWorkDroppedQueuedTelemetry(3);
 
     const snapshot = getPerformanceTelemetrySnapshot();
 
@@ -115,6 +127,12 @@ describe('performanceTelemetry', () => {
     expect(snapshot.caches.fullAssets.entries).toBe(5);
     expect(snapshot.queues.thumbnailQueueDepth).toBe(4);
     expect(snapshot.queues.thumbnailInFlight).toBe(2);
+    expect(snapshot.queues.imageWorkQueueDepth).toBe(6);
+    expect(snapshot.queues.imageWorkActiveCount).toBe(4);
+    expect(snapshot.queues.imageWorkActiveInteractive).toBe(2);
+    expect(snapshot.queues.imageWorkActiveVisible).toBe(1);
+    expect(snapshot.queues.imageWorkActiveBackground).toBe(1);
+    expect(snapshot.queues.imageWorkDroppedQueued).toBe(3);
   });
 
   it('keeps rolling latency summaries bounded and resets metrics cleanly', () => {

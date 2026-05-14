@@ -34,6 +34,12 @@ const snapshot: PerformanceTelemetrySnapshot = {
   queues: {
     thumbnailQueueDepth: 3,
     thumbnailInFlight: 2,
+    imageWorkQueueDepth: 5,
+    imageWorkActiveCount: 4,
+    imageWorkActiveInteractive: 2,
+    imageWorkActiveVisible: 1,
+    imageWorkActiveBackground: 1,
+    imageWorkDroppedQueued: 7,
   },
 };
 
@@ -53,8 +59,9 @@ describe('PerformanceTelemetryOverlay', () => {
     expect(screen.getByText(/80%\s+hit,\s+40 entries/)).toBeInTheDocument();
     expect(screen.getByText(/60%\s+hit,\s+10 entries/)).toBeInTheDocument();
     expect(screen.getByText(/90%\s+hit,\s+5 entries/)).toBeInTheDocument();
-    expect(screen.getByText('Queue depth')).toBeInTheDocument();
-    expect(screen.getByText('In flight')).toBeInTheDocument();
+    expect(screen.getByText('Thumbnail depth')).toBeInTheDocument();
+    expect(screen.getByText('Image work depth')).toBeInTheDocument();
+    expect(screen.getByText('Dropped queued')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 

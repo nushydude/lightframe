@@ -172,15 +172,39 @@ export function PerformanceTelemetryOverlay({
       </div>
 
       <div className="performance-telemetry-section">
-        <h3>Thumbnail Queue</h3>
+        <h3>Queues</h3>
         <dl>
           <div>
-            <dt>Queue depth</dt>
+            <dt>Thumbnail depth</dt>
             <dd>{resolvedSnapshot.queues.thumbnailQueueDepth}</dd>
           </div>
           <div>
-            <dt>In flight</dt>
+            <dt>Thumbnail in flight</dt>
             <dd>{resolvedSnapshot.queues.thumbnailInFlight}</dd>
+          </div>
+          <div>
+            <dt>Image work depth</dt>
+            <dd>{resolvedSnapshot.queues.imageWorkQueueDepth}</dd>
+          </div>
+          <div>
+            <dt>Image work active</dt>
+            <dd>{resolvedSnapshot.queues.imageWorkActiveCount}</dd>
+          </div>
+          <div>
+            <dt>Interactive active</dt>
+            <dd>{resolvedSnapshot.queues.imageWorkActiveInteractive}</dd>
+          </div>
+          <div>
+            <dt>Visible active</dt>
+            <dd>{resolvedSnapshot.queues.imageWorkActiveVisible}</dd>
+          </div>
+          <div>
+            <dt>Background active</dt>
+            <dd>{resolvedSnapshot.queues.imageWorkActiveBackground}</dd>
+          </div>
+          <div>
+            <dt>Dropped queued</dt>
+            <dd>{resolvedSnapshot.queues.imageWorkDroppedQueued}</dd>
           </div>
         </dl>
       </div>

@@ -8,12 +8,13 @@ import {
 } from 'react';
 import { useViewerStore, type ZoomMode } from '../state/viewerStore';
 import {
-  getFullAsset,
   getPreviewAsset,
   preloadFullAsset,
   preloadPreviewAsset,
+  requestFullAsset,
   trimImageAssetCache,
 } from '../services/imageAssetCache';
+import { IMAGE_WORK_PRIORITY, imageWorkScheduler } from '../services/imageWorkScheduler';
 import {
   recordFullResolutionReadyTelemetry,
   recordPreviewVisibleTelemetry,
@@ -59,14 +60,181 @@ type ImageStyleOptions = {
   isCropMode: boolean;
 };
 
-function getHotWindowIndices(currentIndex: number, imageCount: number): number[] {
-  const start = Math.max(0, currentIndex - NAVIGATION_CACHE_PREVIOUS_IMAGES);
-  const end = Math.min(imageCount - 1, currentIndex + NAVIGATION_CACHE_NEXT_IMAGES);
-  const indices: number[] = [];
-  for (let index = start; index <= end; index += 1) {
-    indices.push(index);
+type NavigationDirection = 'forward' | 'backward' | 'idle';
+
+type AdjacentPreloadPlan = {
+  keepIndices: number[];
+  preloadIndices: number[];
+  leadingIndices: Set<number>;
+};
+
+type DirectionalWindow = {
+  backwardCount: number;
+  forwardCount: number;
+};
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function getDirectionalWindow(direction: NavigationDirection): DirectionalWindow {
+  const totalWindow = NAVIGATION_CACHE_PREVIOUS_IMAGES + NAVIGATION_CACHE_NEXT_IMAGES;
+
+  if (direction === 'forward') {
+    const backwardCount = 1;
+    return {
+      backwardCount,
+      forwardCount: Math.max(1, totalWindow - backwardCount),
+    };
   }
-  return indices;
+
+  if (direction === 'backward') {
+    const forwardCount = 1;
+    return {
+      backwardCount: Math.max(1, totalWindow - forwardCount),
+      forwardCount,
+    };
+  }
+
+  return {
+    backwardCount: NAVIGATION_CACHE_PREVIOUS_IMAGES,
+    forwardCount: NAVIGATION_CACHE_NEXT_IMAGES,
+  };
+}
+
+function appendPreloadIndex(
+  currentIndex: number,
+  imageCount: number,
+  preloadIndices: number[],
+  leadingIndices: Set<number>,
+  queued: Set<number>,
+  index: number,
+  isLeading: boolean
+): void {
+  if (index < 0 || index >= imageCount || index === currentIndex || queued.has(index)) {
+    return;
+  }
+
+  queued.add(index);
+  preloadIndices.push(index);
+  if (isLeading) {
+    leadingIndices.add(index);
+  }
+}
+
+function collectDirectionalPreloads(
+  currentIndex: number,
+  imageCount: number,
+  preloadIndices: number[],
+  leadingIndices: Set<number>,
+  queued: Set<number>,
+  direction: NavigationDirection,
+  window: DirectionalWindow
+): void {
+  if (direction === 'forward') {
+    for (let offset = 1; offset <= window.forwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex + offset,
+        true
+      );
+    }
+    for (let offset = 1; offset <= window.backwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex - offset,
+        false
+      );
+    }
+    return;
+  }
+
+  if (direction === 'backward') {
+    for (let offset = 1; offset <= window.backwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex - offset,
+        true
+      );
+    }
+    for (let offset = 1; offset <= window.forwardCount; offset += 1) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex + offset,
+        false
+      );
+    }
+    return;
+  }
+
+  const maxOffset = Math.max(window.backwardCount, window.forwardCount);
+  for (let offset = 1; offset <= maxOffset; offset += 1) {
+    if (offset <= window.forwardCount) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex + offset,
+        false
+      );
+    }
+    if (offset <= window.backwardCount) {
+      appendPreloadIndex(
+        currentIndex,
+        imageCount,
+        preloadIndices,
+        leadingIndices,
+        queued,
+        currentIndex - offset,
+        false
+      );
+    }
+  }
+}
+
+function getAdjacentPreloadPlan(
+  currentIndex: number,
+  imageCount: number,
+  direction: NavigationDirection
+): AdjacentPreloadPlan {
+  const window = getDirectionalWindow(direction);
+  const preloadIndices: number[] = [];
+  const leadingIndices = new Set<number>();
+  const queued = new Set<number>();
+
+  collectDirectionalPreloads(
+    currentIndex,
+    imageCount,
+    preloadIndices,
+    leadingIndices,
+    queued,
+    direction,
+    window
+  );
+
+  return {
+    keepIndices: [currentIndex, ...preloadIndices],
+    preloadIndices,
+    leadingIndices,
+  };
 }
 
 function getImageStyle({
@@ -130,9 +298,12 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const isMountedRef = useRef(true);
   const activeRequestIdRef = useRef(0);
+  const activeWorkAbortControllerRef = useRef<AbortController | null>(null);
   const fullLoadKeyRef = useRef<string | null>(null);
   const imageDisplayErrorRef = useRef<string | null>(null);
   const metadataByPathRef = useRef(new Map<string, ImageMetadata>());
+  const previousIndexRef = useRef<number | null>(null);
+  const navigationDirectionRef = useRef<NavigationDirection>('idle');
   const zoomStateRef = useRef<{ zoomMode: ZoomMode; zoomLevel: number }>({
     zoomMode: 'fit',
     zoomLevel: 1,
@@ -194,42 +365,96 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     return () => {
       isMountedRef.current = false;
       activeRequestIdRef.current += 1;
+      activeWorkAbortControllerRef.current?.abort();
+      activeWorkAbortControllerRef.current = null;
       fullLoadKeyRef.current = null;
     };
   }, []);
 
   const ensureFullResolutionLoaded = useCallback(
-    (path: string, requestId: number) => {
+    (path: string, requestId: number, signal?: AbortSignal) => {
       const loadKey = `${path}::${requestId}`;
       if (fullLoadKeyRef.current === loadKey) {
         return;
       }
       fullLoadKeyRef.current = loadKey;
 
-      try {
-        const url = getFullAsset(path);
-        if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
-          return;
-        }
+      void requestFullAsset(path, { signal })
+        .then((url) => {
+          if (
+            signal?.aborted ||
+            !isMountedRef.current ||
+            activeRequestIdRef.current !== requestId
+          ) {
+            return;
+          }
 
-        setFullAsset({ path, url });
-        setFullLoadFailed(false);
-      } catch (err) {
-        if (!isMountedRef.current || activeRequestIdRef.current !== requestId) {
-          return;
-        }
-        console.error('Failed to load full-resolution image:', err);
-        setIsLoading(false);
-        setFullLoadFailed(true);
-        setImageDisplayError(`Could not create image URL: ${path}`);
-      }
+          setFullAsset({ path, url });
+          setFullLoadFailed(false);
+        })
+        .catch((err) => {
+          if (
+            isAbortError(err) ||
+            signal?.aborted ||
+            !isMountedRef.current ||
+            activeRequestIdRef.current !== requestId
+          ) {
+            return;
+          }
+
+          console.error('Failed to load full-resolution image:', err);
+          setIsLoading(false);
+          setFullLoadFailed(true);
+          setImageDisplayError(`Could not create image URL: ${path}`);
+        });
     },
     [setImageDisplayError]
+  );
+
+  const isActiveRequest = useCallback(
+    (requestId: number) => isMountedRef.current && activeRequestIdRef.current === requestId,
+    []
+  );
+
+  const loadMetadataForPath = useCallback(
+    async (path: string, requestId: number, signal: AbortSignal) =>
+      imageWorkScheduler.schedule({
+        key: `metadata::${path}`,
+        priority: IMAGE_WORK_PRIORITY.currentMetadata,
+        sourcePath: path,
+        generationToken: requestId,
+        signal,
+        run: async ({ signal: workSignal }) => {
+          if (workSignal.aborted) {
+            throw Object.assign(new Error('Metadata work aborted before execution.'), {
+              name: 'AbortError',
+            });
+          }
+          const nextMetadata = await getImageMetadata(path);
+          if (workSignal.aborted) {
+            throw Object.assign(new Error('Metadata work aborted after execution.'), {
+              name: 'AbortError',
+            });
+          }
+          return nextMetadata;
+        },
+      }).promise,
+    []
+  );
+
+  const loadPreviewForPath = useCallback(
+    (path: string, signal: AbortSignal) =>
+      getPreviewAsset(path, PREVIEW_MAX_DIMENSION, {
+        signal,
+      }),
+    []
   );
 
   // Load preview first, then full-resolution pixels on demand.
   useEffect(() => {
     if (!currentImagePath) {
+      activeWorkAbortControllerRef.current?.abort();
+      activeWorkAbortControllerRef.current = null;
       setPreviewAsset(null);
       setFullAsset(null);
       setMetadata(null);
@@ -242,6 +467,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     }
 
     let cancelled = false;
+    const currentWorkAbortController = new AbortController();
+    activeWorkAbortControllerRef.current?.abort();
+    activeWorkAbortControllerRef.current = currentWorkAbortController;
     const requestId = activeRequestIdRef.current + 1;
     activeRequestIdRef.current = requestId;
     fullLoadKeyRef.current = null;
@@ -255,29 +483,47 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setIsLoading(true);
     imageDisplayErrorRef.current = null;
 
-    ensureFullResolutionLoaded(currentImagePath, requestId);
+    ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
 
     const loadImage = async () => {
+      const isCurrentRequest = () => !cancelled && isActiveRequest(requestId);
       let imageMetadata: ImageMetadata | null = null;
+
       try {
-        imageMetadata = await getImageMetadata(currentImagePath);
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
+        imageMetadata = await loadMetadataForPath(
+          currentImagePath,
+          requestId,
+          currentWorkAbortController.signal
+        );
+        if (isCurrentRequest()) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
         }
       } catch (err) {
-        console.warn('Failed to read image metadata:', err);
+        if (!isAbortError(err)) {
+          console.warn('Failed to read image metadata:', err);
+        }
       }
 
       try {
-        const preview = await getPreviewAsset(currentImagePath, PREVIEW_MAX_DIMENSION);
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
+        const preview = await loadPreviewForPath(
+          currentImagePath,
+          currentWorkAbortController.signal
+        );
+        if (isCurrentRequest()) {
           setPreviewAsset({ path: currentImagePath, url: preview });
         }
       } catch (err) {
+        if (isAbortError(err)) {
+          return;
+        }
         console.error('Failed to load preview image:', err);
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
-          ensureFullResolutionLoaded(currentImagePath, requestId);
+        if (isCurrentRequest()) {
+          ensureFullResolutionLoaded(
+            currentImagePath,
+            requestId,
+            currentWorkAbortController.signal
+          );
         }
         return;
       }
@@ -291,8 +537,12 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           PREVIEW_MAX_DIMENSION
         )
       ) {
-        if (!cancelled && isMountedRef.current && activeRequestIdRef.current === requestId) {
-          ensureFullResolutionLoaded(currentImagePath, requestId);
+        if (isCurrentRequest()) {
+          ensureFullResolutionLoaded(
+            currentImagePath,
+            requestId,
+            currentWorkAbortController.signal
+          );
         }
       }
     };
@@ -301,8 +551,19 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
     return () => {
       cancelled = true;
+      currentWorkAbortController.abort();
+      if (activeWorkAbortControllerRef.current === currentWorkAbortController) {
+        activeWorkAbortControllerRef.current = null;
+      }
     };
-  }, [currentImagePath, cacheBuster, ensureFullResolutionLoaded]);
+  }, [
+    cacheBuster,
+    currentImagePath,
+    ensureFullResolutionLoaded,
+    isActiveRequest,
+    loadMetadataForPath,
+    loadPreviewForPath,
+  ]);
 
   useEffect(() => {
     if (!currentImagePath || isFullResolutionReady) {
@@ -313,8 +574,25 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       return;
     }
 
-    ensureFullResolutionLoaded(currentImagePath, activeRequestIdRef.current);
+    ensureFullResolutionLoaded(
+      currentImagePath,
+      activeRequestIdRef.current,
+      activeWorkAbortControllerRef.current?.signal
+    );
   }, [currentImagePath, ensureFullResolutionLoaded, isFullResolutionReady, zoomLevel, zoomMode]);
+
+  useEffect(() => {
+    const previousIndex = previousIndexRef.current;
+    if (previousIndex == null || currentIndex < 0) {
+      navigationDirectionRef.current = 'idle';
+    } else if (currentIndex > previousIndex) {
+      navigationDirectionRef.current = 'forward';
+    } else if (currentIndex < previousIndex) {
+      navigationDirectionRef.current = 'backward';
+    }
+
+    previousIndexRef.current = currentIndex >= 0 ? currentIndex : null;
+  }, [currentIndex]);
 
   useEffect(() => {
     const folderPaths = new Set(images.map((image) => image.path));
@@ -326,11 +604,17 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     if (images.length === 0 || currentIndex < 0) return;
 
     let cancelled = false;
-    const preloadIndices = getHotWindowIndices(currentIndex, images.length);
-    const keepSet = new Set(preloadIndices.map((index) => images[index].path));
+    const preloadAbortController = new AbortController();
+    const { keepIndices, preloadIndices, leadingIndices } = getAdjacentPreloadPlan(
+      currentIndex,
+      images.length,
+      navigationDirectionRef.current
+    );
+    const keepSet = new Set(keepIndices.map((index) => images[index].path));
     const scheduledLoadGeneration = loadGeneration;
     const canStore = () =>
       !cancelled &&
+      !preloadAbortController.signal.aborted &&
       isMountedRef.current &&
       useViewerStore.getState().loadGeneration === scheduledLoadGeneration;
 
@@ -342,15 +626,30 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
       const preloadPromises = preloadIndices
         .map((index) => images[index]?.path)
-        .filter((path): path is string => Boolean(path) && path !== currentImagePath)
-        .map((path) => {
+        .map((path, listIndex) => ({ path, index: preloadIndices[listIndex] }))
+        .filter(
+          (entry): entry is { path: string; index: number } =>
+            Boolean(entry.path) && entry.path !== currentImagePath
+        )
+        .map(({ path, index }) => {
           const metadataForPath = metadataByPathRef.current.get(path) ?? null;
+          const priority = leadingIndices.has(index)
+            ? IMAGE_WORK_PRIORITY.adjacentDirectional
+            : IMAGE_WORK_PRIORITY.backgroundPreload;
           const preloadPromise = shouldPreloadAdjacentFullResolution(
             metadataForPath,
             PREVIEW_MAX_DIMENSION
           )
-            ? preloadFullAsset(path, { canStore })
-            : preloadPreviewAsset(path, PREVIEW_MAX_DIMENSION, { canStore });
+            ? preloadFullAsset(path, {
+                canStore,
+                signal: preloadAbortController.signal,
+                priority,
+              })
+            : preloadPreviewAsset(path, PREVIEW_MAX_DIMENSION, {
+                canStore,
+                signal: preloadAbortController.signal,
+                priority,
+              });
 
           return preloadPromise.catch(() => {
             // Ignore preload failures
@@ -370,6 +669,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
     return () => {
       cancelled = true;
+      preloadAbortController.abort();
       window.clearTimeout(timer);
     };
   }, [currentImagePath, currentIndex, images, loadGeneration]);
@@ -470,7 +770,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       if (currentImagePath && previewSrc && !isFullResolutionReady && !fullLoadFailed) {
         setPreviewDisplayFailed(true);
         setIsLoading(true);
-        ensureFullResolutionLoaded(currentImagePath, activeRequestIdRef.current);
+        ensureFullResolutionLoaded(
+          currentImagePath,
+          activeRequestIdRef.current,
+          activeWorkAbortControllerRef.current?.signal
+        );
         return;
       }
 
