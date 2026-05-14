@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "vite",
+    "prepare": "node ./scripts/setup-git-hooks.mjs",
     "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -22,7 +23,9 @@
     "quality:dead-code": "fallow dead-code",
     "quality:dupes": "fallow dupes",
     "quality:health": "fallow health",
-    "ci:frontend": "pnpm run format:check && pnpm run lint && pnpm run test:run && pnpm run build && pnpm run quality:audit",
+    "ci:frontend": "pnpm run format:check && pnpm run lint && pnpm run test:run && pnpm run build && pnpm run quality:audit:ci",
+    "commit:gate": "node ./scripts/run-commit-gate.mjs",
+    "commit:message:check": "node ./scripts/check-commit-message.mjs",
     "ci:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
     "ci:local": "pnpm run ci:frontend && pnpm run ci:rust"
   },
