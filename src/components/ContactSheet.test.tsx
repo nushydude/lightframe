@@ -108,19 +108,37 @@ describe('ContactSheet', () => {
   });
 
   it('shows the overflow actions menu in grid view', () => {
-    render(<ContactSheet onGoHome={() => undefined} onRefreshFolder={() => undefined} />);
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+      />
+    );
 
-    expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reveal' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit in Paint.NET' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open projector mode' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to landing page' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open file' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open folder' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle favorite' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle fullscreen' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle grid view' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle compare view' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle crop mode' })).toBeInTheDocument();
+    expect(screen.getByText('More')).toBeInTheDocument();
   });
 
   it('can open projector mode from grid view actions', () => {
-    render(<ContactSheet onGoHome={() => undefined} onRefreshFolder={() => undefined} />);
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+      />
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open projector mode' }));
 

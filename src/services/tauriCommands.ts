@@ -263,9 +263,14 @@ export async function closeSecondaryWindow(): Promise<void> {
   await webview.close();
 }
 
-/** Emit a sync event to update secondary windows */
-export async function emitStateSync(imagePath: string | null): Promise<void> {
-  return emit('state-sync', { imagePath });
+export type StateSyncSource = 'main' | 'secondary';
+
+/** Emit a sync event to update another window */
+export async function emitStateSync(
+  imagePath: string | null,
+  source: StateSyncSource
+): Promise<void> {
+  return emit('state-sync', { imagePath, source });
 }
 
 /** Ask the main window to send its current state */
