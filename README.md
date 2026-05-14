@@ -88,8 +88,11 @@ pnpm run ci:local
 ```
 
 For scoped work, use `pnpm run ci:frontend` for React/TypeScript changes and `pnpm run ci:rust` for
-Tauri/Rust changes. `pnpm run quality:audit` runs Fallow on changed code and blocks newly introduced
-dead code, complexity, and duplication regressions.
+Tauri/Rust changes. Commits are also guarded locally by a checked-in pre-commit hook that runs
+`pnpm run commit:gate`, which fetches `origin/main` if needed and then runs the same frontend gate
+CI expects. A companion `commit-msg` hook enforces Conventional Commit messages. `pnpm run quality:audit`
+runs Fallow on the current branch, while `pnpm run quality:audit:ci` matches the GitHub Actions base
+of `origin/main`.
 
 ## Contributing
 
