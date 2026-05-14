@@ -524,6 +524,42 @@ body,
   overflow: hidden;
 }
 
+.projector-close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: calc(var(--z-controls) + 2);
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  opacity: 0;
+  transition:
+    opacity var(--transition-normal),
+    background var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.app-container:hover .projector-close-btn,
+.app-container.controls-visible .projector-close-btn {
+  opacity: 1;
+}
+
+.projector-close-btn:hover {
+  background: var(--bg-control-hover);
+  color: var(--text-primary);
+  transform: rotate(90deg);
+}
+
 /* ===== Compare View ===== */
 .compare-view {
   flex: 1;

@@ -25,6 +25,7 @@ interface CreateViewerCommandsOptions {
   openCurrentImageInEditor: () => Promise<void>;
   copyCurrentImage: () => Promise<void>;
   deleteCurrentImage: () => Promise<void>;
+  toggleProjector: () => Promise<void>;
   enterCropMode: () => void;
   startSlideshow: () => void;
   toggleCompareMode: () => void;
@@ -202,6 +203,13 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       keywords: ['delete', 'trash', 'recycle'],
       isEnabled: (state) => Boolean(state.currentImagePath),
       run: () => options.deleteCurrentImage(),
+    },
+    {
+      id: 'toggle-projector',
+      label: 'Toggle Projector Mode',
+      keywords: ['projector', 'secondary', 'display', 'presentation'],
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => options.toggleProjector(),
     },
     {
       id: 'crop-image',

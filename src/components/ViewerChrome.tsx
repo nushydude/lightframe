@@ -193,14 +193,10 @@ export function ViewerChrome({
     });
   };
 
-  const persistProjectorPromptPreferenceIfNeeded = async (nextOpenProjectorInGridView: boolean) => {
-    if (!skipProjectorGridPrompt) {
-      return;
-    }
-
+  const persistProjectorPromptPreference = async (nextOpenProjectorInGridView: boolean) => {
     await updateSettings({
-      promptProjectorGridOnOpen: false,
       openProjectorInGridView: nextOpenProjectorInGridView,
+      ...(skipProjectorGridPrompt ? { promptProjectorGridOnOpen: false } : {}),
     });
   };
 
@@ -313,13 +309,13 @@ export function ViewerChrome({
   };
 
   const handleProjectorPromptKeepCurrentView = async () => {
-    await persistProjectorPromptPreferenceIfNeeded(false);
+    await persistProjectorPromptPreference(false);
     setShowProjectorGridPrompt(false);
     setSkipProjectorGridPrompt(false);
   };
 
   const handleProjectorPromptSwitchToGrid = async () => {
-    await persistProjectorPromptPreferenceIfNeeded(true);
+    await persistProjectorPromptPreference(true);
     setViewMode('grid');
     setShowProjectorGridPrompt(false);
     setSkipProjectorGridPrompt(false);

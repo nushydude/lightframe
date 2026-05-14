@@ -16,6 +16,7 @@ describe('useKeyboardShortcuts', () => {
     stopSlideshow: vi.fn(),
     toggleSlideshowPause: vi.fn(),
     openCommandPalette: vi.fn(),
+    toggleGridView: vi.fn(),
     togglePerformanceTelemetry: vi.fn(),
     toggleFavoriteCurrent: vi.fn(),
     setRatingCurrent: vi.fn(),
@@ -90,6 +91,18 @@ describe('useKeyboardShortcuts', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(handlers.togglePerformanceTelemetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes the grid shortcut through the shared toggle handler', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', { key: 'g', bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.toggleGridView).toHaveBeenCalledTimes(1);
   });
 
   it('opens the configured external editor on Ctrl+E', () => {

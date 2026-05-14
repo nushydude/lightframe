@@ -120,7 +120,15 @@ describe('thumbnail consumers', () => {
       ],
     });
 
-    const { container } = render(<ContactSheet onGoHome={() => undefined} />);
+    const { container } = render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+      />
+    );
 
     expect(container.querySelector('.grid-placeholder')).not.toBeNull();
   });

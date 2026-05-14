@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
 import { getMatches } from '@tauri-apps/plugin-cli';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ViewerChrome } from './components/ViewerChrome';
 import { ThumbnailStrip } from './components/ThumbnailStrip';
@@ -15,6 +16,7 @@ import { PerformanceTelemetryOverlay } from './components/PerformanceTelemetryOv
 import { useImageNavigation } from './hooks/useImageNavigation';
 import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useProjectorState } from './hooks/useProjectorState';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
@@ -31,7 +33,13 @@ import {
   revealCurrentImage,
 } from './services/viewerActions';
 
-import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
+import {
+  closeSecondaryWindow,
+  emitStateSync,
+  isDirectory,
+  openSecondaryWindow,
+  requestStateSync,
+} from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
 import { hasCompleteWindowBounds, persistWindowBoundsSafely } from './services/windowBounds';
 
@@ -89,6 +97,9 @@ function App() {
   const settingsRef = useRef(settings);
   const settingsLoadedRef = useRef(isLoaded);
   const saveBoundsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { isProjectorOpen, refreshProjectorState } = useProjectorState();
+  const { showControls } = useViewerStore();
+  const [isSecondary, setIsSecondary] = useState(false);
 
   const showMainWindowOnce = useCallback(async () => {
     if (startupShowAttemptedRef.current) return;
@@ -392,6 +403,59 @@ function App() {
     resetPerformanceTelemetry();
   }, []);
 
+  const handleToggleProjector = useCallback(async () => {
+    const state = useViewerStore.getState();
+    if (state.currentImagePath === null) {
+      return;
+    }
+
+    if (isSecondary) {
+      return;
+    }
+
+    if (isProjectorOpen) {
+      await closeSecondaryWindow();
+    } else {
+      await openSecondaryWindow();
+
+      const { openProjectorInGridView } = useSettingsStore.getState().settings;
+      if (openProjectorInGridView && useViewerStore.getState().viewMode !== 'grid') {
+        useViewerStore.getState().setViewMode('grid');
+      }
+    }
+    await refreshProjectorState();
+  }, [isProjectorOpen, isSecondary, refreshProjectorState]);
+
+  const handleCloseProjectorWindow = useCallback(async () => {
+    try {
+      await closeSecondaryWindow();
+      await refreshProjectorState();
+    } catch (err) {
+      console.error('Failed to close projector window:', err);
+    }
+  }, [refreshProjectorState]);
+
+  const handleExitGridView = useCallback(async () => {
+    if (!isProjectorOpen) {
+      useViewerStore.getState().setViewMode('viewer');
+      return true;
+    }
+
+    const confirmed = await confirm('Leaving grid view will close projector mode. Continue?', {
+      title: 'Projector mode',
+      kind: 'warning',
+    });
+
+    if (!confirmed) {
+      return false;
+    }
+
+    await closeSecondaryWindow();
+    await refreshProjectorState();
+    useViewerStore.getState().setViewMode('viewer');
+    return true;
+  }, [isProjectorOpen, refreshProjectorState]);
+
   const commandPaletteCommands = useMemo(
     () =>
       createViewerCommands({
@@ -417,6 +481,7 @@ function App() {
             currentIndex: useViewerStore.getState().currentIndex,
             removeImage: useViewerStore.getState().removeImage,
           }),
+        toggleProjector: handleToggleProjector,
         enterCropMode: () => {
           const state = useViewerStore.getState();
           if (state.viewMode === 'grid') {
@@ -444,6 +509,7 @@ function App() {
       goFirst,
       goLast,
       handleToggleFullscreen,
+      handleToggleProjector,
       handleTogglePerformanceTelemetry,
       handleResetPerformanceTelemetry,
       startSlideshow,
@@ -477,6 +543,15 @@ function App() {
     stopSlideshow,
     toggleSlideshowPause,
     openCommandPalette: () => setShowCommandPalette(true),
+    toggleGridView: () => {
+      const state = useViewerStore.getState();
+      if (state.viewMode === 'viewer') {
+        state.setViewMode('grid');
+        return;
+      }
+
+      void handleExitGridView();
+    },
     togglePerformanceTelemetry: handleTogglePerformanceTelemetry,
     toggleFavoriteCurrent: () => {
       const path = useViewerStore.getState().currentImagePath;
@@ -492,9 +567,6 @@ function App() {
     },
   });
 
-  const { showControls } = useViewerStore();
-  const [isSecondary, setIsSecondary] = useState(false);
-
   // Detect if this is a secondary window
   useEffect(() => {
     const label = appWindowRef.current.label;
@@ -505,12 +577,65 @@ function App() {
   useEffect(() => {
     if (!isSecondary) return;
 
-    const unlisten = listen<{ imagePath: string | null }>('state-sync', (event) => {
-      if (event.payload.imagePath) {
+    const unlisten = listen<{ imagePath: string | null; source: 'main' | 'secondary' }>(
+      'state-sync',
+      (event) => {
+        if (event.payload.source !== 'main' || !event.payload.imagePath) {
+          return;
+        }
+
+        const state = useViewerStore.getState();
+        const nextIndex = state.images.findIndex((image) => image.path === event.payload.imagePath);
+        if (nextIndex >= 0) {
+          state.setCurrentIndex(nextIndex);
+          return;
+        }
+
         void openImage(event.payload.imagePath);
       }
-    });
+    );
     requestStateSync().catch((err) => console.error('Failed to request projector state:', err));
+
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [isSecondary, openImage]);
+
+  // Keep the main window selection in sync when navigation happens in projector mode.
+  useEffect(() => {
+    if (!isSecondary || !currentImagePath) return;
+
+    void emitStateSync(currentImagePath, 'secondary').catch((err) =>
+      console.error('Failed to sync projector navigation state:', err)
+    );
+  }, [currentImagePath, isSecondary]);
+
+  // Follow projector navigation updates in the main window without forcing a folder reload.
+  useEffect(() => {
+    if (isSecondary) return;
+
+    const unlisten = listen<{ imagePath: string | null; source: 'main' | 'secondary' }>(
+      'state-sync',
+      (event) => {
+        if (event.payload.source !== 'secondary') {
+          return;
+        }
+
+        const nextPath = event.payload.imagePath;
+        if (!nextPath || nextPath === useViewerStore.getState().currentImagePath) {
+          return;
+        }
+
+        const state = useViewerStore.getState();
+        const nextIndex = state.images.findIndex((image) => image.path === nextPath);
+        if (nextIndex >= 0) {
+          state.setCurrentIndex(nextIndex);
+          return;
+        }
+
+        void openImage(nextPath);
+      }
+    );
 
     return () => {
       void unlisten.then((fn) => fn());
@@ -523,7 +648,7 @@ function App() {
 
     const unlisten = listen('state-sync-request', () => {
       if (currentImagePath) {
-        emitStateSync(currentImagePath).catch((err) =>
+        emitStateSync(currentImagePath, 'main').catch((err) =>
           console.error('Failed to sync projector state:', err)
         );
       }
@@ -537,7 +662,7 @@ function App() {
   // Emit sync events when the image changes in the main window
   useEffect(() => {
     if (isSecondary || !currentImagePath) return;
-    void emitStateSync(currentImagePath).catch((err) =>
+    void emitStateSync(currentImagePath, 'main').catch((err) =>
       console.error('Failed to sync projector state:', err)
     );
   }, [currentImagePath, isSecondary]);
@@ -565,7 +690,18 @@ function App() {
       {currentImagePath ? (
         <>
           {isSecondary ? (
-            <ImageCanvas />
+            <>
+              <ImageCanvas />
+              <button
+                className="projector-close-btn"
+                onClick={() => void handleCloseProjectorWindow()}
+                type="button"
+                title="Close projector window"
+                aria-label="Close projector window"
+              >
+                x
+              </button>
+            </>
           ) : viewMode === 'viewer' ? (
             <>
               <ImageCanvas onWheelNext={goNext} onWheelPrev={goPrev} />
@@ -596,7 +732,13 @@ function App() {
               />
             </>
           ) : (
-            <ContactSheet onGoHome={handleGoHome} />
+            <ContactSheet
+              onExitGridView={handleExitGridView}
+              onGoHome={handleGoHome}
+              onOpenFile={openFilePicker}
+              onOpenFolder={openFolderPicker}
+              onRefreshFolder={refreshFolder}
+            />
           )}
         </>
       ) : (

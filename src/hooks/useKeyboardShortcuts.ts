@@ -21,6 +21,7 @@ interface KeyboardHandlers {
   stopSlideshow: () => void;
   toggleSlideshowPause: () => void;
   openCommandPalette: () => void;
+  toggleGridView: () => void;
   togglePerformanceTelemetry: () => void;
   toggleFavoriteCurrent: () => void;
   setRatingCurrent: (rating: number) => void;
@@ -39,7 +40,6 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     cropRect,
     setFullscreen,
     setShowSettings,
-    setViewMode,
     zoomIn,
     zoomOut,
     resetZoom,
@@ -257,7 +257,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       // G: Toggle grid view
       if ((e.key === 'g' || e.key === 'G') && currentImagePath) {
         e.preventDefault();
-        setViewMode(viewMode === 'viewer' ? 'grid' : 'viewer');
+        handlers.toggleGridView();
         return;
       }
 
@@ -393,7 +393,6 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       settings.loopSlideshow,
       setFullscreen,
       setShowSettings,
-      setViewMode,
       zoomMode,
       setZoomMode,
       zoomIn,

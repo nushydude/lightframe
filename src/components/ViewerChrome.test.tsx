@@ -473,6 +473,7 @@ describe('ViewerChrome', () => {
     });
 
     expect(useViewerStore.getState().viewMode).toBe('grid');
+    expect(useSettingsStore.getState().settings.openProjectorInGridView).toBe(true);
   });
 
   it('remembers switching to grid view for later projector launches when opting out of the prompt', async () => {

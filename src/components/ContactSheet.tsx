@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type UIEvent } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
@@ -8,12 +9,19 @@ import {
   invalidateThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
-import { closeSecondaryWindow } from '../services/tauriCommands';
+import { closeSecondaryWindow, openSecondaryWindow } from '../services/tauriCommands';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 import { useProjectorState } from '../hooks/useProjectorState';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
-import { showTransferResultMessage, transferImagesToDestination } from '../services/viewerActions';
+import {
+  copyCurrentImage,
+  deleteCurrentImage,
+  openCurrentImageInEditor,
+  revealCurrentImage,
+  showTransferResultMessage,
+  transferImagesToDestination,
+} from '../services/viewerActions';
 import type { QuickDestination } from '../types/settings';
 
 const GRID_ITEM_SIZE = 140;
@@ -24,7 +32,11 @@ const GRID_OVERSCAN_ROWS = 3;
 const MAX_CACHED_THUMBNAILS = 1000;
 
 interface ContactSheetProps {
+  onExitGridView: () => Promise<boolean>;
   onGoHome: () => void;
+  onOpenFile: () => void;
+  onOpenFolder: () => void;
+  onRefreshFolder: () => void;
 }
 
 /**
@@ -32,10 +44,34 @@ interface ContactSheetProps {
  * Windowed rendering keeps large folders responsive.
  */
 // fallow-ignore-next-line complexity
-export function ContactSheet({ onGoHome }: ContactSheetProps) {
-  const { images, currentIndex, setCurrentIndex, setViewMode, setShowSettings } = useViewerStore();
+export function ContactSheet({
+  onExitGridView,
+  onGoHome,
+  onOpenFile,
+  onOpenFolder,
+  onRefreshFolder,
+}: ContactSheetProps) {
+  const {
+    images,
+    currentIndex,
+    isFullscreen,
+    rotation,
+    pendingCropPreview,
+    setCurrentIndex,
+    setFullscreen,
+    setViewMode,
+    setShowSettings,
+    enterCompareMode,
+    enterCropMode,
+  } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
+  const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
+  const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
+  const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
+  const openProjectorInGridView = useSettingsStore(
+    (state) => state.settings.openProjectorInGridView
+  );
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [columns, setColumns] = useState(1);
@@ -66,6 +102,11 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     () => images.slice(visibleRange.startIndex, visibleRange.endIndex),
     [images, visibleRange.endIndex, visibleRange.startIndex]
   );
+  const currentImagePath = currentIndex >= 0 ? (images[currentIndex]?.path ?? null) : null;
+  const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
+  const isFavorite = Boolean(currentCuration?.favorite);
+  const canEnterCompareMode = images.length > 1;
+  const cropDisabledByRotation = rotation !== 0;
 
   useEffect(() => {
     const content = contentRef.current;
@@ -229,14 +270,69 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     await showTransferResultMessage(result, destination, mode);
   };
 
+  const handleCopyCurrent = async () => {
+    await copyCurrentImage(currentImagePath);
+  };
+
+  const handleDeleteCurrent = async () => {
+    await deleteCurrentImage({
+      currentImagePath,
+      currentIndex,
+      removeImage: useViewerStore.getState().removeImage,
+    });
+  };
+
+  const handleOpenInEditor = async () => {
+    await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
+  };
+
+  const handleReveal = async () => {
+    await revealCurrentImage(currentImagePath);
+  };
+
+  const handleToggleFavorite = async () => {
+    if (!currentImagePath) {
+      return;
+    }
+
+    await toggleFavorite(currentImagePath);
+  };
+
+  const handleToggleFullscreen = async () => {
+    try {
+      const appWindow = getCurrentWindow();
+      const nextFullscreen = !isFullscreen;
+      await appWindow.setFullscreen(nextFullscreen);
+      setFullscreen(nextFullscreen);
+    } catch (err) {
+      console.error('Failed to toggle fullscreen:', err);
+    }
+  };
+
+  const handleToggleCrop = () => {
+    if (cropDisabledByRotation) {
+      return;
+    }
+
+    if (pendingCropPreview) {
+      useViewerStore.getState().clearCropPreview();
+    }
+    void onExitGridView().then((didExit) => {
+      if (!didExit) {
+        return;
+      }
+      enterCropMode();
+    });
+  };
+
   const renderQuickDestinationMenu = (mode: 'copy' | 'move') => (
-    <div className="header-menu-panel">
+    <div className="top-bar-submenu-panel">
       {quickDestinations.length === 0 ? (
         <>
-          <span className="header-menu-empty">
+          <span className="top-bar-menu-empty">
             No destinations configured. Add folders in Settings {'>'} Quick Destinations.
           </span>
-          <button className="header-menu-item" onClick={() => setShowSettings(true)} type="button">
+          <button className="top-bar-menu-item" onClick={() => setShowSettings(true)} type="button">
             Open Settings
           </button>
         </>
@@ -244,8 +340,9 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
         quickDestinations.map((destination) => (
           <button
             key={destination.id}
-            className="header-menu-item"
+            className="top-bar-menu-item"
             onClick={() => void handleBulkTransfer(destination, mode)}
+            type="button"
           >
             {destination.label}
           </button>
@@ -259,11 +356,25 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
     await refreshProjectorState();
   };
 
+  const handleToggleProjector = async () => {
+    if (isProjectorOpen) {
+      await handleCloseProjector();
+      return;
+    }
+
+    await openSecondaryWindow();
+    if (openProjectorInGridView && useViewerStore.getState().viewMode !== 'grid') {
+      useViewerStore.getState().setViewMode('grid');
+    }
+    await refreshProjectorState();
+  };
+
   useEffect(() => {
     // fallow-ignore-next-line complexity
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter') {
-        setViewMode('viewer');
+        e.preventDefault();
+        void onExitGridView();
         return;
       }
 
@@ -290,7 +401,7 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [columns, currentIndex, images.length, setCurrentIndex, setViewMode]);
+  }, [columns, currentIndex, images.length, onExitGridView, setCurrentIndex]);
 
   return (
     <div className="contact-sheet-overlay">
@@ -302,74 +413,190 @@ export function ContactSheet({ onGoHome }: ContactSheetProps) {
             <span className="image-count">{selectedPaths.length} selected</span>
           )}
         </div>
-        <div className="header-actions">
-          <details className="header-menu">
-            <summary
-              className="header-btn has-tooltip"
-              aria-label="Copy selected images"
-              data-tooltip={
-                quickDestinations.length > 0
-                  ? 'Copy selected images'
-                  : 'Add quick destinations in Settings'
-              }
-              title={
-                quickDestinations.length > 0
-                  ? 'Copy selected images'
-                  : 'Add quick destinations in settings'
-              }
-            >
-              Copy To
-            </summary>
-            {renderQuickDestinationMenu('copy')}
-          </details>
-          <details className="header-menu">
-            <summary
-              className="header-btn has-tooltip"
-              aria-label="Move selected images"
-              data-tooltip={
-                quickDestinations.length > 0
-                  ? 'Move selected images'
-                  : 'Add quick destinations in Settings'
-              }
-              title={
-                quickDestinations.length > 0
-                  ? 'Move selected images'
-                  : 'Add quick destinations in settings'
-              }
-            >
-              Move To
-            </summary>
-            {renderQuickDestinationMenu('move')}
-          </details>
-          <button
-            className="header-btn has-tooltip"
-            onClick={onGoHome}
-            data-tooltip="Back to landing page"
-            title="Back to landing page"
-            aria-label="Back to landing page"
-            id="btn-home-grid"
-          >
-            Home
-          </button>
-          {isProjectorOpen && (
+        <div className="top-bar-right header-actions">
+          <div className="top-bar-group" aria-label="Navigation actions">
             <button
-              className="header-btn has-tooltip"
-              onClick={() => void handleCloseProjector()}
-              data-tooltip="Close projector mode"
-              title="Close projector mode"
-              aria-label="Close projector mode"
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={onGoHome}
+              data-tooltip="Back to landing page"
+              title="Back to landing page"
+              aria-label="Back to landing page"
+              id="btn-home-grid"
             >
-              Projector Off
+              <span className="top-bar-btn-icon">⌂</span>
+              <span className="top-bar-btn-label">Home</span>
             </button>
-          )}
-          <button
-            className="close-btn"
-            onClick={() => setViewMode('viewer')}
-            title="Close Grid View (Esc)"
-            aria-label="Close grid view"
-          >
-            x
-          </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={onOpenFile}
+              data-tooltip="Open file (Ctrl+O)"
+              title="Open file (Ctrl+O)"
+              aria-label="Open file"
+            >
+              <span className="top-bar-btn-icon">📄</span>
+              <span className="top-bar-btn-label">Open</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={onOpenFolder}
+              data-tooltip="Open folder"
+              title="Open folder"
+              aria-label="Open folder"
+            >
+              <span className="top-bar-btn-icon">📁</span>
+              <span className="top-bar-btn-label">Folder</span>
+            </button>
+          </div>
+
+          <div className="top-bar-separator" aria-hidden="true" />
+
+          <div className="top-bar-group" aria-label="Primary actions">
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isFavorite ? 'active' : ''}`}
+              onClick={() => void handleToggleFavorite()}
+              data-tooltip="Toggle favorite (F)"
+              title="Toggle favorite (F)"
+              aria-label="Toggle favorite"
+            >
+              <span className="top-bar-btn-icon">{isFavorite ? '★' : '☆'}</span>
+              <span className="top-bar-btn-label">Favorite</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={() => void handleToggleFullscreen()}
+              data-tooltip="Toggle fullscreen (F11)"
+              title="Toggle fullscreen (F11)"
+              aria-label="Toggle fullscreen"
+            >
+              <span className="top-bar-btn-icon">{isFullscreen ? '🗗' : '⛶'}</span>
+              <span className="top-bar-btn-label">Full</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip active"
+              onClick={() => void onExitGridView()}
+              data-tooltip="Grid view (G)"
+              title="Grid view (G)"
+              aria-label="Toggle grid view"
+            >
+              <span className="top-bar-btn-icon">▦</span>
+              <span className="top-bar-btn-label">Grid</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={() => {
+                if (!canEnterCompareMode) {
+                  return;
+                }
+                enterCompareMode();
+              }}
+              title={
+                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'
+              }
+              data-tooltip={
+                canEnterCompareMode ? 'Compare view' : 'Compare view requires at least two images'
+              }
+              aria-label="Toggle compare view"
+              disabled={!canEnterCompareMode}
+            >
+              <span className="top-bar-btn-icon">≡</span>
+              <span className="top-bar-btn-label">Compare</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={handleToggleCrop}
+              data-tooltip={
+                cropDisabledByRotation
+                  ? 'Crop is unavailable while rotation preview is active'
+                  : 'Crop image'
+              }
+              title={
+                cropDisabledByRotation
+                  ? 'Crop is unavailable while rotation preview is active'
+                  : 'Crop image'
+              }
+              aria-label="Toggle crop mode"
+              disabled={cropDisabledByRotation}
+            >
+              <span className="top-bar-btn-icon">✂</span>
+              <span className="top-bar-btn-label">Crop</span>
+            </button>
+            <details className="top-bar-menu">
+              <summary
+                className="top-bar-btn top-bar-btn--labeled has-tooltip"
+                aria-label="More actions"
+                data-tooltip="More actions"
+                title="More actions"
+              >
+                <span className="top-bar-btn-icon">...</span>
+                <span className="top-bar-btn-label">More</span>
+              </summary>
+              <div className="top-bar-menu-panel top-bar-menu-panel--stacked">
+                <button className="top-bar-menu-item" onClick={onRefreshFolder} type="button">
+                  Refresh
+                </button>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => void handleReveal()}
+                  type="button"
+                  disabled={!currentImagePath}
+                >
+                  Reveal
+                </button>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => void handleCopyCurrent()}
+                  type="button"
+                  disabled={!currentImagePath}
+                >
+                  Copy
+                </button>
+                <details className="top-bar-submenu">
+                  <summary className="top-bar-menu-item" aria-label="Copy image to destination">
+                    Copy To
+                  </summary>
+                  {renderQuickDestinationMenu('copy')}
+                </details>
+                <details className="top-bar-submenu">
+                  <summary className="top-bar-menu-item" aria-label="Move image to destination">
+                    Move To
+                  </summary>
+                  {renderQuickDestinationMenu('move')}
+                </details>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => void handleOpenInEditor()}
+                  type="button"
+                  disabled={!currentImagePath}
+                >
+                  {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+                </button>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => void handleDeleteCurrent()}
+                  type="button"
+                  disabled={!currentImagePath}
+                >
+                  Delete
+                </button>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => void handleToggleProjector()}
+                  type="button"
+                  disabled={!currentImagePath}
+                  aria-label={isProjectorOpen ? 'Close projector mode' : 'Open projector mode'}
+                >
+                  {isProjectorOpen ? 'Projector Off' : 'Projector'}
+                </button>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => setShowSettings(true)}
+                  type="button"
+                >
+                  Settings
+                </button>
+              </div>
+            </details>
+          </div>
         </div>
       </div>
       <div className="contact-sheet-content" ref={contentRef} onScroll={handleScroll}>
