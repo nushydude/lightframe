@@ -506,7 +506,10 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       }
 
       try {
-        const preview = await loadPreviewForPath(currentImagePath, currentWorkAbortController.signal);
+        const preview = await loadPreviewForPath(
+          currentImagePath,
+          currentWorkAbortController.signal
+        );
         if (isCurrentRequest()) {
           setPreviewAsset({ path: currentImagePath, url: preview });
         }
