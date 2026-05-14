@@ -273,6 +273,19 @@ export function SettingsPanel() {
                 <span className="toggle-slider" />
               </label>
             </div>
+
+            <div className="setting-row">
+              <span className="setting-label">Open projector in grid view</span>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={settings.openProjectorInGridView}
+                  onChange={(e) => handleChange('openProjectorInGridView', e.target.checked)}
+                  id="setting-projector-grid-default"
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
           </div>
 
           <div className="settings-group">
