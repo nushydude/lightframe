@@ -120,7 +120,9 @@ describe('thumbnail consumers', () => {
       ],
     });
 
-    const { container } = render(<ContactSheet onGoHome={() => undefined} />);
+    const { container } = render(
+      <ContactSheet onGoHome={() => undefined} onRefreshFolder={() => undefined} />
+    );
 
     expect(container.querySelector('.grid-placeholder')).not.toBeNull();
   });

@@ -15,6 +15,7 @@ import { PerformanceTelemetryOverlay } from './components/PerformanceTelemetryOv
 import { useImageNavigation } from './hooks/useImageNavigation';
 import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useProjectorState } from './hooks/useProjectorState';
 import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
@@ -31,7 +32,13 @@ import {
   revealCurrentImage,
 } from './services/viewerActions';
 
-import { emitStateSync, isDirectory, requestStateSync } from './services/tauriCommands';
+import {
+  closeSecondaryWindow,
+  emitStateSync,
+  isDirectory,
+  openSecondaryWindow,
+  requestStateSync,
+} from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
 import { hasCompleteWindowBounds, persistWindowBoundsSafely } from './services/windowBounds';
 
@@ -89,6 +96,9 @@ function App() {
   const settingsRef = useRef(settings);
   const settingsLoadedRef = useRef(isLoaded);
   const saveBoundsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { isProjectorOpen, refreshProjectorState } = useProjectorState();
+  const { showControls } = useViewerStore();
+  const [isSecondary, setIsSecondary] = useState(false);
 
   const showMainWindowOnce = useCallback(async () => {
     if (startupShowAttemptedRef.current) return;
@@ -392,6 +402,29 @@ function App() {
     resetPerformanceTelemetry();
   }, []);
 
+  const handleToggleProjector = useCallback(async () => {
+    const state = useViewerStore.getState();
+    if (state.currentImagePath === null) {
+      return;
+    }
+
+    if (isSecondary) {
+      return;
+    }
+
+    if (isProjectorOpen) {
+      await closeSecondaryWindow();
+    } else {
+      await openSecondaryWindow();
+
+      const { openProjectorInGridView } = useSettingsStore.getState().settings;
+      if (openProjectorInGridView && useViewerStore.getState().viewMode !== 'grid') {
+        useViewerStore.getState().setViewMode('grid');
+      }
+    }
+    await refreshProjectorState();
+  }, [isProjectorOpen, isSecondary, refreshProjectorState]);
+
   const commandPaletteCommands = useMemo(
     () =>
       createViewerCommands({
@@ -417,6 +450,7 @@ function App() {
             currentIndex: useViewerStore.getState().currentIndex,
             removeImage: useViewerStore.getState().removeImage,
           }),
+        toggleProjector: handleToggleProjector,
         enterCropMode: () => {
           const state = useViewerStore.getState();
           if (state.viewMode === 'grid') {
@@ -444,6 +478,7 @@ function App() {
       goFirst,
       goLast,
       handleToggleFullscreen,
+      handleToggleProjector,
       handleTogglePerformanceTelemetry,
       handleResetPerformanceTelemetry,
       startSlideshow,
@@ -491,9 +526,6 @@ function App() {
       }
     },
   });
-
-  const { showControls } = useViewerStore();
-  const [isSecondary, setIsSecondary] = useState(false);
 
   // Detect if this is a secondary window
   useEffect(() => {
@@ -596,7 +628,7 @@ function App() {
               />
             </>
           ) : (
-            <ContactSheet onGoHome={handleGoHome} />
+            <ContactSheet onGoHome={handleGoHome} onRefreshFolder={refreshFolder} />
           )}
         </>
       ) : (

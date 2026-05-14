@@ -13,6 +13,7 @@ describe('createViewerCommands', () => {
     const openCurrentImageInEditor = vi.fn().mockResolvedValue(undefined);
     const copyCurrentImage = vi.fn().mockResolvedValue(undefined);
     const deleteCurrentImage = vi.fn().mockResolvedValue(undefined);
+    const toggleProjector = vi.fn().mockResolvedValue(undefined);
 
     useViewerStore.setState({
       currentImagePath: 'c:/images/test.jpg',
@@ -34,6 +35,7 @@ describe('createViewerCommands', () => {
       openCurrentImageInEditor,
       copyCurrentImage,
       deleteCurrentImage,
+      toggleProjector,
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
@@ -88,6 +90,7 @@ describe('createViewerCommands', () => {
       openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
       enterCropMode,
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
@@ -121,6 +124,7 @@ describe('createViewerCommands', () => {
       openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
@@ -148,6 +152,7 @@ describe('createViewerCommands', () => {
       openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode,
@@ -215,6 +220,7 @@ describe('createViewerCommands', () => {
       openCurrentImageInEditor,
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
@@ -247,6 +253,7 @@ describe('createViewerCommands', () => {
       openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
       copyCurrentImage: vi.fn().mockResolvedValue(undefined),
       deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
@@ -264,5 +271,39 @@ describe('createViewerCommands', () => {
 
     expect(togglePerformanceTelemetry).toHaveBeenCalledTimes(1);
     expect(resetPerformanceTelemetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes a projector command when an image is open', async () => {
+    const toggleProjector = vi.fn().mockResolvedValue(undefined);
+    useViewerStore.setState({
+      currentImagePath: 'c:/images/test.jpg',
+    });
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector,
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
+    });
+
+    const projectorCommand = commands.find((command) => command.id === 'toggle-projector');
+
+    expect(projectorCommand?.isEnabled(useViewerStore.getState())).toBe(true);
+    await projectorCommand?.run();
+    expect(toggleProjector).toHaveBeenCalledTimes(1);
   });
 });
