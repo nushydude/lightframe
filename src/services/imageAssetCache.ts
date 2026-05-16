@@ -117,14 +117,11 @@ function currentVersion(path: string): number {
   return Math.max(pendingInvalidations.get(path) ?? 0, latestMutationVersions.get(path) ?? 0);
 }
 
-function trimCacheEntries<T extends { lastUsedAt: number }>(
+function getLeastRecentlyUsedEntries<T extends { lastUsedAt: number }>(
   cache: Map<string, T>,
-  keepPaths: Set<string>,
-  maxEntries: number
-): void {
-  if (maxEntries < 0 || cache.size <= maxEntries) return;
-
-  const evictable = Array.from(cache.entries())
+  keepPaths: Set<string>
+): Array<[string, T]> {
+  return Array.from(cache.entries())
     .filter(([path]) => !keepPaths.has(path))
     .sort((a, b) => {
       if (a[1].lastUsedAt !== b[1].lastUsedAt) {
@@ -132,8 +129,16 @@ function trimCacheEntries<T extends { lastUsedAt: number }>(
       }
       return a[0].localeCompare(b[0]);
     });
+}
 
-  for (const [path] of evictable) {
+function trimCacheEntries<T extends { lastUsedAt: number }>(
+  cache: Map<string, T>,
+  keepPaths: Set<string>,
+  maxEntries: number
+): void {
+  if (maxEntries < 0 || cache.size <= maxEntries) return;
+
+  for (const [path] of getLeastRecentlyUsedEntries(cache, keepPaths)) {
     if (cache.size <= maxEntries) break;
     cache.delete(path);
   }
@@ -336,16 +341,7 @@ function enforcePreviewBudget(keepPaths: Set<string>): void {
     return;
   }
 
-  const evictable = Array.from(previewImageAssetCache.entries())
-    .filter(([path]) => !keepPaths.has(path))
-    .sort((a, b) => {
-      if (a[1].lastUsedAt !== b[1].lastUsedAt) {
-        return a[1].lastUsedAt - b[1].lastUsedAt;
-      }
-      return a[0].localeCompare(b[0]);
-    });
-
-  for (const [path] of evictable) {
+  for (const [path] of getLeastRecentlyUsedEntries(previewImageAssetCache, keepPaths)) {
     if (previewImageAssetCacheEstimatedBytes <= previewCacheBudgetBytes) {
       break;
     }

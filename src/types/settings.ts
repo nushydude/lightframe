@@ -1,3 +1,5 @@
+import { isPerformanceMode } from '../services/performanceMode';
+
 export interface QuickDestination {
   id: string;
   label: string;
@@ -104,12 +106,9 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       (raw.prompt_projector_grid_on_open as boolean) ?? DEFAULT_SETTINGS.promptProjectorGridOnOpen,
     openProjectorInGridView:
       (raw.open_projector_in_grid_view as boolean) ?? DEFAULT_SETTINGS.openProjectorInGridView,
-    performanceMode:
-      raw.performance_mode === 'fast' ||
-      raw.performance_mode === 'balanced' ||
-      raw.performance_mode === 'lowMemory'
-        ? raw.performance_mode
-        : DEFAULT_SETTINGS.performanceMode,
+    performanceMode: isPerformanceMode(raw.performance_mode)
+      ? raw.performance_mode
+      : DEFAULT_SETTINGS.performanceMode,
     quickDestinations: Array.isArray(raw.quick_destinations)
       ? raw.quick_destinations
           .map((value) => {
