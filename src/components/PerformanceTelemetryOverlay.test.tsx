@@ -27,8 +27,22 @@ const snapshot: PerformanceTelemetrySnapshot = {
     previewGeneration: { currentMs: 18, p50Ms: 16, p95Ms: 24, sampleCount: 5 },
   },
   caches: {
-    thumbnail: { hits: 8, misses: 2, hitRate: 0.8, entries: 40 },
-    previewAssets: { hits: 6, misses: 4, hitRate: 0.6, entries: 10 },
+    thumbnail: {
+      hits: 8,
+      misses: 2,
+      hitRate: 0.8,
+      entries: 40,
+      estimatedBytes: 32 * 1024 * 1024,
+      budgetBytes: 64 * 1024 * 1024,
+    },
+    previewAssets: {
+      hits: 6,
+      misses: 4,
+      hitRate: 0.6,
+      entries: 10,
+      estimatedBytes: 96 * 1024 * 1024,
+      budgetBytes: 192 * 1024 * 1024,
+    },
     fullAssets: { hits: 9, misses: 1, hitRate: 0.9, entries: 5 },
   },
   queues: {
@@ -56,8 +70,12 @@ describe('PerformanceTelemetryOverlay', () => {
     expect(screen.getByText('keyboard-next')).toBeInTheDocument();
     expect(screen.getAllByText('32 ms')).toHaveLength(2);
     expect(screen.getAllByText('64 ms')).toHaveLength(2);
-    expect(screen.getByText(/80%\s+hit,\s+40 entries/)).toBeInTheDocument();
-    expect(screen.getByText(/60%\s+hit,\s+10 entries/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/80%\s+hit,\s+40 entries,\s+est. 32 MB \/ 64 MB budget/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/60%\s+hit,\s+10 entries,\s+est. 96 MB \/ 192 MB budget/)
+    ).toBeInTheDocument();
     expect(screen.getByText(/90%\s+hit,\s+5 entries/)).toBeInTheDocument();
     expect(screen.getByText('Thumbnail depth')).toBeInTheDocument();
     expect(screen.getByText('Image work depth')).toBeInTheDocument();

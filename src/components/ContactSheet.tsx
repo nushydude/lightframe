@@ -29,7 +29,6 @@ const GRID_GAP = 20;
 const GRID_LABEL_HEIGHT = 20;
 const GRID_ROW_HEIGHT = GRID_ITEM_SIZE + GRID_GAP + GRID_LABEL_HEIGHT;
 const GRID_OVERSCAN_ROWS = 3;
-const MAX_CACHED_THUMBNAILS = 1000;
 
 interface ContactSheetProps {
   onExitGridView: () => Promise<boolean>;
@@ -164,7 +163,7 @@ export function ContactSheet({
       visibleRange.endIndex + columns * GRID_OVERSCAN_ROWS * 4
     );
     const keepPaths = new Set(images.slice(keepStart, keepEnd).map((image) => image.path));
-    evictThumbnailsExcept(keepPaths, MAX_CACHED_THUMBNAILS);
+    evictThumbnailsExcept(keepPaths);
   }, [
     columns,
     handleThumbnailLoaded,

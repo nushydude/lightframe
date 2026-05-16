@@ -34,6 +34,12 @@ pub struct SourceMetadata {
 pub struct GeneratedImageAsset {
     pub file_path: String,
     pub cache_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +187,7 @@ pub fn get_or_create_thumbnail(
             &cache_hash,
             GeneratedImageFormat::Jpeg,
             &jpeg_bytes,
+            None,
         ),
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_thumbnail_svg(file_path, &error) {
@@ -190,6 +197,7 @@ pub fn get_or_create_thumbnail(
                     &cache_hash,
                     GeneratedImageFormat::Svg,
                     &placeholder_svg,
+                    Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
                 );
             }
 
@@ -235,6 +243,7 @@ pub fn get_or_create_preview(
     } else {
         img
     };
+    let preview_dimensions = preview.dimensions();
     let has_alpha = preview.color().has_alpha();
 
     let mut buffer = std::io::Cursor::new(Vec::new());
@@ -250,12 +259,18 @@ pub fn get_or_create_preview(
         GeneratedImageFormat::Jpeg
     };
 
-    cache_asset_bytes(cache_root, cache_available, &cache_hash, format, &buffer.into_inner()).map(
-        |mut asset| {
-            asset.cache_key = cache_hash;
-            asset
-        },
+    cache_asset_bytes(
+        cache_root,
+        cache_available,
+        &cache_hash,
+        format,
+        &buffer.into_inner(),
+        Some(preview_dimensions),
     )
+    .map(|mut asset| {
+        asset.cache_key = cache_hash;
+        asset
+    })
 }
 
 fn build_versioned_cache_key(
@@ -402,10 +417,7 @@ fn cached_asset_from_disk(
     for format in formats {
         let path = cache_root.join(format!("{}.{}", cache_hash, format.extension()));
         if path.is_file() {
-            return Some(GeneratedImageAsset {
-                file_path: path.to_string_lossy().to_string(),
-                cache_key: cache_hash.to_string(),
-            });
+            return Some(build_generated_image_asset(&path, cache_hash, *format, None));
         }
     }
 
@@ -421,23 +433,45 @@ fn store_generated_asset(
     cache_hash: &str,
     format: GeneratedImageFormat,
     bytes: &[u8],
+    dimensions: Option<(u32, u32)>,
 ) -> Result<GeneratedImageAsset, String> {
     let asset_path = generated_asset_path(root, cache_hash, format);
     if asset_path.is_file() {
-        return Ok(GeneratedImageAsset {
-            file_path: asset_path.to_string_lossy().to_string(),
-            cache_key: cache_hash.to_string(),
-        });
+        return Ok(build_generated_image_asset(&asset_path, cache_hash, format, dimensions));
     }
 
     write_cache_file(&asset_path, bytes).map_err(|error| {
         format!("Failed to write generated cache file '{}': {}", asset_path.display(), error)
     })?;
 
-    Ok(GeneratedImageAsset {
+    Ok(build_generated_image_asset(&asset_path, cache_hash, format, dimensions))
+}
+
+fn build_generated_image_asset(
+    asset_path: &Path,
+    cache_hash: &str,
+    format: GeneratedImageFormat,
+    dimensions: Option<(u32, u32)>,
+) -> GeneratedImageAsset {
+    let resolved_dimensions = dimensions.or_else(|| generated_asset_dimensions(asset_path, format));
+    GeneratedImageAsset {
         file_path: asset_path.to_string_lossy().to_string(),
         cache_key: cache_hash.to_string(),
-    })
+        width: resolved_dimensions.map(|(width, _)| width),
+        height: resolved_dimensions.map(|(_, height)| height),
+        file_size_bytes: fs::metadata(asset_path).ok().map(|metadata| metadata.len()),
+    }
+}
+
+fn generated_asset_dimensions(
+    asset_path: &Path,
+    format: GeneratedImageFormat,
+) -> Option<(u32, u32)> {
+    if format == GeneratedImageFormat::Svg {
+        return Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+    }
+
+    image::image_dimensions(asset_path).ok()
 }
 
 fn temp_generated_asset_root() -> PathBuf {
@@ -450,9 +484,10 @@ fn cache_asset_bytes(
     cache_hash: &str,
     format: GeneratedImageFormat,
     bytes: &[u8],
+    dimensions: Option<(u32, u32)>,
 ) -> Result<GeneratedImageAsset, String> {
     if cache_available {
-        match store_generated_asset(cache_root, cache_hash, format, bytes) {
+        match store_generated_asset(cache_root, cache_hash, format, bytes, dimensions) {
             Ok(asset) => return Ok(asset),
             Err(error) => {
                 eprintln!("Warning: {}. Falling back to temporary generated asset storage.", error);
@@ -470,7 +505,7 @@ fn cache_asset_bytes(
         ));
     }
 
-    store_generated_asset(&temp_root, cache_hash, format, bytes)
+    store_generated_asset(&temp_root, cache_hash, format, bytes, dimensions)
 }
 
 fn cache_asset_text(
@@ -479,8 +514,16 @@ fn cache_asset_text(
     cache_hash: &str,
     format: GeneratedImageFormat,
     content: &str,
+    dimensions: Option<(u32, u32)>,
 ) -> Result<GeneratedImageAsset, String> {
-    cache_asset_bytes(cache_root, cache_available, cache_hash, format, content.as_bytes())
+    cache_asset_bytes(
+        cache_root,
+        cache_available,
+        cache_hash,
+        format,
+        content.as_bytes(),
+        dimensions,
+    )
 }
 
 fn write_cache_file(cache_file: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {

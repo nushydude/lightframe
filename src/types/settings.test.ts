@@ -69,6 +69,17 @@ describe('settingsToRust', () => {
       open_projector_in_grid_view: true,
     });
   });
+
+  it('maps performance mode to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      performanceMode: 'lowMemory',
+    });
+
+    expect(rust).toMatchObject({
+      performance_mode: 'lowMemory',
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -133,5 +144,19 @@ describe('settingsFromRust', () => {
 
     expect(settings.promptProjectorGridOnOpen).toBe(false);
     expect(settings.openProjectorInGridView).toBe(true);
+  });
+
+  it('parses performance mode from rust payloads and falls back for unknown values', () => {
+    expect(
+      settingsFromRust({
+        performance_mode: 'fast',
+      }).performanceMode
+    ).toBe('fast');
+
+    expect(
+      settingsFromRust({
+        performance_mode: 'ultra',
+      }).performanceMode
+    ).toBe(DEFAULT_SETTINGS.performanceMode);
   });
 });

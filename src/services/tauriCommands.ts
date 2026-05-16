@@ -36,6 +36,9 @@ export interface CropRect {
 export interface GeneratedImageAsset {
   file_path: string;
   cache_key: string;
+  width?: number | null;
+  height?: number | null;
+  file_size_bytes?: number | null;
 }
 
 /** Check if a path is a directory */

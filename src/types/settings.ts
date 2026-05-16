@@ -1,8 +1,12 @@
+import { isPerformanceMode } from '../services/performanceMode';
+
 export interface QuickDestination {
   id: string;
   label: string;
   path: string;
 }
+
+export type PerformanceMode = 'fast' | 'balanced' | 'lowMemory';
 
 export interface AppSettings {
   theme: 'system' | 'dark' | 'light';
@@ -21,6 +25,7 @@ export interface AppSettings {
   showThumbnails: boolean;
   promptProjectorGridOnOpen: boolean;
   openProjectorInGridView: boolean;
+  performanceMode: PerformanceMode;
   quickDestinations: QuickDestination[];
   externalEditorPath?: string;
   externalEditorLabel?: string;
@@ -39,6 +44,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showThumbnails: true,
   promptProjectorGridOnOpen: true,
   openProjectorInGridView: false,
+  performanceMode: 'balanced',
   quickDestinations: [],
 };
 
@@ -61,6 +67,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     show_thumbnails: settings.showThumbnails,
     prompt_projector_grid_on_open: settings.promptProjectorGridOnOpen,
     open_projector_in_grid_view: settings.openProjectorInGridView,
+    performance_mode: settings.performanceMode,
     quick_destinations: settings.quickDestinations.map((destination) => ({
       id: destination.id,
       label: destination.label,
@@ -99,6 +106,9 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       (raw.prompt_projector_grid_on_open as boolean) ?? DEFAULT_SETTINGS.promptProjectorGridOnOpen,
     openProjectorInGridView:
       (raw.open_projector_in_grid_view as boolean) ?? DEFAULT_SETTINGS.openProjectorInGridView,
+    performanceMode: isPerformanceMode(raw.performance_mode)
+      ? raw.performance_mode
+      : DEFAULT_SETTINGS.performanceMode,
     quickDestinations: Array.isArray(raw.quick_destinations)
       ? raw.quick_destinations
           .map((value) => {

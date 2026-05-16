@@ -4,6 +4,7 @@ import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
 import { openSettings, openUrlExternal } from '../services/tauriCommands';
+import { PERFORMANCE_MODE_LABELS } from '../services/performanceMode';
 
 /** Settings panel overlay */
 export function SettingsPanel() {
@@ -147,6 +148,26 @@ export function SettingsPanel() {
                 <span className="toggle-slider" />
               </label>
             </div>
+
+            <div className="setting-row">
+              <span className="setting-label">Performance mode</span>
+              <select
+                className="setting-select"
+                value={settings.performanceMode}
+                onChange={(e) =>
+                  handleChange('performanceMode', e.target.value as AppSettings['performanceMode'])
+                }
+                id="setting-performance-mode"
+              >
+                <option value="fast">{PERFORMANCE_MODE_LABELS.fast}</option>
+                <option value="balanced">{PERFORMANCE_MODE_LABELS.balanced}</option>
+                <option value="lowMemory">{PERFORMANCE_MODE_LABELS.lowMemory}</option>
+              </select>
+            </div>
+            <p className="setting-help">
+              Fast keeps more previews and thumbnails warm. Low Memory trims caches harder and
+              preloads fewer adjacent images.
+            </p>
           </div>
 
           {/* Slideshow */}

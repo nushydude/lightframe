@@ -79,6 +79,8 @@ pub struct AppSettings {
     pub prompt_projector_grid_on_open: bool,
     #[serde(default)]
     pub open_projector_in_grid_view: bool,
+    #[serde(default = "default_performance_mode")]
+    pub performance_mode: String,
     #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
     #[serde(default)]
@@ -110,6 +112,10 @@ fn default_prompt_projector_grid_on_open() -> bool {
     true
 }
 
+fn default_performance_mode() -> String {
+    "balanced".to_string()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
@@ -129,6 +135,7 @@ impl Default for AppSettings {
             show_thumbnails: default_show_thumbnails(),
             prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
             open_projector_in_grid_view: false,
+            performance_mode: default_performance_mode(),
             quick_destinations: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
@@ -1807,6 +1814,8 @@ mod tests {
         );
         assert!(width <= 2048);
         assert!(height <= 2048);
+        assert_eq!(preview_asset.width, Some(width));
+        assert_eq!(preview_asset.height, Some(height));
     }
 
     #[test]
@@ -1832,6 +1841,8 @@ mod tests {
         assert!(preview_asset.file_path.ends_with(".png"));
         assert_eq!(width, 640);
         assert_eq!(height, 360);
+        assert_eq!(preview_asset.width, Some(640));
+        assert_eq!(preview_asset.height, Some(360));
     }
 
     #[test]
@@ -2035,6 +2046,7 @@ mod tests {
         assert_eq!(settings.window_width, None);
         assert_eq!(settings.window_height, None);
         assert!(!settings.open_projector_in_grid_view);
+        assert_eq!(settings.performance_mode, "balanced");
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);
     }

@@ -7,6 +7,7 @@ import {
   type SyntheticEvent,
 } from 'react';
 import { useViewerStore, type ZoomMode } from '../state/viewerStore';
+import { useSettingsStore } from '../state/settingsStore';
 import {
   getPreviewAsset,
   preloadFullAsset,
@@ -22,10 +23,9 @@ import {
 } from '../services/performanceTelemetry';
 import {
   NAVIGATION_CACHE_MAX_FULL_ASSET_ENTRIES,
-  NAVIGATION_CACHE_NEXT_IMAGES,
   NAVIGATION_CACHE_PRELOAD_DEBOUNCE_MS,
-  NAVIGATION_CACHE_PREVIOUS_IMAGES,
 } from '../services/navigationCacheConfig';
+import { getPerformanceModeProfile } from '../services/performanceMode';
 import { getImageMetadata } from '../services/tauriCommands';
 import type { ImageMetadata } from '../types/image';
 import { useZoomPan } from '../hooks/useZoomPan';
@@ -77,8 +77,12 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function getDirectionalWindow(direction: NavigationDirection): DirectionalWindow {
-  const totalWindow = NAVIGATION_CACHE_PREVIOUS_IMAGES + NAVIGATION_CACHE_NEXT_IMAGES;
+function getDirectionalWindow(
+  direction: NavigationDirection,
+  adjacentPreviousImages: number,
+  adjacentNextImages: number
+): DirectionalWindow {
+  const totalWindow = adjacentPreviousImages + adjacentNextImages;
 
   if (direction === 'forward') {
     const backwardCount = 1;
@@ -97,8 +101,8 @@ function getDirectionalWindow(direction: NavigationDirection): DirectionalWindow
   }
 
   return {
-    backwardCount: NAVIGATION_CACHE_PREVIOUS_IMAGES,
-    forwardCount: NAVIGATION_CACHE_NEXT_IMAGES,
+    backwardCount: adjacentPreviousImages,
+    forwardCount: adjacentNextImages,
   };
 }
 
@@ -213,9 +217,11 @@ function collectDirectionalPreloads(
 function getAdjacentPreloadPlan(
   currentIndex: number,
   imageCount: number,
-  direction: NavigationDirection
+  direction: NavigationDirection,
+  adjacentPreviousImages: number,
+  adjacentNextImages: number
 ): AdjacentPreloadPlan {
-  const window = getDirectionalWindow(direction);
+  const window = getDirectionalWindow(direction, adjacentPreviousImages, adjacentNextImages);
   const preloadIndices: number[] = [];
   const leadingIndices = new Set<number>();
   const queued = new Set<number>();
@@ -338,6 +344,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
 
   const images = useViewerStore((s) => s.images);
+  const performanceMode = useSettingsStore((state) => state.settings.performanceMode);
+  const performanceProfile = getPerformanceModeProfile(performanceMode);
 
   useEffect(() => {
     zoomStateRef.current = { zoomMode, zoomLevel };
@@ -608,7 +616,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     const { keepIndices, preloadIndices, leadingIndices } = getAdjacentPreloadPlan(
       currentIndex,
       images.length,
-      navigationDirectionRef.current
+      navigationDirectionRef.current,
+      performanceProfile.adjacentPreviousImages,
+      performanceProfile.adjacentNextImages
     );
     const keepSet = new Set(keepIndices.map((index) => images[index].path));
     const scheduledLoadGeneration = loadGeneration;
@@ -672,7 +682,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       preloadAbortController.abort();
       window.clearTimeout(timer);
     };
-  }, [currentImagePath, currentIndex, images, loadGeneration]);
+  }, [currentImagePath, currentIndex, images, loadGeneration, performanceProfile]);
 
   const previewSrc = previewAsset?.url ?? '';
   const fullSrc = fullAsset?.url ?? '';

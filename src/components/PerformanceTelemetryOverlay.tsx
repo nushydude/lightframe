@@ -1,5 +1,6 @@
 import type { PerformanceTelemetrySnapshot } from '../services/performanceTelemetry';
 import { usePerformanceTelemetrySnapshot } from '../services/performanceTelemetry';
+import { formatBytesForHumans } from '../services/cacheMemory';
 
 interface PerformanceTelemetryOverlayProps {
   snapshot?: PerformanceTelemetrySnapshot;
@@ -28,6 +29,10 @@ function formatRate(value: number | null): string {
   }
 
   return `${Math.round(value * 100)}%`;
+}
+
+function formatCacheUsage(estimatedBytes: number, budgetBytes: number): string {
+  return `est. ${formatBytesForHumans(estimatedBytes)} / ${formatBytesForHumans(budgetBytes)} budget`;
 }
 
 function buildRows(snapshot: PerformanceTelemetrySnapshot): TelemetryRow[] {
@@ -151,14 +156,22 @@ export function PerformanceTelemetryOverlay({
             <dt>Thumbnails</dt>
             <dd>
               {formatRate(resolvedSnapshot.caches.thumbnail.hitRate)} hit,{' '}
-              {resolvedSnapshot.caches.thumbnail.entries} entries
+              {resolvedSnapshot.caches.thumbnail.entries} entries,{' '}
+              {formatCacheUsage(
+                resolvedSnapshot.caches.thumbnail.estimatedBytes,
+                resolvedSnapshot.caches.thumbnail.budgetBytes
+              )}
             </dd>
           </div>
           <div>
             <dt>Preview assets</dt>
             <dd>
               {formatRate(resolvedSnapshot.caches.previewAssets.hitRate)} hit,{' '}
-              {resolvedSnapshot.caches.previewAssets.entries} entries
+              {resolvedSnapshot.caches.previewAssets.entries} entries,{' '}
+              {formatCacheUsage(
+                resolvedSnapshot.caches.previewAssets.estimatedBytes,
+                resolvedSnapshot.caches.previewAssets.budgetBytes
+              )}
             </dd>
           </div>
           <div>

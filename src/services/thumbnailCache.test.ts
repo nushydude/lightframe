@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { estimateThumbnailAssetBytes } from './cacheMemory';
 
 const getThumbnailMock = vi.fn<
   (
@@ -179,9 +180,34 @@ describe('thumbnailCache', () => {
     clearThumbnailCacheForTests();
   });
 
+  it('keeps visible thumbnails cached even when the byte budget is exhausted', async () => {
+    const {
+      clearThumbnailCacheForTests,
+      configureThumbnailCache,
+      evictThumbnailsExcept,
+      loadThumbnail,
+    } = await loadThumbnailCacheModule();
+
+    getThumbnailMock.mockResolvedValueOnce({
+      file_path: 'C:/cache/current.jpg',
+      cache_key: 'CURRENT',
+    });
+
+    evictThumbnailsExcept(new Set(['C:/images/current.jpg']));
+    configureThumbnailCache({ cacheBudgetBytes: 0 });
+
+    await loadThumbnail('C:/images/current.jpg');
+    await loadThumbnail('C:/images/current.jpg');
+
+    expect(getThumbnailMock).toHaveBeenCalledTimes(1);
+
+    clearThumbnailCacheForTests();
+  });
+
   it('evicts least-recently-used thumbnails deterministically while keeping pinned paths', async () => {
     const {
       clearThumbnailCacheForTests,
+      configureThumbnailCache,
       evictThumbnailsExcept,
       getCachedThumbnail,
       loadThumbnail,
@@ -199,7 +225,13 @@ describe('thumbnailCache', () => {
     // Refresh A so B becomes the oldest evictable entry.
     expect(getCachedThumbnail('C:/images/a.jpg')).toBe('asset://localhost/C:/cache/a.jpg?v=A');
 
-    evictThumbnailsExcept(new Set(['C:/images/a.jpg']), 2);
+    evictThumbnailsExcept(new Set(['C:/images/a.jpg']));
+    configureThumbnailCache({
+      cacheBudgetBytes:
+        estimateThumbnailAssetBytes({
+          url: 'asset://localhost/C:/cache/a.jpg?v=A',
+        }) * 2,
+    });
 
     expect(getCachedThumbnail('C:/images/a.jpg')).toBe('asset://localhost/C:/cache/a.jpg?v=A');
     expect(getCachedThumbnail('C:/images/b.jpg')).toBeUndefined();
@@ -270,6 +302,7 @@ describe('thumbnailCache', () => {
   it('caps cache after in-flight over-cap queue settles and keeps latest keep-set paths', async () => {
     const {
       clearThumbnailCacheForTests,
+      configureThumbnailCache,
       evictThumbnailsExcept,
       getCachedThumbnail,
       loadThumbnail,
@@ -305,7 +338,13 @@ describe('thumbnailCache', () => {
       isActive: () => true,
     });
 
-    evictThumbnailsExcept(new Set(['C:/images/c.jpg']), 2);
+    evictThumbnailsExcept(new Set(['C:/images/c.jpg']));
+    configureThumbnailCache({
+      cacheBudgetBytes:
+        estimateThumbnailAssetBytes({
+          url: 'asset://localhost/C:/cache/a.jpg?v=A',
+        }) * 2,
+    });
 
     deferredByPath.get('C:/images/a.jpg')?.resolve({ file_path: 'C:/cache/a.jpg', cache_key: 'A' });
     deferredByPath.get('C:/images/b.jpg')?.resolve({ file_path: 'C:/cache/b.jpg', cache_key: 'B' });
@@ -350,7 +389,7 @@ describe('thumbnailCache', () => {
     expect(getThumbnailMock).toHaveBeenCalledTimes(3);
     expect(getThumbnailMock).not.toHaveBeenCalledWith(stalePath, undefined, undefined);
 
-    evictThumbnailsExcept(new Set(activePaths), 10);
+    evictThumbnailsExcept(new Set(activePaths));
 
     await expect(stalePromise).rejects.toMatchObject({ name: 'AbortError' });
     expect(getThumbnailMock).toHaveBeenCalledTimes(3);
