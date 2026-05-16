@@ -11,6 +11,8 @@ export interface ImageMetadata {
   height: number | null;
   file_size_bytes: number;
   format: string;
+  codec_backend?: 'rust_image' | 'windows_native' | 'browser_renderable' | 'unsupported' | string;
+  native_decode_supported?: boolean;
   browser_renderable?: boolean;
   rust_decode_supported?: boolean;
   metadata_supported?: boolean;

@@ -35,6 +35,14 @@ function formatCacheUsage(estimatedBytes: number, budgetBytes: number): string {
   return `est. ${formatBytesForHumans(estimatedBytes)} / ${formatBytesForHumans(budgetBytes)} budget`;
 }
 
+function formatCodecBackend(backend: string | null, nativeDecodeSupported: boolean | null): string {
+  if (!backend) {
+    return '--';
+  }
+
+  return nativeDecodeSupported ? `${backend} (native)` : backend;
+}
+
 function buildRows(snapshot: PerformanceTelemetrySnapshot): TelemetryRow[] {
   return [
     {
@@ -109,6 +117,15 @@ export function PerformanceTelemetryOverlay({
           <div>
             <dt>Source</dt>
             <dd>{resolvedSnapshot.currentImage.selectionKind ?? '--'}</dd>
+          </div>
+          <div>
+            <dt>Codec</dt>
+            <dd>
+              {formatCodecBackend(
+                resolvedSnapshot.currentImage.codecBackend,
+                resolvedSnapshot.currentImage.nativeDecodeSupported
+              )}
+            </dd>
           </div>
           <div>
             <dt>Preview</dt>

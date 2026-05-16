@@ -18,6 +18,7 @@ import {
 import { IMAGE_WORK_PRIORITY, imageWorkScheduler } from '../services/imageWorkScheduler';
 import {
   recordFullResolutionReadyTelemetry,
+  recordImageCodecTelemetry,
   recordPreviewVisibleTelemetry,
   recordVisibleImageSourceUpdatedTelemetry,
 } from '../services/performanceTelemetry';
@@ -506,6 +507,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         if (isCurrentRequest()) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
+          recordImageCodecTelemetry(
+            currentImagePath,
+            imageMetadata.codec_backend ?? 'unsupported',
+            imageMetadata.native_decode_supported ?? false
+          );
         }
       } catch (err) {
         if (!isAbortError(err)) {
