@@ -56,9 +56,11 @@ export function ContactSheet({
     isFullscreen,
     rotation,
     pendingCropPreview,
+    showOnlyFavorites,
     setCurrentIndex,
     setFullscreen,
     setViewMode,
+    setShowOnlyFavorites,
     setShowSettings,
     enterCompareMode,
     enterCropMode,
@@ -407,7 +409,9 @@ export function ContactSheet({
       <div className="contact-sheet-header">
         <div className="header-left">
           <h2>Contact Sheet</h2>
-          <span className="image-count">{images.length} images</span>
+          <span className="image-count">
+            {images.length} {showOnlyFavorites ? 'favorites' : 'images'}
+          </span>
           {selectedPaths.length > 0 && (
             <span className="image-count">{selectedPaths.length} selected</span>
           )}
@@ -459,6 +463,16 @@ export function ContactSheet({
             >
               <span className="top-bar-btn-icon">{isFavorite ? '★' : '☆'}</span>
               <span className="top-bar-btn-label">Favorite</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${showOnlyFavorites ? 'active' : ''}`}
+              onClick={() => setShowOnlyFavorites(!showOnlyFavorites)}
+              data-tooltip={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
+              title={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
+              aria-label={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
+            >
+              <span className="top-bar-btn-icon">Fav</span>
+              <span className="top-bar-btn-label">Only</span>
             </button>
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"

@@ -49,6 +49,15 @@ pub struct CropRect {
     pub height: u32,
 }
 
+const MAX_SCALE_DIMENSION: u32 = 65_535;
+const MAX_SCALE_PIXELS: u64 = 50_000_000;
+const SCALE_DECODED_BYTES_PER_PIXEL: u64 = 8;
+const MAX_SCALE_WORKING_BYTES: u64 = 800 * 1024 * 1024;
+const SCALE_EXPORT_INPUT_EXTENSIONS: &[&str] =
+    &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "avif"];
+const SCALE_EXPORT_OUTPUT_EXTENSIONS: &[&str] =
+    &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RotationSaveStrategy {
     Unsupported,
@@ -542,6 +551,28 @@ fn write_dynamic_image(
     };
 
     write_result.map_err(|e| format!("{}: {}", error_prefix, e))
+}
+
+fn write_high_quality_image(
+    image: &image::DynamicImage,
+    output_path: &Path,
+    error_prefix: &str,
+) -> Result<(), String> {
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+
+    if !matches!(extension.as_str(), "jpg" | "jpeg") {
+        return write_dynamic_image(image, output_path, error_prefix);
+    }
+
+    let mut output_file =
+        fs::File::create(output_path).map_err(|e| format!("{}: {}", error_prefix, e))?;
+    let rgb_image = image::DynamicImage::ImageRgb8(image.to_rgb8());
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output_file, 95);
+    encoder.encode_image(&rgb_image).map_err(|e| format!("{}: {}", error_prefix, e))
 }
 
 fn restore_normal_orientation(
@@ -1259,6 +1290,228 @@ fn write_cropped_image(
     )
 }
 
+fn validate_scale_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("Scaled image dimensions must be greater than zero".to_string());
+    }
+
+    if width > MAX_SCALE_DIMENSION || height > MAX_SCALE_DIMENSION {
+        return Err(format!(
+            "Scaled image dimensions must be {} pixels or smaller",
+            MAX_SCALE_DIMENSION
+        ));
+    }
+
+    let pixel_count = scale_pixel_count(width, height)?;
+    if pixel_count > MAX_SCALE_PIXELS {
+        return Err(format!(
+            "Scaled export is limited to {} megapixels",
+            MAX_SCALE_PIXELS / 1_000_000
+        ));
+    }
+
+    Ok(())
+}
+
+fn scale_pixel_count(width: u32, height: u32) -> Result<u64, String> {
+    u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| "Scaled image dimensions are too large".to_string())
+}
+
+fn add_scale_working_bytes(
+    total: &mut u64,
+    pixel_count: u64,
+    buffer_count: u64,
+) -> Result<(), String> {
+    let bytes = pixel_count
+        .checked_mul(buffer_count)
+        .and_then(|value| value.checked_mul(SCALE_DECODED_BYTES_PER_PIXEL))
+        .ok_or_else(|| "Scaled export would require too much memory".to_string())?;
+    *total = total
+        .checked_add(bytes)
+        .ok_or_else(|| "Scaled export would require too much memory".to_string())?;
+    Ok(())
+}
+
+fn validate_scale_working_memory(
+    source_width: u32,
+    source_height: u32,
+    width: u32,
+    height: u32,
+    smoothing: f32,
+    sharpening: f32,
+) -> Result<(), String> {
+    let source_pixels = scale_pixel_count(source_width, source_height)?;
+    let target_pixels = scale_pixel_count(width, height)?;
+    let source_buffer_count = if normalized_adjustment(smoothing) > 0.0 { 2 } else { 1 };
+    let target_buffer_count = if normalized_adjustment(sharpening) > 0.0 { 2 } else { 1 };
+
+    let mut estimated_working_bytes = 0_u64;
+    add_scale_working_bytes(&mut estimated_working_bytes, source_pixels, source_buffer_count)?;
+    add_scale_working_bytes(&mut estimated_working_bytes, target_pixels, target_buffer_count)?;
+
+    if estimated_working_bytes > MAX_SCALE_WORKING_BYTES {
+        return Err(format!(
+            "Scaled export would require about {} MB of working memory; limit is {} MB",
+            estimated_working_bytes.div_ceil(1024 * 1024),
+            MAX_SCALE_WORKING_BYTES / (1024 * 1024)
+        ));
+    }
+
+    Ok(())
+}
+
+fn read_scale_source_dimensions(input_path: &Path) -> Result<(u32, u32), String> {
+    image::image_dimensions(input_path)
+        .map_err(|e| format!("Failed to read source image dimensions: {}", e))
+}
+
+fn path_extension_lowercase(path: &Path) -> String {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default()
+}
+
+fn validate_scaled_export_input_path(input_path: &Path) -> Result<(), String> {
+    let extension = path_extension_lowercase(input_path);
+    if SCALE_EXPORT_INPUT_EXTENSIONS.contains(&extension.as_str()) {
+        return Ok(());
+    }
+
+    Err("Scaled export supports JPEG, PNG, GIF, WebP, BMP, TIFF, and AVIF source images"
+        .to_string())
+}
+
+fn validate_scaled_export_output_path(output_path: &Path) -> Result<(), String> {
+    let extension = path_extension_lowercase(output_path);
+    if SCALE_EXPORT_OUTPUT_EXTENSIONS.contains(&extension.as_str()) {
+        return Ok(());
+    }
+
+    Err("Scaled export can save JPEG, PNG, GIF, WebP, BMP, or TIFF files".to_string())
+}
+
+fn validate_copy_output_path(
+    input_path: &Path,
+    output_path: &Path,
+    allow_existing_output: bool,
+) -> Result<(), String> {
+    let parent_dir = output_path
+        .parent()
+        .ok_or_else(|| "Output path must include a parent directory".to_string())?;
+    if !parent_dir.exists() {
+        return Err("Output directory does not exist".to_string());
+    }
+    if output_path.exists() && !output_path.is_file() {
+        return Err("Output path must be a file".to_string());
+    }
+
+    let input_canonical = fs::canonicalize(input_path)
+        .map_err(|e| format!("Failed to resolve source path: {}", e))?;
+    let output_candidate = if output_path.exists() {
+        fs::canonicalize(output_path)
+            .map_err(|e| format!("Failed to resolve output path: {}", e))?
+    } else if output_path.is_absolute() {
+        output_path.to_path_buf()
+    } else {
+        fs::canonicalize(parent_dir)
+            .map_err(|e| format!("Failed to resolve output directory: {}", e))?
+            .join(output_path.file_name().ok_or_else(|| "Output file name is missing".to_string())?)
+    };
+
+    if input_canonical == output_candidate {
+        return Err("Output path must not match the original image".to_string());
+    }
+    if output_path.exists() && !allow_existing_output {
+        return Err("Output path already exists; choose a new file name".to_string());
+    }
+
+    Ok(())
+}
+
+fn normalized_adjustment(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 100.0) / 100.0
+    } else {
+        0.0
+    }
+}
+
+fn apply_resize_adjustments(
+    img: image::DynamicImage,
+    width: u32,
+    height: u32,
+    smoothing: f32,
+    sharpening: f32,
+) -> image::DynamicImage {
+    let smooth_amount = normalized_adjustment(smoothing);
+    let sharpen_amount = normalized_adjustment(sharpening);
+    let smoothed = if smooth_amount > 0.0 { img.blur(smooth_amount * 2.0) } else { img };
+    let resized = smoothed.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+
+    if sharpen_amount > 0.0 {
+        resized.unsharpen(0.65 + sharpen_amount * 1.85, 1)
+    } else {
+        resized
+    }
+}
+
+fn save_scaled_copy_blocking(
+    file_path: String,
+    output_path: String,
+    width: u32,
+    height: u32,
+    smoothing: f32,
+    sharpening: f32,
+) -> Result<(), String> {
+    let input_path = Path::new(&file_path);
+    if !input_path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    validate_scaled_export_input_path(input_path)?;
+    validate_scale_dimensions(width, height)?;
+
+    let output_path_ref = Path::new(&output_path);
+    validate_copy_output_path(input_path, output_path_ref, true)?;
+    validate_scaled_export_output_path(output_path_ref)?;
+    let (source_width, source_height) = read_scale_source_dimensions(input_path)?;
+    validate_scale_working_memory(
+        source_width,
+        source_height,
+        width,
+        height,
+        smoothing,
+        sharpening,
+    )?;
+
+    let img =
+        image::open(input_path).map_err(|e| format!("Failed to open image for scaling: {}", e))?;
+    let scaled = apply_resize_adjustments(img, width, height, smoothing, sharpening);
+    let temp_path = build_unique_sibling_path(output_path_ref, "lightframe-scale")?;
+
+    if let Err(err) = write_high_quality_image(&scaled, &temp_path, "Failed to save scaled copy") {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    let replace_result = if output_path_ref.exists() {
+        replace_file_safely(&temp_path, output_path_ref)
+    } else {
+        fs::rename(&temp_path, output_path_ref)
+            .map_err(|e| format!("Failed to write scaled copy: {}", e))
+    };
+
+    if let Err(err) = replace_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
 fn save_cropped_copy_blocking(
     file_path: String,
     crop_rect: CropRect,
@@ -1450,6 +1703,22 @@ pub async fn save_cropped_copy(
     })
     .await
     .map_err(|err| format!("Crop copy worker failed: {}", err))?
+}
+
+#[tauri::command]
+pub async fn save_scaled_copy(
+    file_path: String,
+    output_path: String,
+    width: u32,
+    height: u32,
+    smoothing: f32,
+    sharpening: f32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_scaled_copy_blocking(file_path, output_path, width, height, smoothing, sharpening)
+    })
+    .await
+    .map_err(|err| format!("Scale copy worker failed: {}", err))?
 }
 
 #[tauri::command]
@@ -2044,6 +2313,161 @@ mod tests {
 
         assert_eq!(cropped.dimensions(), (40, 30));
         assert_eq!(original.dimensions(), (100, 80));
+    }
+
+    #[test]
+    fn test_save_scaled_copy_blocking_writes_new_image_with_expected_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-scaled.png");
+
+        image::RgbaImage::from_pixel(100, 80, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        save_scaled_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            50,
+            40,
+            20.0,
+            30.0,
+        )
+        .unwrap();
+
+        let scaled = image::open(&output_path).unwrap();
+        let original = image::open(&input_path).unwrap();
+
+        assert_eq!(scaled.dimensions(), (50, 40));
+        assert_eq!(original.dimensions(), (100, 80));
+    }
+
+    #[test]
+    fn test_save_scaled_copy_blocking_rejects_invalid_dimensions() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-scaled.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_scaled_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            0,
+            40,
+            0.0,
+            0.0,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("greater than zero"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_scaled_copy_blocking_rejects_excessive_pixel_count() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-scaled.png");
+
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([120, 10, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_scaled_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            65_535,
+            65_535,
+            0.0,
+            0.0,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("limited to 50 megapixels"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_scaled_copy_preflight_rejects_huge_source_dimensions() {
+        let error =
+            validate_scale_working_memory(250_000, 1_000, 3840, 2160, 0.0, 0.0).unwrap_err();
+
+        assert!(error.contains("working memory"));
+    }
+
+    #[test]
+    fn test_save_scaled_copy_blocking_rejects_unsupported_source_format() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.svg");
+        let output_path = dir.path().join("source-scaled.jpg");
+        fs::write(&input_path, "<svg xmlns=\"http://www.w3.org/2000/svg\" />").unwrap();
+
+        let error = save_scaled_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            50,
+            40,
+            0.0,
+            0.0,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("source images"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_scaled_copy_blocking_rejects_unsupported_output_format() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-scaled.heic");
+
+        image::RgbaImage::from_pixel(100, 80, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+
+        let error = save_scaled_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            50,
+            40,
+            0.0,
+            0.0,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("can save"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn test_save_scaled_copy_blocking_can_replace_existing_output() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("source.png");
+        let output_path = dir.path().join("source-scaled.png");
+
+        image::RgbaImage::from_pixel(100, 80, image::Rgba([10, 20, 30, 255]))
+            .save(&input_path)
+            .unwrap();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 10, 30, 255]))
+            .save(&output_path)
+            .unwrap();
+
+        save_scaled_copy_blocking(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            50,
+            40,
+            0.0,
+            0.0,
+        )
+        .unwrap();
+
+        let scaled = image::open(&output_path).unwrap();
+        assert_eq!(scaled.dimensions(), (50, 40));
     }
 
     #[test]

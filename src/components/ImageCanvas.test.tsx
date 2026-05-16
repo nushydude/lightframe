@@ -161,6 +161,69 @@ describe('ImageCanvas', () => {
     expect(preloadFullAssetMock).not.toHaveBeenCalled();
   });
 
+  it('retains full-folder cache entries while favorites-only navigation is filtered', async () => {
+    const allImages = [
+      {
+        path: 'C:/images/hidden-a.jpg',
+        file_name: 'hidden-a.jpg',
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: '1',
+      },
+      {
+        path: 'C:/images/favorite.jpg',
+        file_name: 'favorite.jpg',
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: '1',
+      },
+      {
+        path: 'C:/images/hidden-b.jpg',
+        file_name: 'hidden-b.jpg',
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: '1',
+      },
+    ];
+    const visibleImages = [allImages[1]];
+    const expectedRetentionPaths = allImages.map((image) => image.path).sort();
+
+    useViewerStore.setState({
+      currentImagePath: visibleImages[0].path,
+      currentIndex: 0,
+      images: visibleImages,
+      allImages,
+      showOnlyFavorites: true,
+    });
+
+    render(<ImageCanvas />);
+
+    const folderPruneCall = trimImageAssetCacheMock.mock.calls.find(
+      ([, maxEntries]) => maxEntries === Number.POSITIVE_INFINITY
+    );
+    expect(Array.from(folderPruneCall?.[0] as Set<string>).sort()).toEqual(expectedRetentionPaths);
+    expect(folderPruneCall?.[2]).toMatchObject({ pruneMissing: true });
+
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const navigationTrimCall = trimImageAssetCacheMock.mock.calls.find(([, maxEntries]) =>
+      Number.isFinite(maxEntries as number)
+    );
+    const navigationTrimOptions = navigationTrimCall?.[2] as
+      | { pruneMissingPaths?: Set<string>; cancelOutsidePaths?: Set<string> }
+      | undefined;
+    expect(Array.from(navigationTrimOptions?.pruneMissingPaths ?? []).sort()).toEqual(
+      expectedRetentionPaths
+    );
+    expect(Array.from(navigationTrimOptions?.cancelOutsidePaths ?? []).sort()).toEqual(
+      expectedRetentionPaths
+    );
+  });
+
   it('prioritizes leading adjacent preloads in the current navigation direction', async () => {
     const images = Array.from({ length: 7 }, (_, index) => ({
       path: `C:/images/${index}.jpg`,

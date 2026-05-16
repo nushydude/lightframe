@@ -20,9 +20,34 @@ const DEFAULT_CROP_RECT: NormalizedCropRect = {
   width: 0.8,
   height: 0.8,
 };
+const NO_FAVORITES_MESSAGE = 'No favorite images found in the current folder';
 
 function isValidImageIndex(index: number, imageCount: number): boolean {
   return index >= 0 && index < imageCount;
+}
+
+type FavoritePathMap = Record<string, boolean>;
+
+function isFavoriteImage(image: ImageFile, favoritePaths: FavoritePathMap): boolean {
+  return Boolean(favoritePaths[image.path]);
+}
+
+function getVisibleImages(
+  images: ImageFile[],
+  showOnlyFavorites: boolean,
+  favoritePaths: FavoritePathMap
+): ImageFile[] {
+  return showOnlyFavorites
+    ? images.filter((image) => isFavoriteImage(image, favoritePaths))
+    : images;
+}
+
+function clampAdjustment(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 function getDefaultSecondaryIndex(primaryIndex: number, imageCount: number): number {
@@ -156,6 +181,7 @@ interface ViewerState {
   // Image state
   currentImagePath: string | null;
   folderPath: string | null;
+  allImages: ImageFile[];
   images: ImageFile[];
   currentIndex: number;
   isFolderScanning: boolean;
@@ -171,6 +197,8 @@ interface ViewerState {
   panX: number;
   panY: number;
   rotation: number; // In degrees
+  imageSmoothing: number;
+  imageSharpening: number;
   isCropMode: boolean;
   cropRect: NormalizedCropRect | null;
   pendingCropPreview: NormalizedCropRect | null;
@@ -187,6 +215,8 @@ interface ViewerState {
   showPerformanceTelemetry: boolean;
   errorMessage: string | null;
   viewMode: ViewMode;
+  showOnlyFavorites: boolean;
+  favoritePaths: FavoritePathMap;
   comparePrimaryIndex: number;
   compareSecondaryIndex: number;
   compareFocusedPane: CompareFocusedPane;
@@ -194,9 +224,11 @@ interface ViewerState {
   // Actions
   setCurrentImage: (path: string, index: number) => void;
   setImages: (images: ImageFile[]) => void;
+  setShowOnlyFavorites: (showOnlyFavorites: boolean) => void;
+  syncFavoriteFilter: (curationByPath: Record<string, { favorite?: boolean }>) => void;
   setFolderPath: (path: string) => void;
   setFolderScanning: (scanning: boolean) => void;
-  setCurrentIndex: (index: number) => void;
+  setCurrentIndex: (index: number, options?: { zoomMode?: ZoomMode }) => void;
   navigateNext: (loop?: boolean) => boolean;
   navigatePrev: (loop?: boolean) => boolean;
   navigateFirst: () => void;
@@ -209,6 +241,9 @@ interface ViewerState {
   setZoomLevel: (level: number) => void;
   setPan: (x: number, y: number) => void;
   resetZoom: () => void;
+  setImageSmoothing: (value: number) => void;
+  setImageSharpening: (value: number) => void;
+  resetImageAdjustments: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
   rotateClockwise: () => void;
@@ -248,6 +283,7 @@ interface ViewerState {
 const initialState = {
   currentImagePath: null,
   folderPath: null,
+  allImages: [],
   images: [],
   currentIndex: -1,
   isFolderScanning: false,
@@ -259,6 +295,8 @@ const initialState = {
   panX: 0,
   panY: 0,
   rotation: 0,
+  imageSmoothing: 0,
+  imageSharpening: 0,
   isCropMode: false,
   cropRect: null,
   pendingCropPreview: null,
@@ -273,6 +311,8 @@ const initialState = {
   cacheBuster: 0,
   loadGeneration: 0,
   viewMode: 'viewer' as ViewMode,
+  showOnlyFavorites: false,
+  favoritePaths: {},
   comparePrimaryIndex: -1,
   compareSecondaryIndex: -1,
   compareFocusedPane: 'secondary' as CompareFocusedPane,
@@ -371,6 +411,92 @@ function getCommittedEditState(
   };
 }
 
+function getFilteredImagesState(
+  state: ViewerState,
+  nextAllImages: ImageFile[],
+  nextShowOnlyFavorites: boolean,
+  nextFavoritePaths = state.favoritePaths
+): Partial<ViewerState> {
+  const nextImages = getVisibleImages(nextAllImages, nextShowOnlyFavorites, nextFavoritePaths);
+  const compareState = resolveCompareStateForImages(
+    state.images,
+    nextImages,
+    state.currentIndex,
+    state.comparePrimaryIndex,
+    state.compareSecondaryIndex,
+    state.compareFocusedPane
+  );
+  const updates: Partial<ViewerState> = {
+    allImages: nextAllImages,
+    images: nextImages,
+    showOnlyFavorites: nextShowOnlyFavorites,
+    favoritePaths: nextFavoritePaths,
+    comparePrimaryIndex: compareState.comparePrimaryIndex,
+    compareSecondaryIndex: compareState.compareSecondaryIndex,
+    compareFocusedPane: compareState.compareFocusedPane,
+  };
+
+  if (nextImages.length === 0) {
+    return {
+      ...updates,
+      currentImagePath: null,
+      currentIndex: -1,
+      viewMode: state.viewMode === 'compare' ? 'viewer' : state.viewMode,
+    };
+  }
+
+  const matchedIndex = state.currentImagePath
+    ? nextImages.findIndex((image) => image.path === state.currentImagePath)
+    : -1;
+  const nextIndex =
+    matchedIndex >= 0
+      ? matchedIndex
+      : Math.min(Math.max(state.currentIndex, 0), nextImages.length - 1);
+  const nextPath = nextImages[nextIndex]?.path ?? null;
+  const editFields = getEditFieldsForPath(nextPath, state.pendingEditsByPath);
+
+  return {
+    ...updates,
+    currentIndex: nextIndex,
+    currentImagePath: nextPath,
+    rotation: editFields.rotation,
+    cropRect: editFields.cropRect,
+    pendingCropPreview: editFields.pendingCropPreview,
+    isCropMode: false,
+    viewMode:
+      state.viewMode === 'compare' && compareState.compareSecondaryIndex === -1
+        ? 'viewer'
+        : state.viewMode,
+  };
+}
+
+function getFavoriteSafeImagesState(
+  state: ViewerState,
+  nextAllImages: ImageFile[],
+  nextShowOnlyFavorites: boolean,
+  nextFavoritePaths = state.favoritePaths
+): Partial<ViewerState> {
+  const filteredState = getFilteredImagesState(
+    state,
+    nextAllImages,
+    nextShowOnlyFavorites,
+    nextFavoritePaths
+  );
+
+  if (
+    !nextShowOnlyFavorites ||
+    nextAllImages.length === 0 ||
+    (filteredState.images?.length ?? 0) > 0
+  ) {
+    return filteredState;
+  }
+
+  return {
+    ...getFilteredImagesState(state, nextAllImages, false, nextFavoritePaths),
+    errorMessage: NO_FAVORITES_MESSAGE,
+  };
+}
+
 export const useViewerStore = create<ViewerState>((set, get) => {
   const syncCurrentPendingEdit = (
     recipe: (
@@ -436,46 +562,34 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     },
 
     setImages: (images) =>
+      set((state) => getFavoriteSafeImagesState(state, images, state.showOnlyFavorites)),
+
+    setShowOnlyFavorites: (showOnlyFavorites) =>
       set((state) => {
-        const compareState = resolveCompareStateForImages(
-          state.images,
-          images,
-          state.currentIndex,
-          state.comparePrimaryIndex,
-          state.compareSecondaryIndex,
-          state.compareFocusedPane
+        const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
+        return getFavoriteSafeImagesState(state, sourceImages, showOnlyFavorites);
+      }),
+
+    syncFavoriteFilter: (curationByPath) =>
+      set((state) => {
+        const nextFavoritePaths = Object.fromEntries(
+          Object.entries(curationByPath)
+            .filter(([, curation]) => Boolean(curation.favorite))
+            .map(([path]) => [path, true])
         );
-
-        const updates: Partial<ViewerState> = {
-          images,
-          comparePrimaryIndex: compareState.comparePrimaryIndex,
-          compareSecondaryIndex: compareState.compareSecondaryIndex,
-          compareFocusedPane: compareState.compareFocusedPane,
-        };
-
-        if (state.viewMode === 'compare' && compareState.comparePrimaryIndex !== -1) {
-          const primaryPath = images[compareState.comparePrimaryIndex]?.path ?? null;
-          const editFields = getEditFieldsForPath(primaryPath, state.pendingEditsByPath);
-          updates.currentIndex = compareState.comparePrimaryIndex;
-          updates.currentImagePath = primaryPath;
-          updates.rotation = editFields.rotation;
-          updates.cropRect = editFields.cropRect;
-          updates.pendingCropPreview = editFields.pendingCropPreview;
-          updates.isCropMode = false;
+        if (!state.showOnlyFavorites) {
+          return { favoritePaths: nextFavoritePaths };
         }
 
-        if (state.viewMode === 'compare' && compareState.compareSecondaryIndex === -1) {
-          updates.viewMode = 'viewer';
-        }
-
-        return updates;
+        const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
+        return getFavoriteSafeImagesState(state, sourceImages, true, nextFavoritePaths);
       }),
 
     setFolderPath: (path) => set({ folderPath: path }),
 
     setFolderScanning: (scanning) => set({ isFolderScanning: scanning }),
 
-    setCurrentIndex: (index: number) => {
+    setCurrentIndex: (index: number, options?: { zoomMode?: ZoomMode }) => {
       const { images, defaultZoomMode } = get();
       if (index < 0 || index >= images.length) return;
 
@@ -483,10 +597,11 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         const path = images[index].path;
         recordImageSelectedTelemetry(path);
         const editFields = getEditFieldsForPath(path, state.pendingEditsByPath);
+        const zoomMode = options?.zoomMode ?? defaultZoomMode;
         const updates: Partial<ViewerState> = {
           currentIndex: index,
           currentImagePath: path,
-          zoomMode: defaultZoomMode,
+          zoomMode,
           zoomLevel: 1,
           panX: 0,
           panY: 0,
@@ -557,14 +672,16 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     },
 
     removeImage: (index) => {
-      const { images, currentIndex } = get();
+      const { images, allImages, currentIndex } = get();
       if (index < 0 || index >= images.length) return;
 
-      const newImages = [...images];
-      newImages.splice(index, 1);
       const removedPath = images[index]?.path;
+      const sourceImages = allImages.length > 0 ? allImages : images;
+      const newAllImages = removedPath
+        ? sourceImages.filter((image) => image.path !== removedPath)
+        : sourceImages;
 
-      if (newImages.length === 0) {
+      if (newAllImages.length === 0) {
         get().reset();
       } else {
         set((state) => {
@@ -573,27 +690,17 @@ export const useViewerStore = create<ViewerState>((set, get) => {
             delete nextPendingEdits[removedPath];
           }
 
-          const compareState = resolveCompareStateForImages(
-            state.images,
-            newImages,
-            currentIndex,
-            state.comparePrimaryIndex,
-            state.compareSecondaryIndex,
-            state.compareFocusedPane
-          );
-
           return {
-            images: newImages,
+            ...getFavoriteSafeImagesState(state, newAllImages, state.showOnlyFavorites),
             pendingEditsByPath: nextPendingEdits,
-            comparePrimaryIndex: compareState.comparePrimaryIndex,
-            compareSecondaryIndex: compareState.compareSecondaryIndex,
-            compareFocusedPane: compareState.compareFocusedPane,
-            viewMode:
-              state.viewMode === 'compare' && compareState.compareSecondaryIndex === -1
-                ? 'viewer'
-                : state.viewMode,
           };
         });
+
+        const newImages = get().images;
+        if (newImages.length === 0) {
+          return;
+        }
+
         // If we deleted the current or a previous image, update the current index
         if (currentIndex >= newImages.length) {
           get().setCurrentIndex(newImages.length - 1);
@@ -625,6 +732,12 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     setPan: (x, y) => set({ panX: x, panY: y }),
 
     resetZoom: () => set({ zoomMode: 'fit', zoomLevel: 1, panX: 0, panY: 0 }),
+
+    setImageSmoothing: (value) => set({ imageSmoothing: clampAdjustment(value) }),
+
+    setImageSharpening: (value) => set({ imageSharpening: clampAdjustment(value) }),
+
+    resetImageAdjustments: () => set({ imageSmoothing: 0, imageSharpening: 0 }),
 
     zoomIn: () => {
       const { zoomLevel } = get();

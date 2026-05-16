@@ -331,10 +331,10 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         return;
       }
 
-      // 0: Fit to screen
+      // 0: Recenter and fit
       if (e.key === '0' && !e.ctrlKey) {
         e.preventDefault();
-        setZoomMode('fit');
+        resetZoom();
         return;
       }
 
