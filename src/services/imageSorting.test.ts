@@ -18,9 +18,19 @@ describe('sortImages', () => {
     expect(sorted.map((item) => item.file_name)).toEqual(['b.jpg', 'a.jpg']);
   });
 
-  it('keeps natural order for name', () => {
-    const sorted = sortImages(images, 'name');
-    expect(sorted.map((item) => item.file_name)).toEqual(['b.jpg', 'a.jpg']);
+  it('sorts by name with natural numeric ordering', () => {
+    const nameImages = [
+      { ...images[0], file_name: 'image10.jpg', path: 'c:/image10.jpg' },
+      { ...images[1], file_name: 'image2.jpg', path: 'c:/image2.jpg' },
+      { ...images[1], file_name: 'image1.jpg', path: 'c:/image1.jpg' },
+    ];
+
+    const sorted = sortImages(nameImages, 'name');
+    expect(sorted.map((item) => item.file_name)).toEqual([
+      'image1.jpg',
+      'image2.jpg',
+      'image10.jpg',
+    ]);
   });
 
   it('uses random comparator for random mode', () => {

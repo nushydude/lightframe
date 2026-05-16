@@ -1,5 +1,6 @@
 mod commands;
 mod folder_index;
+mod folder_watcher;
 mod path_normalization;
 mod thumbnails;
 
@@ -26,6 +27,7 @@ pub fn run() {
             }
 
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                folder_watcher::unwatch_active_folder();
                 if let Some(projector_window) = window.app_handle().get_webview_window("secondary")
                 {
                     let _ = projector_window.close();
@@ -35,6 +37,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::is_dir,
             commands::scan_folder,
+            folder_watcher::watch_folder,
+            folder_watcher::unwatch_folder,
             commands::read_folder_index,
             commands::refresh_folder_index,
             commands::get_image_metadata,

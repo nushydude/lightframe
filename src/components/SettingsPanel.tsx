@@ -270,6 +270,19 @@ export function SettingsPanel() {
             </div>
 
             <div className="setting-row">
+              <span className="setting-label">Auto-refresh folders</span>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={settings.autoRefreshFolder}
+                  onChange={(e) => handleChange('autoRefreshFolder', e.target.checked)}
+                  id="setting-auto-refresh-folder"
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
+            <div className="setting-row">
               <span className="setting-label">Remember window size</span>
               <label className="toggle-switch">
                 <input

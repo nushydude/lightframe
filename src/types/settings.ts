@@ -26,6 +26,7 @@ export interface AppSettings {
   promptProjectorGridOnOpen: boolean;
   openProjectorInGridView: boolean;
   performanceMode: PerformanceMode;
+  autoRefreshFolder: boolean;
   quickDestinations: QuickDestination[];
   externalEditorPath?: string;
   externalEditorLabel?: string;
@@ -45,6 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   promptProjectorGridOnOpen: true,
   openProjectorInGridView: false,
   performanceMode: 'balanced',
+  autoRefreshFolder: true,
   quickDestinations: [],
 };
 
@@ -68,6 +70,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     prompt_projector_grid_on_open: settings.promptProjectorGridOnOpen,
     open_projector_in_grid_view: settings.openProjectorInGridView,
     performance_mode: settings.performanceMode,
+    auto_refresh_folder: settings.autoRefreshFolder,
     quick_destinations: settings.quickDestinations.map((destination) => ({
       id: destination.id,
       label: destination.label,
@@ -109,6 +112,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     performanceMode: isPerformanceMode(raw.performance_mode)
       ? raw.performance_mode
       : DEFAULT_SETTINGS.performanceMode,
+    autoRefreshFolder: (raw.auto_refresh_folder as boolean) ?? DEFAULT_SETTINGS.autoRefreshFolder,
     quickDestinations: Array.isArray(raw.quick_destinations)
       ? raw.quick_destinations
           .map((value) => {

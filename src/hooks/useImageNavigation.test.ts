@@ -5,6 +5,7 @@ import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import {
   getParentFolder,
+  listenToFolderWatcherChanges,
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
@@ -17,6 +18,9 @@ vi.mock('../services/tauriCommands', () => ({
   scanFolder: vi.fn(),
   readFolderIndex: vi.fn(),
   refreshFolderIndex: vi.fn(),
+  watchFolder: vi.fn().mockResolvedValue(undefined),
+  unwatchFolder: vi.fn().mockResolvedValue(undefined),
+  listenToFolderWatcherChanges: vi.fn().mockResolvedValue(vi.fn()),
   getParentFolder: vi.fn(),
 }));
 
@@ -26,6 +30,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: vi.fn(() => ({
+    label: 'main',
     setTitle: vi.fn().mockResolvedValue(undefined),
   })),
 }));
@@ -63,6 +68,7 @@ describe('useImageNavigation', () => {
       settings: { ...useSettingsStore.getState().settings, sortOrder: 'name' },
     });
     vi.clearAllMocks();
+    (listenToFolderWatcherChanges as any).mockResolvedValue(vi.fn());
   });
 
   it('should open an image and scan the folder', async () => {
@@ -288,7 +294,7 @@ describe('useImageNavigation', () => {
 
     await waitFor(() => {
       expect(useViewerStore.getState().isFolderScanning).toBe(false);
-      expect(useViewerStore.getState().images).toEqual(verifiedImages);
+      expect(useViewerStore.getState().images).toEqual([verifiedImages[1], verifiedImages[0]]);
       expect(useViewerStore.getState().currentImagePath).toBe('c:/test/b.jpg');
     });
   });
@@ -509,6 +515,57 @@ describe('useImageNavigation', () => {
     expect(invalidateImageAsset).toHaveBeenCalledWith('c:/test/c.jpg');
   });
 
+  it('refresh invalidates changed same-path images and reloads the current image', async () => {
+    const initialImages = [
+      {
+        path: 'c:/test/a.jpg',
+        file_name: 'a.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/test/b.jpg',
+        file_name: 'b.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+
+    act(() => {
+      useViewerStore.getState().setFolderPath('c:/test');
+      useViewerStore.getState().setImages(initialImages);
+      useViewerStore.getState().setCurrentIndex(0);
+    });
+
+    (refreshFolderIndex as any).mockResolvedValue([
+      {
+        path: 'c:/test/a.jpg',
+        file_name: 'a.jpg',
+        extension: 'jpg',
+        size_bytes: 500,
+        modified_at: '5000',
+      },
+      initialImages[1],
+    ]);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.refreshFolder();
+    });
+
+    expect(invalidateThumbnail).toHaveBeenCalledWith('c:/test/a.jpg');
+    expect(invalidateImageAsset).toHaveBeenCalledWith('c:/test/a.jpg');
+    expect(useViewerStore.getState().cacheBuster).not.toBe(0);
+    expect(useViewerStore.getState().images[0]).toMatchObject({
+      path: 'c:/test/a.jpg',
+      size_bytes: 500,
+      modified_at: '5000',
+    });
+  });
+
   it('refresh handles an empty folder', async () => {
     act(() => {
       useViewerStore.getState().setFolderPath('c:/test');
@@ -583,5 +640,100 @@ describe('useImageNavigation', () => {
       'b.jpg',
       'a.jpg',
     ]);
+  });
+
+  it('refreshes again when watcher changes arrive during a folder scan', async () => {
+    const cachedImages = [
+      {
+        path: 'c:/test/a.jpg',
+        file_name: 'a.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/test/b.jpg',
+        file_name: 'b.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+    const verifiedImages = cachedImages;
+    const refreshedImages = [
+      ...cachedImages,
+      {
+        path: 'c:/test/c.jpg',
+        file_name: 'c.jpg',
+        extension: 'jpg',
+        size_bytes: 300,
+        modified_at: '3000',
+      },
+    ];
+    let resolveBackgroundRefresh: ((images: typeof verifiedImages) => void) | undefined;
+    let watcherHandler:
+      | ((payload: {
+          folderPath: string;
+          changes: Array<{
+            kind: 'added';
+            path: string;
+            image: (typeof refreshedImages)[number];
+          }>;
+          requiresFullRefresh: boolean;
+        }) => void)
+      | undefined;
+
+    (readFolderIndex as any).mockResolvedValue(cachedImages);
+    (refreshFolderIndex as any)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveBackgroundRefresh = resolve;
+          })
+      )
+      .mockResolvedValueOnce(refreshedImages);
+    (listenToFolderWatcherChanges as any).mockImplementation((handler: typeof watcherHandler) => {
+      watcherHandler = handler;
+      return Promise.resolve(vi.fn());
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+
+    await waitFor(() => {
+      expect(watcherHandler).toBeDefined();
+      expect(refreshFolderIndex).toHaveBeenCalledTimes(1);
+    });
+    expect(useViewerStore.getState().isFolderScanning).toBe(true);
+
+    act(() => {
+      watcherHandler?.({
+        folderPath: 'c:/test',
+        requiresFullRefresh: false,
+        changes: [
+          {
+            kind: 'added',
+            path: 'c:/test/c.jpg',
+            image: refreshedImages[2],
+          },
+        ],
+      });
+    });
+
+    resolveBackgroundRefresh?.(verifiedImages);
+
+    await waitFor(() => {
+      expect(refreshFolderIndex).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(useViewerStore.getState().images.map((image) => image.file_name)).toEqual([
+        'a.jpg',
+        'b.jpg',
+        'c.jpg',
+      ]);
+    });
   });
 });

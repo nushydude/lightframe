@@ -1,5 +1,5 @@
 import { convertFileSrc as tauriConvertFileSrc, invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import {
   availableMonitors,
@@ -41,9 +41,43 @@ export interface GeneratedImageAsset {
   file_size_bytes?: number | null;
 }
 
+export type FolderWatcherChangeKind = 'added' | 'removed' | 'modified' | 'renamed';
+
+export interface FolderWatcherChange {
+  kind: FolderWatcherChangeKind;
+  path: string;
+  oldPath?: string | null;
+  image?: ImageFile | null;
+}
+
+export interface FolderWatcherPayload {
+  folderPath: string;
+  changes: FolderWatcherChange[];
+  requiresFullRefresh: boolean;
+}
+
+const FOLDER_WATCHER_EVENT = 'folder-watcher-changed';
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });
+}
+
+/** Watch a folder and emit debounced change payloads */
+export async function watchFolder(folderPath: string, watchId: string): Promise<void> {
+  return invoke('watch_folder', { folderPath, watchId });
+}
+
+/** Stop watching the active folder */
+export async function unwatchFolder(watchId?: string): Promise<void> {
+  return invoke('unwatch_folder', { watchId });
+}
+
+/** Listen for debounced active-folder watcher updates */
+export async function listenToFolderWatcherChanges(
+  onChange: (payload: FolderWatcherPayload) => void
+): Promise<UnlistenFn> {
+  return listen<FolderWatcherPayload>(FOLDER_WATCHER_EVENT, (event) => onChange(event.payload));
 }
 
 /** Scan a folder for supported image files, returned in natural sort order */

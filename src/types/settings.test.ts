@@ -80,6 +80,17 @@ describe('settingsToRust', () => {
       performance_mode: 'lowMemory',
     });
   });
+
+  it('maps auto-refresh folder preference to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      autoRefreshFolder: false,
+    });
+
+    expect(rust).toMatchObject({
+      auto_refresh_folder: false,
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -158,5 +169,10 @@ describe('settingsFromRust', () => {
         performance_mode: 'ultra',
       }).performanceMode
     ).toBe(DEFAULT_SETTINGS.performanceMode);
+  });
+
+  it('parses auto-refresh folder preference with a default enabled fallback', () => {
+    expect(settingsFromRust({ auto_refresh_folder: false }).autoRefreshFolder).toBe(false);
+    expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
   });
 });
