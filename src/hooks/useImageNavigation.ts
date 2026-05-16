@@ -51,6 +51,7 @@ function playBoundaryBeep() {
 
 /** Hook for image navigation and file opening */
 export function useImageNavigation() {
+  const emptyFolderOpenMessage = 'No supported images found in the selected folder';
   const {
     images,
     currentIndex,
@@ -155,6 +156,85 @@ export function useImageNavigation() {
     [applyActiveSortOrder, isCurrentGeneration]
   );
 
+  const readCachedFolderImages = useCallback(
+    async (nextFolderPath: string) => {
+      try {
+        const cachedResult = await readFolderIndex(nextFolderPath);
+        const folderImages = Array.isArray(cachedResult) ? cachedResult : [];
+        return applyActiveSortOrder(folderImages);
+      } catch (err) {
+        console.warn('Failed to read folder index, falling back to live scan:', err);
+        return [];
+      }
+    },
+    [applyActiveSortOrder]
+  );
+
+  const setFolderWindowTitle = useCallback(async (nextFolderPath: string) => {
+    const appWindow = getCurrentWindow();
+    const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
+    await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
+  }, []);
+
+  const applyOpenedFolderImages = useCallback(
+    async (loadGeneration: number, nextFolderPath: string, folderImages: ImageFile[]) => {
+      if (folderImages.length === 0) {
+        clearPendingFolderOpenTelemetry(loadGeneration);
+        setError(emptyFolderOpenMessage);
+        return false;
+      }
+
+      setNextImageSelectionKind('folder-open');
+      applyFolderImages(folderImages, {
+        emptyMessage: emptyFolderOpenMessage,
+        preferredIndex: 0,
+        preferredPath: null,
+      });
+
+      await setFolderWindowTitle(nextFolderPath);
+      if (!isCurrentGeneration(loadGeneration)) {
+        clearPendingFolderOpenTelemetry(loadGeneration);
+        return false;
+      }
+
+      return true;
+    },
+    [applyFolderImages, isCurrentGeneration, setError, setFolderWindowTitle]
+  );
+
+  const startBackgroundFolderRefresh = useCallback(
+    (loadGeneration: number, nextFolderPath: string) => {
+      void (async () => {
+        try {
+          const verifiedImages = await scanIndexedFolder(loadGeneration, nextFolderPath);
+          if (!verifiedImages || !isCurrentGeneration(loadGeneration)) {
+            if (!verifiedImages) {
+              clearPendingFolderOpenTelemetry(loadGeneration);
+            }
+            return;
+          }
+
+          const state = useViewerStore.getState();
+          applyFolderImages(verifiedImages, {
+            emptyMessage: emptyFolderOpenMessage,
+            preferredIndex: state.currentIndex >= 0 ? state.currentIndex : 0,
+            preferredPath: state.currentImagePath,
+          });
+        } catch (err) {
+          console.error('Failed to refresh folder:', err);
+          if (isCurrentGeneration(loadGeneration)) {
+            setError(`Failed to refresh folder: ${err}`);
+          }
+        } finally {
+          if (isCurrentGeneration(loadGeneration)) {
+            setFolderScanning(false);
+          }
+        }
+      })();
+    },
+    [applyFolderImages, isCurrentGeneration, scanIndexedFolder, setError, setFolderScanning]
+  );
+
   const scanFolderForImage = useCallback(
     async (loadGeneration: number, filePath: string, parentFolder: string) => {
       try {
@@ -171,7 +251,7 @@ export function useImageNavigation() {
           (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
         );
         applyFolderImages(folderImages, {
-          emptyMessage: 'No supported images found in the selected folder',
+          emptyMessage: emptyFolderOpenMessage,
           preferredIndex: index >= 0 ? index : 0,
           preferredPath: filePath,
         });
@@ -186,7 +266,14 @@ export function useImageNavigation() {
         }
       }
     },
-    [isCurrentGeneration, setError, setFolderScanning, applyActiveSortOrder, applyFolderImages]
+    [
+      isCurrentGeneration,
+      setError,
+      setFolderScanning,
+      applyActiveSortOrder,
+      applyFolderImages,
+      emptyFolderOpenMessage,
+    ]
   );
 
   const loadImageFile = useCallback(
@@ -292,64 +379,25 @@ export function useImageNavigation() {
         setViewMode('viewer');
 
         beginFolderOpenTelemetry(loadGeneration);
-        let cachedImages: ImageFile[] = [];
-        try {
-          const cachedResult = await readFolderIndex(nextFolderPath);
-          cachedImages = Array.isArray(cachedResult) ? cachedResult : [];
-        } catch (err) {
-          console.warn('Failed to read folder index, falling back to live scan:', err);
-        }
+        const cachedImages = await readCachedFolderImages(nextFolderPath);
 
         if (!isCurrentGeneration(loadGeneration)) {
           clearPendingFolderOpenTelemetry(loadGeneration);
           return;
         }
 
-        cachedImages = applyActiveSortOrder(cachedImages);
-
         if (cachedImages.length > 0) {
-          setNextImageSelectionKind('folder-open');
-          applyFolderImages(cachedImages, {
-            emptyMessage: 'No supported images found in the selected folder',
-            preferredIndex: 0,
-            preferredPath: null,
-          });
-
-          const appWindow = getCurrentWindow();
-          const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-          await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
-          if (!isCurrentGeneration(loadGeneration)) {
+          const appliedCachedImages = await applyOpenedFolderImages(
+            loadGeneration,
+            nextFolderPath,
+            cachedImages
+          );
+          if (!appliedCachedImages) {
             return;
           }
 
           backgroundRefreshStarted = true;
-          void (async () => {
-            try {
-              const verifiedImages = await scanIndexedFolder(loadGeneration, nextFolderPath);
-              if (!verifiedImages || !isCurrentGeneration(loadGeneration)) {
-                if (!verifiedImages) {
-                  clearPendingFolderOpenTelemetry(loadGeneration);
-                }
-                return;
-              }
-
-              const state = useViewerStore.getState();
-              applyFolderImages(verifiedImages, {
-                emptyMessage: 'No supported images found in the selected folder',
-                preferredIndex: state.currentIndex >= 0 ? state.currentIndex : 0,
-                preferredPath: state.currentImagePath,
-              });
-            } catch (err) {
-              console.error('Failed to refresh folder:', err);
-              if (isCurrentGeneration(loadGeneration)) {
-                setError(`Failed to refresh folder: ${err}`);
-              }
-            } finally {
-              if (isCurrentGeneration(loadGeneration)) {
-                setFolderScanning(false);
-              }
-            }
-          })();
+          startBackgroundFolderRefresh(loadGeneration, nextFolderPath);
           return;
         }
 
@@ -359,25 +407,7 @@ export function useImageNavigation() {
           return;
         }
 
-        if (folderImages.length > 0) {
-          setNextImageSelectionKind('folder-open');
-          applyFolderImages(folderImages, {
-            emptyMessage: 'No supported images found in the selected folder',
-            preferredIndex: 0,
-            preferredPath: null,
-          });
-
-          const appWindow = getCurrentWindow();
-          const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-          await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
-          if (!isCurrentGeneration(loadGeneration)) {
-            clearPendingFolderOpenTelemetry(loadGeneration);
-            return;
-          }
-        } else {
-          clearPendingFolderOpenTelemetry(loadGeneration);
-          setError('No supported images found in the selected folder');
-        }
+        await applyOpenedFolderImages(loadGeneration, nextFolderPath, folderImages);
       } catch (err) {
         console.error('Failed to open folder:', err);
         clearPendingFolderOpenTelemetry(loadGeneration);
@@ -397,9 +427,10 @@ export function useImageNavigation() {
       setFolderPath,
       setFolderScanning,
       setViewMode,
-      applyActiveSortOrder,
-      applyFolderImages,
+      applyOpenedFolderImages,
+      readCachedFolderImages,
       scanIndexedFolder,
+      startBackgroundFolderRefresh,
     ]
   );
 
