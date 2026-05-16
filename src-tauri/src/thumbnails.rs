@@ -1,3 +1,4 @@
+use crate::path_normalization::normalize_path_for_key;
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -297,26 +298,6 @@ fn build_versioned_cache_key(
     }
 
     parts.join("|")
-}
-
-fn normalize_path_for_key(path: &Path) -> String {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
-    };
-
-    let canonical = fs::canonicalize(&absolute).unwrap_or(absolute);
-    let normalized = canonical.to_string_lossy().replace('\\', "/");
-
-    #[cfg(windows)]
-    {
-        normalized.to_lowercase()
-    }
-    #[cfg(not(windows))]
-    {
-        normalized
-    }
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {

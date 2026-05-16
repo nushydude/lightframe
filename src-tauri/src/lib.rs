@@ -1,4 +1,6 @@
 mod commands;
+mod folder_index;
+mod path_normalization;
 mod thumbnails;
 
 use tauri::Manager;
@@ -33,6 +35,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::is_dir,
             commands::scan_folder,
+            commands::read_folder_index,
+            commands::refresh_folder_index,
             commands::get_image_metadata,
             commands::get_preview_image,
             commands::read_settings,

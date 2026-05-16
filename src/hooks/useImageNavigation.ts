@@ -1,7 +1,13 @@
 import { useCallback, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { scanFolder, getParentFolder } from '../services/tauriCommands';
+import type { ImageFile } from '../types/image';
+import {
+  getParentFolder,
+  readFolderIndex,
+  refreshFolderIndex,
+  scanFolder,
+} from '../services/tauriCommands';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { sortImages } from '../services/imageSorting';
@@ -90,6 +96,65 @@ export function useImageNavigation() {
     }
   }, [currentIndex, images, setCurrentIndex, setImages, settings.sortOrder]);
 
+  const applyActiveSortOrder = useCallback(
+    (folderImages: ImageFile[]) =>
+      settings.sortOrder === 'name' ? folderImages : sortImages(folderImages, settings.sortOrder),
+    [settings.sortOrder]
+  );
+
+  const applyFolderImages = useCallback(
+    (
+      folderImages: ImageFile[],
+      options: {
+        emptyMessage: string;
+        preferredIndex: number;
+        preferredPath: string | null;
+      }
+    ) => {
+      setImages(folderImages);
+
+      if (folderImages.length === 0) {
+        useViewerStore.setState({ currentImagePath: null, currentIndex: -1 });
+        setError(options.emptyMessage);
+        return;
+      }
+
+      const matchedIndex = options.preferredPath
+        ? folderImages.findIndex((image) => image.path === options.preferredPath)
+        : -1;
+      const nextIndex =
+        matchedIndex >= 0
+          ? matchedIndex
+          : Math.min(Math.max(options.preferredIndex, 0), folderImages.length - 1);
+      const nextPath = folderImages[nextIndex]?.path ?? null;
+      const state = useViewerStore.getState();
+
+      if (state.currentIndex !== nextIndex || state.currentImagePath !== nextPath) {
+        setCurrentIndex(nextIndex);
+      }
+    },
+    [setCurrentIndex, setError, setImages]
+  );
+
+  const scanIndexedFolder = useCallback(
+    async (loadGeneration: number, nextFolderPath: string) => {
+      let folderImages = await measurePerformanceSpan('folderScan', () =>
+        refreshFolderIndex(nextFolderPath)
+      );
+      if (!isCurrentGeneration(loadGeneration)) {
+        return null;
+      }
+
+      folderImages = applyActiveSortOrder(folderImages);
+      if (!isCurrentGeneration(loadGeneration)) {
+        return null;
+      }
+
+      return folderImages;
+    },
+    [applyActiveSortOrder, isCurrentGeneration]
+  );
+
   const scanFolderForImage = useCallback(
     async (loadGeneration: number, filePath: string, parentFolder: string) => {
       try {
@@ -98,21 +163,18 @@ export function useImageNavigation() {
         );
         if (!isCurrentGeneration(loadGeneration)) return;
 
-        if (settings.sortOrder !== 'name') {
-          folderImages = sortImages(folderImages, settings.sortOrder);
-        }
+        folderImages = applyActiveSortOrder(folderImages);
         if (!isCurrentGeneration(loadGeneration)) return;
-
-        setImages(folderImages);
 
         const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
         const index = folderImages.findIndex(
           (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
         );
-
-        if (index >= 0 && isCurrentGeneration(loadGeneration)) {
-          setCurrentIndex(index);
-        }
+        applyFolderImages(folderImages, {
+          emptyMessage: 'No supported images found in the selected folder',
+          preferredIndex: index >= 0 ? index : 0,
+          preferredPath: filePath,
+        });
       } catch (err) {
         console.error('Failed to scan folder:', err);
         if (isCurrentGeneration(loadGeneration)) {
@@ -124,14 +186,7 @@ export function useImageNavigation() {
         }
       }
     },
-    [
-      isCurrentGeneration,
-      setCurrentIndex,
-      setError,
-      setFolderScanning,
-      setImages,
-      settings.sortOrder,
-    ]
+    [isCurrentGeneration, setError, setFolderScanning, applyActiveSortOrder, applyFolderImages]
   );
 
   const loadImageFile = useCallback(
@@ -229,6 +284,7 @@ export function useImageNavigation() {
   const openFolder = useCallback(
     async (nextFolderPath: string) => {
       const loadGeneration = beginLoadGeneration();
+      let backgroundRefreshStarted = false;
 
       try {
         setFolderPath(nextFolderPath);
@@ -236,27 +292,80 @@ export function useImageNavigation() {
         setViewMode('viewer');
 
         beginFolderOpenTelemetry(loadGeneration);
-        let folderImages = await measurePerformanceSpan('folderScan', () =>
-          scanFolder(nextFolderPath)
-        );
+        let cachedImages: ImageFile[] = [];
+        try {
+          const cachedResult = await readFolderIndex(nextFolderPath);
+          cachedImages = Array.isArray(cachedResult) ? cachedResult : [];
+        } catch (err) {
+          console.warn('Failed to read folder index, falling back to live scan:', err);
+        }
+
         if (!isCurrentGeneration(loadGeneration)) {
           clearPendingFolderOpenTelemetry(loadGeneration);
           return;
         }
 
-        if (settings.sortOrder !== 'name') {
-          folderImages = sortImages(folderImages, settings.sortOrder);
-        }
-        if (!isCurrentGeneration(loadGeneration)) {
-          clearPendingFolderOpenTelemetry(loadGeneration);
+        cachedImages = applyActiveSortOrder(cachedImages);
+
+        if (cachedImages.length > 0) {
+          setNextImageSelectionKind('folder-open');
+          applyFolderImages(cachedImages, {
+            emptyMessage: 'No supported images found in the selected folder',
+            preferredIndex: 0,
+            preferredPath: null,
+          });
+
+          const appWindow = getCurrentWindow();
+          const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
+          await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
+          if (!isCurrentGeneration(loadGeneration)) {
+            return;
+          }
+
+          backgroundRefreshStarted = true;
+          void (async () => {
+            try {
+              const verifiedImages = await scanIndexedFolder(loadGeneration, nextFolderPath);
+              if (!verifiedImages || !isCurrentGeneration(loadGeneration)) {
+                if (!verifiedImages) {
+                  clearPendingFolderOpenTelemetry(loadGeneration);
+                }
+                return;
+              }
+
+              const state = useViewerStore.getState();
+              applyFolderImages(verifiedImages, {
+                emptyMessage: 'No supported images found in the selected folder',
+                preferredIndex: state.currentIndex >= 0 ? state.currentIndex : 0,
+                preferredPath: state.currentImagePath,
+              });
+            } catch (err) {
+              console.error('Failed to refresh folder:', err);
+              if (isCurrentGeneration(loadGeneration)) {
+                setError(`Failed to refresh folder: ${err}`);
+              }
+            } finally {
+              if (isCurrentGeneration(loadGeneration)) {
+                setFolderScanning(false);
+              }
+            }
+          })();
           return;
         }
 
-        setImages(folderImages);
+        const folderImages = await scanIndexedFolder(loadGeneration, nextFolderPath);
+        if (!folderImages || !isCurrentGeneration(loadGeneration)) {
+          clearPendingFolderOpenTelemetry(loadGeneration);
+          return;
+        }
 
         if (folderImages.length > 0) {
           setNextImageSelectionKind('folder-open');
-          setCurrentIndex(0);
+          applyFolderImages(folderImages, {
+            emptyMessage: 'No supported images found in the selected folder',
+            preferredIndex: 0,
+            preferredPath: null,
+          });
 
           const appWindow = getCurrentWindow();
           const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
@@ -265,7 +374,7 @@ export function useImageNavigation() {
             clearPendingFolderOpenTelemetry(loadGeneration);
             return;
           }
-        } else if (isCurrentGeneration(loadGeneration)) {
+        } else {
           clearPendingFolderOpenTelemetry(loadGeneration);
           setError('No supported images found in the selected folder');
         }
@@ -276,7 +385,7 @@ export function useImageNavigation() {
           setError(`Failed to open folder: ${err}`);
         }
       } finally {
-        if (isCurrentGeneration(loadGeneration)) {
+        if (!backgroundRefreshStarted && isCurrentGeneration(loadGeneration)) {
           setFolderScanning(false);
         }
       }
@@ -284,13 +393,13 @@ export function useImageNavigation() {
     [
       beginLoadGeneration,
       isCurrentGeneration,
-      setCurrentIndex,
       setError,
       setFolderPath,
       setFolderScanning,
       setViewMode,
-      setImages,
-      settings.sortOrder,
+      applyActiveSortOrder,
+      applyFolderImages,
+      scanIndexedFolder,
     ]
   );
 
@@ -326,16 +435,12 @@ export function useImageNavigation() {
       setFolderScanning(true);
 
       let refreshedImages = await measurePerformanceSpan('folderScan', () =>
-        scanFolder(folderPath)
+        refreshFolderIndex(folderPath)
       );
       if (!isCurrentGeneration(loadGeneration)) return;
 
-      if (settings.sortOrder !== 'name') {
-        refreshedImages = sortImages(refreshedImages, settings.sortOrder);
-      }
+      refreshedImages = applyActiveSortOrder(refreshedImages);
       if (!isCurrentGeneration(loadGeneration)) return;
-
-      setImages(refreshedImages);
 
       const refreshedPaths = new Set(refreshedImages.map((image) => image.path));
       for (const existingPath of previousPaths) {
@@ -345,24 +450,11 @@ export function useImageNavigation() {
         }
       }
 
-      if (refreshedImages.length === 0) {
-        useViewerStore.setState({ currentImagePath: null, currentIndex: -1 });
-        setError('No supported images found in the current folder');
-        return;
-      }
-
-      if (previousImagePath) {
-        const previousPathIndex = refreshedImages.findIndex(
-          (image) => image.path === previousImagePath
-        );
-        if (previousPathIndex >= 0) {
-          setCurrentIndex(previousPathIndex);
-          return;
-        }
-      }
-
-      const nearestIndex = Math.min(Math.max(previousIndex, 0), refreshedImages.length - 1);
-      setCurrentIndex(nearestIndex);
+      applyFolderImages(refreshedImages, {
+        emptyMessage: 'No supported images found in the current folder',
+        preferredIndex: previousIndex,
+        preferredPath: previousImagePath,
+      });
     } catch (err) {
       console.error('Failed to refresh folder:', err);
       if (isCurrentGeneration(loadGeneration)) {
@@ -380,11 +472,10 @@ export function useImageNavigation() {
     folderPath,
     images,
     isCurrentGeneration,
-    setCurrentIndex,
     setError,
     setFolderScanning,
-    setImages,
-    settings.sortOrder,
+    applyActiveSortOrder,
+    applyFolderImages,
   ]);
 
   /** Navigate to the next image */
