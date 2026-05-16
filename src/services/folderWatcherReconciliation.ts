@@ -3,7 +3,16 @@ import type { AppSettings } from '../types/settings';
 import { sortImages } from './imageSorting';
 import type { FolderWatcherPayload } from './tauriCommands';
 
-export const MAX_INCREMENTAL_FOLDER_WATCHER_CHANGES = 64;
+const MAX_INCREMENTAL_FOLDER_WATCHER_CHANGES = 64;
+type FolderWatcherChange = FolderWatcherPayload['changes'][number];
+type ImagesByPath = Map<string, ImageFile>;
+
+interface FolderWatcherReconciliationDraft {
+  imagesByPath: ImagesByPath;
+  invalidatedPaths: Set<string>;
+  preferredPath: string | null;
+  currentImagePath: string | null;
+}
 
 export interface FolderWatcherReconciliationOptions {
   payload: FolderWatcherPayload;
@@ -25,58 +34,81 @@ export function reconcileFolderWatcherPayload(
   options: FolderWatcherReconciliationOptions
 ): FolderWatcherReconciliationResult {
   const { payload, images, currentIndex, currentImagePath, sortOrder } = options;
-  if (
-    payload.requiresFullRefresh ||
-    payload.changes.length > MAX_INCREMENTAL_FOLDER_WATCHER_CHANGES
-  ) {
-    return {
-      images,
-      invalidatedPaths: [],
-      preferredIndex: currentIndex,
-      preferredPath: currentImagePath,
-      requiresFullRefresh: true,
-    };
+  if (requiresFullRefresh(payload)) {
+    return fullRefreshResult(images, currentIndex, currentImagePath);
   }
 
-  const imagesByPath = new Map(images.map((image) => [pathKey(image.path), image]));
-  const invalidatedPaths = new Set<string>();
-  let preferredPath = currentImagePath;
+  const draft = applyFolderWatcherChanges(images, payload.changes, currentImagePath);
+  return reconcileDraft(draft, currentIndex, sortOrder);
+}
 
-  for (const change of payload.changes) {
-    switch (change.kind) {
-      case 'added':
-        if (change.image) {
-          invalidatedPaths.add(change.image.path);
-          imagesByPath.set(pathKey(change.image.path), change.image);
-          if (currentImagePath && isSamePath(change.image.path, currentImagePath)) {
-            preferredPath = change.image.path;
-          }
-        }
-        break;
-      case 'removed':
-        imagesByPath.delete(pathKey(change.path));
-        invalidatedPaths.add(change.path);
-        if (currentImagePath && isSamePath(change.path, currentImagePath)) {
-          preferredPath = null;
-        }
-        break;
-      case 'modified':
-        invalidatedPaths.add(change.path);
-        if (change.image) {
-          imagesByPath.set(pathKey(change.image.path), change.image);
-        }
-        break;
-      case 'renamed':
-        applyRenamedChange(imagesByPath, invalidatedPaths, change);
-        if (currentImagePath && change.oldPath && isSamePath(change.oldPath, currentImagePath)) {
-          preferredPath = change.image?.path ?? change.path;
-        }
-        break;
-    }
+function requiresFullRefresh(payload: FolderWatcherPayload): boolean {
+  return (
+    payload.requiresFullRefresh || payload.changes.length > MAX_INCREMENTAL_FOLDER_WATCHER_CHANGES
+  );
+}
+
+function fullRefreshResult(
+  images: ImageFile[],
+  currentIndex: number,
+  currentImagePath: string | null
+): FolderWatcherReconciliationResult {
+  return {
+    images,
+    invalidatedPaths: [],
+    preferredIndex: currentIndex,
+    preferredPath: currentImagePath,
+    requiresFullRefresh: true,
+  };
+}
+
+function applyFolderWatcherChanges(
+  images: ImageFile[],
+  changes: FolderWatcherChange[],
+  currentImagePath: string | null
+): FolderWatcherReconciliationDraft {
+  const draft: FolderWatcherReconciliationDraft = {
+    imagesByPath: new Map(images.map((image) => [pathKey(image.path), image])),
+    invalidatedPaths: new Set<string>(),
+    preferredPath: currentImagePath,
+    currentImagePath,
+  };
+
+  for (const change of changes) {
+    applyFolderWatcherChange(draft, change);
   }
 
-  const nextImages = sortImages(Array.from(imagesByPath.values()), sortOrder);
-  const preferredIndex = resolvePreferredIndex(nextImages, currentIndex, preferredPath);
+  return draft;
+}
+
+function applyFolderWatcherChange(
+  draft: FolderWatcherReconciliationDraft,
+  change: FolderWatcherChange
+) {
+  switch (change.kind) {
+    case 'added':
+      applyAddedChange(draft, change);
+      break;
+    case 'removed':
+      applyRemovedChange(draft, change);
+      break;
+    case 'modified':
+      applyModifiedChange(draft, change);
+      break;
+    case 'renamed':
+      applyRenamedChange(draft, change);
+      break;
+  }
+}
+
+function reconcileDraft(
+  draft: FolderWatcherReconciliationDraft,
+  currentIndex: number,
+  sortOrder: AppSettings['sortOrder']
+): FolderWatcherReconciliationResult {
+  const nextImages = sortImages(Array.from(draft.imagesByPath.values()), sortOrder);
+  const preferredIndex = resolvePreferredIndex(nextImages, currentIndex, draft.preferredPath);
+  const preferredPath = draft.preferredPath;
   const resolvedPreferredPath =
     preferredPath && nextImages.some((image) => isSamePath(image.path, preferredPath))
       ? preferredPath
@@ -84,26 +116,57 @@ export function reconcileFolderWatcherPayload(
 
   return {
     images: nextImages,
-    invalidatedPaths: Array.from(invalidatedPaths),
+    invalidatedPaths: Array.from(draft.invalidatedPaths),
     preferredIndex,
     preferredPath: resolvedPreferredPath,
     requiresFullRefresh: false,
   };
 }
 
-function applyRenamedChange(
-  imagesByPath: Map<string, ImageFile>,
-  invalidatedPaths: Set<string>,
-  change: FolderWatcherPayload['changes'][number]
-) {
-  if (change.oldPath) {
-    imagesByPath.delete(pathKey(change.oldPath));
-    invalidatedPaths.add(change.oldPath);
+function applyAddedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
+  if (!change.image) {
+    return;
   }
 
-  invalidatedPaths.add(change.path);
+  draft.invalidatedPaths.add(change.image.path);
+  draft.imagesByPath.set(pathKey(change.image.path), change.image);
+  if (draft.currentImagePath && isSamePath(change.image.path, draft.currentImagePath)) {
+    draft.preferredPath = change.image.path;
+  }
+}
+
+function applyRemovedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
+  draft.imagesByPath.delete(pathKey(change.path));
+  draft.invalidatedPaths.add(change.path);
+  if (draft.currentImagePath && isSamePath(change.path, draft.currentImagePath)) {
+    draft.preferredPath = null;
+  }
+}
+
+function applyModifiedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
+  draft.invalidatedPaths.add(change.path);
   if (change.image) {
-    imagesByPath.set(pathKey(change.image.path), change.image);
+    draft.imagesByPath.set(pathKey(change.image.path), change.image);
+  }
+}
+
+function applyRenamedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
+  if (change.oldPath) {
+    draft.imagesByPath.delete(pathKey(change.oldPath));
+    draft.invalidatedPaths.add(change.oldPath);
+  }
+
+  draft.invalidatedPaths.add(change.path);
+  if (change.image) {
+    draft.imagesByPath.set(pathKey(change.image.path), change.image);
+  }
+
+  if (
+    draft.currentImagePath &&
+    change.oldPath &&
+    isSamePath(change.oldPath, draft.currentImagePath)
+  ) {
+    draft.preferredPath = change.image?.path ?? change.path;
   }
 }
 

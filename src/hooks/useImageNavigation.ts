@@ -62,6 +62,78 @@ function hasImageRecordChanged(previous: ImageFile, next: ImageFile): boolean {
   return previous.size_bytes !== next.size_bytes || previous.modified_at !== next.modified_at;
 }
 
+interface FolderRefreshSnapshot {
+  activeFolderPath: string;
+  previousImagePath: string | null;
+  previousIndex: number;
+  previousImagesByPath: Map<string, ImageFile>;
+}
+
+function getFolderRefreshSnapshot(): FolderRefreshSnapshot | null {
+  const state = useViewerStore.getState();
+  if (!state.folderPath) {
+    return null;
+  }
+
+  return {
+    activeFolderPath: state.folderPath,
+    previousImagePath: state.currentImagePath,
+    previousIndex: state.currentIndex,
+    previousImagesByPath: new Map(
+      state.images.map((image) => [normalizePathKey(image.path), image])
+    ),
+  };
+}
+
+function collectFullRefreshInvalidatedPaths(
+  previousImagesByPath: Map<string, ImageFile>,
+  refreshedImages: ImageFile[]
+): Set<string> {
+  const refreshedImagesByPath = new Map(
+    refreshedImages.map((image) => [normalizePathKey(image.path), image])
+  );
+  const invalidatedPaths = new Set<string>();
+
+  for (const previousImage of previousImagesByPath.values()) {
+    if (!refreshedImagesByPath.has(normalizePathKey(previousImage.path))) {
+      invalidatedPaths.add(previousImage.path);
+    }
+  }
+
+  for (const refreshedImage of refreshedImages) {
+    const previousImage = previousImagesByPath.get(normalizePathKey(refreshedImage.path));
+    if (previousImage && hasImageRecordChanged(previousImage, refreshedImage)) {
+      invalidatedPaths.add(refreshedImage.path);
+    }
+  }
+
+  return invalidatedPaths;
+}
+
+function invalidateFolderRefreshAssets(
+  invalidatedPaths: Set<string>,
+  previousImagePath: string | null
+) {
+  for (const path of invalidatedPaths) {
+    invalidateThumbnail(path);
+    invalidateImageAsset(path);
+  }
+
+  if (previousImagePath && hasMatchingPath(invalidatedPaths, previousImagePath)) {
+    useViewerStore.setState({ cacheBuster: Date.now() });
+  }
+}
+
+function hasMatchingPath(paths: Set<string>, targetPath: string): boolean {
+  for (const path of paths) {
+    if (normalizePathKey(path) === normalizePathKey(targetPath)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /** Hook for image navigation and file opening */
 export function useImageNavigation() {
   const emptyFolderOpenMessage = 'No supported images found in the selected folder';
@@ -465,67 +537,35 @@ export function useImageNavigation() {
   }, [openFolder]);
 
   const refreshFolderFromDisk = useCallback(async () => {
-    const state = useViewerStore.getState();
-    const activeFolderPath = state.folderPath;
-    if (!activeFolderPath) {
+    const snapshot = getFolderRefreshSnapshot();
+    if (!snapshot) {
       setError('No folder is currently open to refresh');
       return;
     }
 
-    const previousImagePath = state.currentImagePath;
-    const previousIndex = state.currentIndex;
-    const previousImagesByPath = new Map(
-      state.images.map((image) => [normalizePathKey(image.path), image])
-    );
     const loadGeneration = beginLoadGeneration();
 
     try {
       setFolderScanning(true);
 
       let refreshedImages = await measurePerformanceSpan('folderScan', () =>
-        refreshFolderIndex(activeFolderPath)
+        refreshFolderIndex(snapshot.activeFolderPath)
       );
       if (!isCurrentGeneration(loadGeneration)) return;
 
       refreshedImages = applyActiveSortOrder(refreshedImages);
       if (!isCurrentGeneration(loadGeneration)) return;
 
-      const refreshedImagesByPath = new Map(
-        refreshedImages.map((image) => [normalizePathKey(image.path), image])
+      const invalidatedPaths = collectFullRefreshInvalidatedPaths(
+        snapshot.previousImagesByPath,
+        refreshedImages
       );
-      const invalidatedPaths = new Set<string>();
-
-      for (const previousImage of previousImagesByPath.values()) {
-        if (!refreshedImagesByPath.has(normalizePathKey(previousImage.path))) {
-          invalidatedPaths.add(previousImage.path);
-        }
-      }
-
-      for (const refreshedImage of refreshedImages) {
-        const previousImage = previousImagesByPath.get(normalizePathKey(refreshedImage.path));
-        if (previousImage && hasImageRecordChanged(previousImage, refreshedImage)) {
-          invalidatedPaths.add(refreshedImage.path);
-        }
-      }
-
-      for (const path of invalidatedPaths) {
-        invalidateThumbnail(path);
-        invalidateImageAsset(path);
-      }
-
-      if (
-        previousImagePath &&
-        Array.from(invalidatedPaths).some(
-          (path) => normalizePathKey(path) === normalizePathKey(previousImagePath)
-        )
-      ) {
-        useViewerStore.setState({ cacheBuster: Date.now() });
-      }
+      invalidateFolderRefreshAssets(invalidatedPaths, snapshot.previousImagePath);
 
       applyFolderImages(refreshedImages, {
         emptyMessage: 'No supported images found in the current folder',
-        preferredIndex: previousIndex,
-        preferredPath: previousImagePath,
+        preferredIndex: snapshot.previousIndex,
+        preferredPath: snapshot.previousImagePath,
       });
     } catch (err) {
       console.error('Failed to refresh folder:', err);
