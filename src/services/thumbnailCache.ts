@@ -1,16 +1,27 @@
-import { generatedImageAssetToUrl, getThumbnail } from './tauriCommands';
+import { generatedImageAssetToUrl, getThumbnail, type GeneratedImageAsset } from './tauriCommands';
 import { imageWorkScheduler } from './imageWorkScheduler';
 import {
   recordThumbnailCacheHit,
   recordThumbnailCacheMiss,
+  setThumbnailCacheBudgetBytesTelemetry,
+  setThumbnailCacheEstimatedBytesTelemetry,
   setThumbnailCacheEntryCountTelemetry,
 } from './performanceTelemetry';
+import { estimateThumbnailAssetBytes } from './cacheMemory';
+import { getPerformanceModeProfile } from './performanceMode';
+import {
+  releaseRetainedDecodedImage,
+  retainDecodedImage,
+  type RetainedImageHandle,
+} from './retainedImage';
 
-const DEFAULT_MAX_ENTRIES = 1000;
+const DEFAULT_FALLBACK_THUMBNAIL_SIZE = 160;
 type ThumbnailCacheEntry = {
   token: string;
   url?: string;
+  estimatedBytes: number;
   lastAccessedAt: number;
+  retainedImage?: RetainedImageHandle;
   inFlightPromise?: Promise<string>;
 };
 
@@ -34,10 +45,13 @@ const listenersByPath = new Map<string, Map<ThumbnailLoadedCallback, PreloadThum
 let latestKeepPaths = new Set<string>();
 
 let accessCounter = 0;
-let maxEntries = DEFAULT_MAX_ENTRIES;
+let thumbnailCacheBudgetBytes = getPerformanceModeProfile('balanced').thumbnailCacheBudgetBytes;
+let thumbnailCacheEstimatedBytes = 0;
 
 function syncThumbnailTelemetry(): void {
   setThumbnailCacheEntryCountTelemetry(thumbnailCache.size);
+  setThumbnailCacheEstimatedBytesTelemetry(thumbnailCacheEstimatedBytes);
+  setThumbnailCacheBudgetBytesTelemetry(thumbnailCacheBudgetBytes);
 }
 
 function touchEntry(entry: ThumbnailCacheEntry): void {
@@ -50,6 +64,46 @@ function normalizeLimit(value: number, fallback: number): number {
   return Math.max(0, Math.floor(value));
 }
 
+function releaseThumbnailCacheEntry(entry: ThumbnailCacheEntry): void {
+  releaseRetainedDecodedImage(entry.retainedImage);
+}
+
+function deleteThumbnailCacheEntry(path: string): void {
+  const entry = thumbnailCache.get(path);
+  if (!entry) {
+    return;
+  }
+
+  thumbnailCache.delete(path);
+  thumbnailCacheEstimatedBytes -= entry.estimatedBytes;
+  releaseThumbnailCacheEntry(entry);
+}
+
+function setThumbnailCacheEntry(path: string, entry: ThumbnailCacheEntry): void {
+  deleteThumbnailCacheEntry(path);
+  thumbnailCache.set(path, entry);
+  thumbnailCacheEstimatedBytes += entry.estimatedBytes;
+}
+
+function updateThumbnailEntryAsset(
+  entry: ThumbnailCacheEntry,
+  url: string,
+  width?: number | null,
+  height?: number | null
+): void {
+  releaseRetainedDecodedImage(entry.retainedImage);
+  thumbnailCacheEstimatedBytes -= entry.estimatedBytes;
+  entry.url = url;
+  entry.estimatedBytes = estimateThumbnailAssetBytes({
+    url,
+    width,
+    height,
+    fallbackSize: DEFAULT_FALLBACK_THUMBNAIL_SIZE,
+  });
+  entry.retainedImage = retainDecodedImage(url);
+  thumbnailCacheEstimatedBytes += entry.estimatedBytes;
+}
+
 function getOrCreateEntry(path: string, token: string): ThumbnailCacheEntry {
   const existing = thumbnailCache.get(path);
   if (existing && existing.token === token) {
@@ -59,10 +113,11 @@ function getOrCreateEntry(path: string, token: string): ThumbnailCacheEntry {
 
   const created: ThumbnailCacheEntry = {
     token,
+    estimatedBytes: 0,
     lastAccessedAt: 0,
   };
   touchEntry(created);
-  thumbnailCache.set(path, created);
+  setThumbnailCacheEntry(path, created);
   return created;
 }
 
@@ -132,7 +187,7 @@ function clearStaleListeners(keepPaths: Set<string>): void {
 }
 
 function enforceCacheLimit(): void {
-  if (thumbnailCache.size <= maxEntries) {
+  if (thumbnailCacheEstimatedBytes <= thumbnailCacheBudgetBytes) {
     return;
   }
 
@@ -146,11 +201,11 @@ function enforceCacheLimit(): void {
     });
 
   for (const [path] of evictable) {
-    if (thumbnailCache.size <= maxEntries) {
+    if (thumbnailCacheEstimatedBytes <= thumbnailCacheBudgetBytes) {
       break;
     }
 
-    thumbnailCache.delete(path);
+    deleteThumbnailCacheEntry(path);
     listenersByPath.delete(path);
     requestMetadataByPath.delete(path);
   }
@@ -158,12 +213,13 @@ function enforceCacheLimit(): void {
   syncThumbnailTelemetry();
 }
 
-function resolveSuccess(path: string, token: string, url: string): string {
+function resolveSuccess(path: string, token: string, asset: GeneratedImageAsset): string {
+  const url = generatedImageAssetToUrl(asset);
   const entry = thumbnailCache.get(path);
   let isCurrentToken = false;
   if (entry && entry.token === token) {
     isCurrentToken = true;
-    entry.url = url;
+    updateThumbnailEntryAsset(entry, url, asset.width, asset.height);
     touchEntry(entry);
     entry.inFlightPromise = undefined;
   }
@@ -180,7 +236,7 @@ function resolveSuccess(path: string, token: string, url: string): string {
 function resolveError(path: string, token: string, error: unknown): never {
   const entry = thumbnailCache.get(path);
   if (entry?.token === token) {
-    thumbnailCache.delete(path);
+    deleteThumbnailCacheEntry(path);
     requestMetadataByPath.delete(path);
     clearListeners(path);
   }
@@ -206,7 +262,7 @@ function loadThumbnailWithPriority(
   const existingMetadata = requestMetadataByPath.get(path);
   if (existingMetadata && metadataToken(existingMetadata) !== token) {
     imageWorkScheduler.cancelQueued((job) => job.key.startsWith(`thumbnail:${path}::`));
-    thumbnailCache.delete(path);
+    deleteThumbnailCacheEntry(path);
   }
 
   const cached = getCachedThumbnail(normalized);
@@ -242,10 +298,10 @@ function loadThumbnailWithPriority(
           throw createAbortError('Thumbnail work aborted after execution.');
         }
 
-        return generatedImageAssetToUrl(asset);
+        return asset;
       },
     })
-    .promise.then((url) => resolveSuccess(path, token, url))
+    .promise.then((asset) => resolveSuccess(path, token, asset))
     .catch((error) => resolveError(path, token, error));
 
   syncThumbnailTelemetry();
@@ -257,7 +313,7 @@ export function getCachedThumbnail(request: string | ThumbnailRequest): string |
   const { path } = normalized;
   const existingMetadata = requestMetadataByPath.get(path);
   if (existingMetadata && metadataToken(existingMetadata) !== metadataToken(normalized)) {
-    thumbnailCache.delete(path);
+    deleteThumbnailCacheEntry(path);
     requestMetadataByPath.set(path, normalized);
   }
 
@@ -282,7 +338,7 @@ export function invalidateThumbnail(path: string): void {
   imageWorkScheduler.cancelQueued(
     (job) => job.sourcePath === path && job.key.startsWith(`thumbnail:${path}::`)
   );
-  thumbnailCache.delete(path);
+  deleteThumbnailCacheEntry(path);
   requestMetadataByPath.delete(path);
   listenersByPath.delete(path);
   syncThumbnailTelemetry();
@@ -309,9 +365,12 @@ export function preloadThumbnails(
   });
 }
 
-export function evictThumbnailsExcept(keepPaths: Set<string>, maxEntriesOverride?: number): void {
-  if (typeof maxEntriesOverride === 'number') {
-    maxEntries = normalizeLimit(maxEntriesOverride, DEFAULT_MAX_ENTRIES);
+export function evictThumbnailsExcept(
+  keepPaths: Set<string>,
+  cacheBudgetBytesOverride?: number
+): void {
+  if (typeof cacheBudgetBytesOverride === 'number') {
+    thumbnailCacheBudgetBytes = normalizeLimit(cacheBudgetBytesOverride, thumbnailCacheBudgetBytes);
   }
 
   latestKeepPaths = new Set(keepPaths);
@@ -325,15 +384,28 @@ export function evictThumbnailsExcept(keepPaths: Set<string>, maxEntriesOverride
   enforceCacheLimit();
 }
 
+export function configureThumbnailCache(options: { cacheBudgetBytes?: number }): void {
+  thumbnailCacheBudgetBytes = normalizeLimit(
+    options.cacheBudgetBytes ?? thumbnailCacheBudgetBytes,
+    thumbnailCacheBudgetBytes
+  );
+  enforceCacheLimit();
+  syncThumbnailTelemetry();
+}
+
 // Reset hook is intentionally test-only.
 // fallow-ignore-next-line unused-export
 export function clearThumbnailCacheForTests(): void {
   imageWorkScheduler.resetForTests();
+  for (const entry of thumbnailCache.values()) {
+    releaseThumbnailCacheEntry(entry);
+  }
   thumbnailCache.clear();
+  thumbnailCacheEstimatedBytes = 0;
   listenersByPath.clear();
   requestMetadataByPath.clear();
   latestKeepPaths = new Set();
   accessCounter = 0;
-  maxEntries = DEFAULT_MAX_ENTRIES;
+  thumbnailCacheBudgetBytes = getPerformanceModeProfile('balanced').thumbnailCacheBudgetBytes;
   syncThumbnailTelemetry();
 }

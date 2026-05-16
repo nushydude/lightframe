@@ -9,7 +9,6 @@ import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 
 const THUMBNAIL_ITEM_WIDTH = 78;
 const THUMBNAIL_WINDOW_RADIUS = 35;
-const MAX_STRIP_THUMBNAILS = 1000;
 
 /**
  * A high-performance horizontal strip of thumbnails for quick navigation.
@@ -48,7 +47,7 @@ export function ThumbnailStrip() {
       }
     );
     const visiblePaths = visibleImages.map((image) => image.path);
-    evictThumbnailsExcept(new Set(visiblePaths), MAX_STRIP_THUMBNAILS);
+    evictThumbnailsExcept(new Set(visiblePaths));
   }, [handleThumbnailLoaded, isThumbnailConsumerActive, visibleImages]);
 
   useEffect(() => {

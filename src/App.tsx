@@ -26,6 +26,9 @@ import {
   resetPerformanceTelemetry,
   setPerformanceTelemetryEnabled,
 } from './services/performanceTelemetry';
+import { configureImageAssetCache } from './services/imageAssetCache';
+import { configureThumbnailCache } from './services/thumbnailCache';
+import { getPerformanceModeProfile } from './services/performanceMode';
 import {
   copyCurrentImage,
   deleteCurrentImage,
@@ -132,6 +135,12 @@ function App() {
       root.setAttribute('data-theme', settings.theme);
     }
   }, [settings.theme]);
+
+  useEffect(() => {
+    const profile = getPerformanceModeProfile(settings.performanceMode);
+    configureImageAssetCache({ previewCacheBudgetBytes: profile.previewCacheBudgetBytes });
+    configureThumbnailCache({ cacheBudgetBytes: profile.thumbnailCacheBudgetBytes });
+  }, [settings.performanceMode]);
 
   // Keep viewer default zoom mode in sync with settings for newly opened images.
   useEffect(() => {

@@ -29,7 +29,11 @@ import {
   setImageWorkQueueDepthTelemetry,
   setNextImageSelectionKind,
   setPerformanceTelemetryEnabled,
+  setPreviewAssetCacheBudgetBytesTelemetry,
+  setPreviewAssetCacheEstimatedBytesTelemetry,
   setPreviewAssetCacheEntryCountTelemetry,
+  setThumbnailCacheBudgetBytesTelemetry,
+  setThumbnailCacheEstimatedBytesTelemetry,
   setThumbnailCacheEntryCountTelemetry,
   setThumbnailInFlightTelemetry,
   setThumbnailQueueDepthTelemetry,
@@ -96,7 +100,11 @@ describe('performanceTelemetry', () => {
     setThumbnailQueueDepthTelemetry(4);
     setThumbnailInFlightTelemetry(2);
     setThumbnailCacheEntryCountTelemetry(8);
+    setThumbnailCacheEstimatedBytesTelemetry(32 * 1024 * 1024);
+    setThumbnailCacheBudgetBytesTelemetry(64 * 1024 * 1024);
     setPreviewAssetCacheEntryCountTelemetry(3);
+    setPreviewAssetCacheEstimatedBytesTelemetry(96 * 1024 * 1024);
+    setPreviewAssetCacheBudgetBytesTelemetry(192 * 1024 * 1024);
     setFullAssetCacheEntryCountTelemetry(5);
     setImageWorkQueueDepthTelemetry(6);
     setImageWorkActiveCountTelemetry(4);
@@ -123,7 +131,11 @@ describe('performanceTelemetry', () => {
     expect(snapshot.caches.previewAssets.hitRate).toBe(0.5);
     expect(snapshot.caches.fullAssets.hitRate).toBe(0.5);
     expect(snapshot.caches.thumbnail.entries).toBe(8);
+    expect(snapshot.caches.thumbnail.estimatedBytes).toBe(32 * 1024 * 1024);
+    expect(snapshot.caches.thumbnail.budgetBytes).toBe(64 * 1024 * 1024);
     expect(snapshot.caches.previewAssets.entries).toBe(3);
+    expect(snapshot.caches.previewAssets.estimatedBytes).toBe(96 * 1024 * 1024);
+    expect(snapshot.caches.previewAssets.budgetBytes).toBe(192 * 1024 * 1024);
     expect(snapshot.caches.fullAssets.entries).toBe(5);
     expect(snapshot.queues.thumbnailQueueDepth).toBe(4);
     expect(snapshot.queues.thumbnailInFlight).toBe(2);

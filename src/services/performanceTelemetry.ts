@@ -33,7 +33,11 @@ type GaugeKey =
   | 'thumbnailQueueDepth'
   | 'thumbnailInFlight'
   | 'thumbnailCacheEntries'
+  | 'thumbnailCacheEstimatedBytes'
+  | 'thumbnailCacheBudgetBytes'
   | 'previewAssetCacheEntries'
+  | 'previewAssetCacheEstimatedBytes'
+  | 'previewAssetCacheBudgetBytes'
   | 'fullAssetCacheEntries'
   | 'imageWorkQueueDepth'
   | 'imageWorkActiveCount'
@@ -107,8 +111,16 @@ export interface PerformanceTelemetrySnapshot {
   };
   latencies: Record<TelemetryLatencyMetricKey, TelemetryLatencySummarySnapshot>;
   caches: {
-    thumbnail: TelemetryRateSnapshot & { entries: number };
-    previewAssets: TelemetryRateSnapshot & { entries: number };
+    thumbnail: TelemetryRateSnapshot & {
+      entries: number;
+      estimatedBytes: number;
+      budgetBytes: number;
+    };
+    previewAssets: TelemetryRateSnapshot & {
+      entries: number;
+      estimatedBytes: number;
+      budgetBytes: number;
+    };
     fullAssets: TelemetryRateSnapshot & { entries: number };
   };
   queues: {
@@ -189,7 +201,11 @@ function createGaugeState(): Record<GaugeKey, number> {
     thumbnailQueueDepth: 0,
     thumbnailInFlight: 0,
     thumbnailCacheEntries: 0,
+    thumbnailCacheEstimatedBytes: 0,
+    thumbnailCacheBudgetBytes: 0,
     previewAssetCacheEntries: 0,
+    previewAssetCacheEstimatedBytes: 0,
+    previewAssetCacheBudgetBytes: 0,
     fullAssetCacheEntries: 0,
     imageWorkQueueDepth: 0,
     imageWorkActiveCount: 0,
@@ -294,6 +310,8 @@ function buildSnapshot(): PerformanceTelemetrySnapshot {
           state.counters.thumbnailCacheMisses
         ),
         entries: state.gauges.thumbnailCacheEntries,
+        estimatedBytes: state.gauges.thumbnailCacheEstimatedBytes,
+        budgetBytes: state.gauges.thumbnailCacheBudgetBytes,
       },
       previewAssets: {
         hits: state.counters.previewAssetCacheHits,
@@ -303,6 +321,8 @@ function buildSnapshot(): PerformanceTelemetrySnapshot {
           state.counters.previewAssetCacheMisses
         ),
         entries: state.gauges.previewAssetCacheEntries,
+        estimatedBytes: state.gauges.previewAssetCacheEstimatedBytes,
+        budgetBytes: state.gauges.previewAssetCacheBudgetBytes,
       },
       fullAssets: {
         hits: state.counters.fullAssetCacheHits,
@@ -704,8 +724,24 @@ export function setThumbnailCacheEntryCountTelemetry(value: number): void {
   setPerformanceGauge('thumbnailCacheEntries', value);
 }
 
+export function setThumbnailCacheEstimatedBytesTelemetry(value: number): void {
+  setPerformanceGauge('thumbnailCacheEstimatedBytes', value);
+}
+
+export function setThumbnailCacheBudgetBytesTelemetry(value: number): void {
+  setPerformanceGauge('thumbnailCacheBudgetBytes', value);
+}
+
 export function setPreviewAssetCacheEntryCountTelemetry(value: number): void {
   setPerformanceGauge('previewAssetCacheEntries', value);
+}
+
+export function setPreviewAssetCacheEstimatedBytesTelemetry(value: number): void {
+  setPerformanceGauge('previewAssetCacheEstimatedBytes', value);
+}
+
+export function setPreviewAssetCacheBudgetBytesTelemetry(value: number): void {
+  setPerformanceGauge('previewAssetCacheBudgetBytes', value);
 }
 
 export function setFullAssetCacheEntryCountTelemetry(value: number): void {

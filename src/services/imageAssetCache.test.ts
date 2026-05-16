@@ -1,22 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { estimatePreviewAssetBytes } from './cacheMemory';
 
 const convertFileSrcMock = vi.fn((path: string) => `asset://localhost/${path}`);
-const getPreviewImageMock = vi.fn(
-  async (
-    path: string,
-    maxDimension: number,
-    invalidationBust?: number
-  ): Promise<{ file_path: string; cache_key: string }> => ({
-    file_path: `C:/cache/preview-${maxDimension}-${path.replace(/[:/]/g, '_')}-${invalidationBust ?? 'base'}.jpg`,
-    cache_key: `preview-${maxDimension}-${path}-${invalidationBust ?? 'base'}`,
-  })
-);
+const retainDecodedImageMock = vi.fn((url: string) => ({ url }) as unknown as HTMLImageElement);
+const releaseRetainedDecodedImageMock = vi.fn();
+type GeneratedImageAssetMock = {
+  file_path: string;
+  cache_key: string;
+  width?: number;
+  height?: number;
+};
+
+const defaultGetPreviewImageMock = async (
+  path: string,
+  maxDimension: number,
+  invalidationBust?: number
+): Promise<GeneratedImageAssetMock> => ({
+  file_path: `C:/cache/preview-${maxDimension}-${path.replace(/[:/]/g, '_')}-${invalidationBust ?? 'base'}.jpg`,
+  cache_key: `preview-${maxDimension}-${path}-${invalidationBust ?? 'base'}`,
+});
+const getPreviewImageMock = vi.fn(defaultGetPreviewImageMock);
 
 vi.mock('./tauriCommands', () => ({
   convertFileSrc: convertFileSrcMock,
   generatedImageAssetToUrl: (asset: { file_path: string; cache_key: string }) =>
     `${convertFileSrcMock(asset.file_path)}?v=${encodeURIComponent(asset.cache_key)}`,
   getPreviewImage: getPreviewImageMock,
+}));
+
+vi.mock('./retainedImage', () => ({
+  retainDecodedImage: retainDecodedImageMock,
+  releaseRetainedDecodedImage: releaseRetainedDecodedImageMock,
 }));
 
 async function loadCacheModule() {
@@ -37,6 +51,10 @@ describe('imageAssetCache', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    getPreviewImageMock.mockImplementation(defaultGetPreviewImageMock);
+    retainDecodedImageMock.mockImplementation(
+      (url: string) => ({ url }) as unknown as HTMLImageElement
+    );
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
   });
@@ -193,19 +211,102 @@ describe('imageAssetCache', () => {
     expect(getPreviewImageMock).toHaveBeenLastCalledWith(path, 2048, invalidationVersion);
   });
 
-  it('keeps preview cache bounded and evicts least-recently-used entries', async () => {
-    const { getPreviewAsset } = await loadCacheModule();
-    const paths = Array.from({ length: 13 }, (_, i) => `C:/images/preview-${i}.jpg`);
+  it('keeps the current preview cached even when the byte budget is exhausted', async () => {
+    const { configureImageAssetCache, getPreviewAsset } = await loadCacheModule();
+    const path = 'C:/images/current-pressure.jpg';
 
-    for (const [index, path] of paths.entries()) {
-      vi.setSystemTime(new Date(`2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`));
-      await getPreviewAsset(path);
-    }
+    configureImageAssetCache({ previewCacheBudgetBytes: 0 });
 
-    expect(getPreviewImageMock).toHaveBeenCalledTimes(13);
+    await getPreviewAsset(path);
+    await getPreviewAsset(path);
+
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('evicts least-recently-used preview assets under byte pressure while protecting keep paths', async () => {
+    const { configureImageAssetCache, getPreviewAsset, trimImageAssetCache } =
+      await loadCacheModule();
+    const paths = Array.from({ length: 3 }, (_, i) => `C:/images/preview-${i}.jpg`);
+
+    const firstUrl = await getPreviewAsset(paths[0]);
+    const perEntryBytes = estimatePreviewAssetBytes({
+      maxDimension: 2048,
+      url: firstUrl,
+    });
+    configureImageAssetCache({ previewCacheBudgetBytes: perEntryBytes * 2 });
+
+    vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'));
+    await getPreviewAsset(paths[1]);
+    vi.setSystemTime(new Date('2026-01-01T00:00:02.000Z'));
+    await getPreviewAsset(paths[2]);
+
+    trimImageAssetCache(new Set([paths[1], paths[2]]), 12);
+
+    await getPreviewAsset(paths[1]);
+    await getPreviewAsset(paths[2]);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(3);
 
     await getPreviewAsset(paths[0]);
-    expect(getPreviewImageMock).toHaveBeenCalledTimes(14);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('uses generated preview dimensions for byte-budget eviction', async () => {
+    const { configureImageAssetCache, getPreviewAsset } = await loadCacheModule();
+    const pathA = 'C:/images/small-preview-a.jpg';
+    const pathB = 'C:/images/small-preview-b.jpg';
+
+    getPreviewImageMock.mockImplementation(async (path: string, maxDimension: number) => ({
+      file_path: `C:/cache/small-${path.replace(/[:/]/g, '_')}.jpg`,
+      cache_key: `small-${maxDimension}-${path}`,
+      width: 640,
+      height: 360,
+    }));
+
+    const firstUrl = await getPreviewAsset(pathA);
+    configureImageAssetCache({
+      previewCacheBudgetBytes:
+        estimatePreviewAssetBytes({
+          maxDimension: 2048,
+          url: firstUrl,
+          width: 640,
+          height: 360,
+        }) *
+          2 +
+        4096,
+    });
+
+    await getPreviewAsset(pathB);
+    await getPreviewAsset(pathA);
+
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('demotes stale adjacent preview protections when the budget shrinks', async () => {
+    const { configureImageAssetCache, getPreviewAsset, trimImageAssetCache } =
+      await loadCacheModule();
+    const paths = [
+      'C:/images/current-preview.jpg',
+      'C:/images/old-adjacent-a.jpg',
+      'C:/images/old-adjacent-b.jpg',
+    ];
+
+    const currentUrl = await getPreviewAsset(paths[0]);
+    await getPreviewAsset(paths[1]);
+    await getPreviewAsset(paths[2]);
+
+    trimImageAssetCache(new Set(paths), 12);
+    configureImageAssetCache({
+      previewCacheBudgetBytes: estimatePreviewAssetBytes({
+        maxDimension: 2048,
+        url: currentUrl,
+      }),
+    });
+
+    await getPreviewAsset(paths[0]);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(3);
+
+    await getPreviewAsset(paths[1]);
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(4);
   });
 
   it('does not persist full asset cache entry when stale preload guard expires', async () => {
@@ -250,8 +351,27 @@ describe('imageAssetCache', () => {
     });
     await pendingPreload;
 
+    expect(retainDecodedImageMock).not.toHaveBeenCalled();
+
     await getPreviewAsset(path);
     expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
+    expect(retainDecodedImageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not create a throwaway image for preview preloads', async () => {
+    const originalImage = globalThis.Image;
+    const imageConstructor = vi.fn();
+    globalThis.Image = imageConstructor as unknown as typeof Image;
+
+    try {
+      const { preloadPreviewAsset } = await loadCacheModule();
+      await preloadPreviewAsset('C:/images/preload-retained-only.jpg');
+
+      expect(retainDecodedImageMock).toHaveBeenCalledTimes(1);
+      expect(imageConstructor).not.toHaveBeenCalled();
+    } finally {
+      globalThis.Image = originalImage;
+    }
   });
 
   it('cancels queued preview preload work before preview generation starts', async () => {
