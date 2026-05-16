@@ -1,6 +1,7 @@
 mod commands;
 mod folder_index;
 mod folder_watcher;
+mod native_codecs;
 mod path_normalization;
 mod thumbnails;
 

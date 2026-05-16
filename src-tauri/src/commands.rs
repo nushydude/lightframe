@@ -1,4 +1,4 @@
-use crate::{folder_index, thumbnails};
+use crate::{folder_index, native_codecs, thumbnails};
 use image::GenericImageView;
 use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
 use little_exif::exif_tag::ExifTag;
@@ -31,6 +31,8 @@ pub struct ImageMetadata {
     pub height: Option<u32>,
     pub file_size_bytes: u64,
     pub format: String,
+    pub codec_backend: String,
+    pub native_decode_supported: bool,
     pub browser_renderable: bool,
     pub rust_decode_supported: bool,
     pub metadata_supported: bool,
@@ -415,14 +417,74 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
     let format_support = thumbnails::format_support_for_path(path);
+    let codec_capability = native_codecs::codec_capability_for_path(path);
 
-    // Try to read image dimensions
-    let (width, height) = match image::image_dimensions(path) {
-        Ok((w, h)) => (Some(w), Some(h)),
-        Err(_) => (None, None),
+    let mut native_decode_supported = false;
+    let mut codec_backend = native_codecs::CodecBackend::Unsupported;
+    let mut format = format_label_for_extension(&extension);
+    let mut support_note = format_support.support_note.map(str::to_string);
+
+    let (width, height) = if codec_capability.metadata == native_codecs::CodecBackend::WindowsNative
+    {
+        match native_codecs::metadata_from_path(path) {
+            Ok(native_metadata) => {
+                native_decode_supported = true;
+                codec_backend = native_codecs::CodecBackend::WindowsNative;
+                if let Some(native_format) = native_metadata.format {
+                    format = native_format.to_string();
+                }
+                support_note =
+                    Some("Metadata is decoded through Windows Imaging Component.".to_string());
+                (Some(native_metadata.width), Some(native_metadata.height))
+            }
+            Err(_) => rust_or_fallback_dimensions(
+                path,
+                codec_capability.metadata_fallback.unwrap_or(codec_capability.metadata),
+                &mut codec_backend,
+            ),
+        }
+    } else {
+        rust_or_fallback_dimensions(path, codec_capability.metadata, &mut codec_backend)
     };
 
-    let format = match extension.as_str() {
+    Ok(ImageMetadata {
+        width,
+        height,
+        file_size_bytes,
+        format,
+        codec_backend: codec_backend.as_str().to_string(),
+        native_decode_supported,
+        browser_renderable: format_support.browser_renderable,
+        rust_decode_supported: format_support.rust_decode_supported,
+        metadata_supported: format_support.metadata_supported,
+        thumbnail_supported: format_support.thumbnail_supported,
+        support_note,
+    })
+}
+
+fn rust_or_fallback_dimensions(
+    path: &Path,
+    fallback_backend: native_codecs::CodecBackend,
+    codec_backend: &mut native_codecs::CodecBackend,
+) -> (Option<u32>, Option<u32>) {
+    match image::image_dimensions(path) {
+        Ok((width, height)) => {
+            *codec_backend = native_codecs::CodecBackend::RustImage;
+            (Some(width), Some(height))
+        }
+        Err(_) => {
+            *codec_backend = if fallback_backend == native_codecs::CodecBackend::BrowserRenderable {
+                native_codecs::CodecBackend::BrowserRenderable
+            } else {
+                native_codecs::CodecBackend::Unsupported
+            };
+            (None, None)
+        }
+    }
+}
+
+fn format_label_for_extension(extension: &str) -> String {
+    match extension {
         "jpg" | "jpeg" => "JPEG".to_string(),
         "png" => "PNG".to_string(),
         "webp" => "WebP".to_string(),
@@ -433,19 +495,7 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
         "avif" => "AVIF".to_string(),
         "svg" => "SVG".to_string(),
         other => other.to_uppercase(),
-    };
-
-    Ok(ImageMetadata {
-        width,
-        height,
-        file_size_bytes,
-        format,
-        browser_renderable: format_support.browser_renderable,
-        rust_decode_supported: format_support.rust_decode_supported,
-        metadata_supported: format_support.metadata_supported,
-        thumbnail_supported: format_support.thumbnail_supported,
-        support_note: format_support.support_note.map(str::to_string),
-    })
+    }
 }
 
 fn rotation_save_strategy(extension: &str, rotation_degrees: i32) -> Option<RotationSaveStrategy> {
@@ -1799,6 +1849,8 @@ mod tests {
         assert_eq!(metadata.width, Some(2));
         assert_eq!(metadata.height, Some(3));
         assert_eq!(metadata.format, "PNG");
+        assert_eq!(metadata.codec_backend, "rust_image");
+        assert!(!metadata.native_decode_supported);
         assert_eq!(metadata.file_size_bytes, expected_size);
         assert!(metadata.browser_renderable);
         assert!(metadata.rust_decode_supported);
@@ -1820,16 +1872,14 @@ mod tests {
         assert_eq!(metadata.width, None);
         assert_eq!(metadata.height, None);
         assert_eq!(metadata.format, "HEIC");
+        assert_eq!(metadata.codec_backend, "browser_renderable");
+        assert!(!metadata.native_decode_supported);
         assert_eq!(metadata.file_size_bytes, expected_size);
         assert!(metadata.browser_renderable);
         assert!(!metadata.rust_decode_supported);
         assert!(metadata.metadata_supported);
         assert!(metadata.thumbnail_supported);
-        assert!(metadata
-            .support_note
-            .as_deref()
-            .unwrap_or_default()
-            .contains("placeholder thumbnail"));
+        assert!(metadata.support_note.as_deref().unwrap_or_default().contains("placeholder"));
     }
 
     #[test]

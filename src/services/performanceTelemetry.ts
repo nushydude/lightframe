@@ -68,6 +68,8 @@ type PendingFolderOpen = {
 type CurrentImageTelemetry = {
   path: string | null;
   selectionKind: ImageSelectionKind | null;
+  codecBackend: string | null;
+  nativeDecodeSupported: boolean | null;
   selectedAt: number | null;
   previewVisibleMs: number | null;
   fullResolutionReadyMs: number | null;
@@ -105,6 +107,8 @@ export interface PerformanceTelemetrySnapshot {
   currentImage: {
     path: string | null;
     selectionKind: ImageSelectionKind | null;
+    codecBackend: string | null;
+    nativeDecodeSupported: boolean | null;
     previewVisibleMs: number | null;
     fullResolutionReadyMs: number | null;
     visibleSourceUpdatedMs: number | null;
@@ -166,6 +170,8 @@ function createCurrentImageState(): CurrentImageTelemetry {
   return {
     path: null,
     selectionKind: null,
+    codecBackend: null,
+    nativeDecodeSupported: null,
     selectedAt: null,
     previewVisibleMs: null,
     fullResolutionReadyMs: null,
@@ -287,6 +293,8 @@ function buildSnapshot(): PerformanceTelemetrySnapshot {
     currentImage: {
       path: state.currentImage.path,
       selectionKind: state.currentImage.selectionKind,
+      codecBackend: state.currentImage.codecBackend,
+      nativeDecodeSupported: state.currentImage.nativeDecodeSupported,
       previewVisibleMs: state.currentImage.previewVisibleMs,
       fullResolutionReadyMs: state.currentImage.fullResolutionReadyMs,
       visibleSourceUpdatedMs: state.currentImage.visibleSourceUpdatedMs,
@@ -599,6 +607,8 @@ export function recordImageSelectedTelemetry(path: string): void {
       state.currentImage = {
         path,
         selectionKind,
+        codecBackend: null,
+        nativeDecodeSupported: null,
         selectedAt: now(),
         previewVisibleMs: null,
         fullResolutionReadyMs: null,
@@ -614,6 +624,8 @@ export function recordImageSelectedTelemetry(path: string): void {
   state.currentImage = {
     path,
     selectionKind,
+    codecBackend: null,
+    nativeDecodeSupported: null,
     selectedAt: now(),
     previewVisibleMs: null,
     fullResolutionReadyMs: null,
@@ -628,6 +640,20 @@ export function recordImageSelectedTelemetry(path: string): void {
     state.pendingFolderOpen.targetPath = path;
   }
 
+  markSnapshotDirty();
+}
+
+export function recordImageCodecTelemetry(
+  path: string,
+  codecBackend: string,
+  nativeDecodeSupported: boolean
+): void {
+  if (!state.enabled || state.currentImage.path !== path) {
+    return;
+  }
+
+  state.currentImage.codecBackend = codecBackend;
+  state.currentImage.nativeDecodeSupported = nativeDecodeSupported;
   markSnapshotDirty();
 }
 

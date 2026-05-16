@@ -10,6 +10,7 @@ import {
   recordFullAssetCacheHit,
   recordFullAssetCacheMiss,
   recordFullResolutionReadyTelemetry,
+  recordImageCodecTelemetry,
   recordImageSelectedTelemetry,
   recordPreviewAssetCacheHit,
   recordPreviewAssetCacheMiss,
@@ -81,6 +82,7 @@ describe('performanceTelemetry', () => {
 
     currentTime = 170;
     recordImageSelectedTelemetry('C:/images/c.jpg');
+    recordImageCodecTelemetry('C:/images/c.jpg', 'windows_native', true);
 
     currentTime = 185;
     recordPreviewVisibleTelemetry('C:/images/c.jpg');
@@ -118,6 +120,8 @@ describe('performanceTelemetry', () => {
     expect(snapshot.enabled).toBe(true);
     expect(snapshot.currentImage.path).toBe('C:/images/c.jpg');
     expect(snapshot.currentImage.selectionKind).toBe('folder-open');
+    expect(snapshot.currentImage.codecBackend).toBe('windows_native');
+    expect(snapshot.currentImage.nativeDecodeSupported).toBe(true);
     expect(snapshot.currentImage.previewVisibleMs).toBe(15);
     expect(snapshot.currentImage.fullResolutionReadyMs).toBeNull();
     expect(snapshot.currentImage.visibleSourceUpdatedMs).toBeNull();

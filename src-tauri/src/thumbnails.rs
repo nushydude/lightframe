@@ -1,3 +1,4 @@
+use crate::native_codecs;
 use crate::path_normalization::normalize_path_for_key;
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 const THUMBNAIL_SIZE: u32 = 160;
-const THUMBNAIL_CACHE_VERSION: &str = "thumb-v2";
+const THUMBNAIL_CACHE_VERSION: &str = "thumb-v3";
 const PREVIEW_CACHE_VERSION: &str = "preview-v1";
 const MAX_CACHE_ENTRIES: usize = 2_000;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
@@ -122,7 +123,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "HEIC files use a labeled placeholder thumbnail because LightFrame cannot decode HEIC thumbnails directly.",
+                "HEIC thumbnails use Windows native codecs when available and otherwise fall back to a labeled placeholder.",
             ),
         },
         Some("heif") => FormatSupport {
@@ -131,7 +132,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "HEIF files use a labeled placeholder thumbnail because LightFrame cannot decode HEIF thumbnails directly.",
+                "HEIF thumbnails use Windows native codecs when available and otherwise fall back to a labeled placeholder.",
             ),
         },
         Some("svg") => FormatSupport {
@@ -172,16 +173,14 @@ pub fn get_or_create_thumbnail(
     let cache_available = ensure_cache_root(cache_root);
 
     if cache_available {
-        if let Some(asset) = cached_asset_from_disk(
-            cache_root,
-            &cache_hash,
-            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg],
-        ) {
+        if let Some(asset) =
+            cached_asset_from_disk(cache_root, &cache_hash, cached_thumbnail_formats(file_path))
+        {
             return Ok(asset);
         }
     }
 
-    match generate_thumbnail_jpeg(file_path) {
+    match generate_best_thumbnail_jpeg(file_path) {
         Ok(jpeg_bytes) => cache_asset_bytes(
             cache_root,
             cache_available,
@@ -307,6 +306,31 @@ fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageErro
     let mut buffer = std::io::Cursor::new(Vec::new());
     thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
     Ok(buffer.into_inner())
+}
+
+fn generate_best_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
+    if native_codecs::should_prefer_native_thumbnail(file_path) {
+        match native_codecs::generate_thumbnail_jpeg(file_path, THUMBNAIL_SIZE) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                eprintln!(
+                    "Windows native thumbnail decode failed for '{}': {}. Falling back to Rust thumbnail path.",
+                    file_path.display(),
+                    error
+                );
+            }
+        }
+    }
+
+    generate_thumbnail_jpeg(file_path)
+}
+
+fn cached_thumbnail_formats(file_path: &Path) -> &'static [GeneratedImageFormat] {
+    if native_codecs::should_prefer_native_thumbnail(file_path) {
+        &[GeneratedImageFormat::Jpeg]
+    } else {
+        &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]
+    }
 }
 
 fn known_fallback_thumbnail_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
@@ -828,6 +852,21 @@ mod tests {
             .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("jpg"))
             .count();
         assert_eq!(cached_jpg_files, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cached_thumbnail_lookup_skips_svg_fallbacks_for_native_preferred_formats() {
+        let formats = cached_thumbnail_formats(Path::new("sample.heic"));
+
+        assert_eq!(formats, &[GeneratedImageFormat::Jpeg]);
+    }
+
+    #[test]
+    fn cached_thumbnail_lookup_allows_svg_fallbacks_for_non_native_formats() {
+        let formats = cached_thumbnail_formats(Path::new("sample.svg"));
+
+        assert_eq!(formats, &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]);
     }
 
     #[test]

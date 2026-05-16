@@ -8,6 +8,8 @@ const snapshot: PerformanceTelemetrySnapshot = {
   currentImage: {
     path: 'C:/images/current.jpg',
     selectionKind: 'keyboard-next',
+    codecBackend: 'windows_native',
+    nativeDecodeSupported: true,
     previewVisibleMs: 32,
     fullResolutionReadyMs: 64,
     visibleSourceUpdatedMs: 12,
@@ -68,6 +70,7 @@ describe('PerformanceTelemetryOverlay', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('C:/images/current.jpg')).toBeInTheDocument();
     expect(screen.getByText('keyboard-next')).toBeInTheDocument();
+    expect(screen.getByText('windows_native (native)')).toBeInTheDocument();
     expect(screen.getAllByText('32 ms')).toHaveLength(2);
     expect(screen.getAllByText('64 ms')).toHaveLength(2);
     expect(
