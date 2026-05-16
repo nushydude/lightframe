@@ -51,6 +51,16 @@ export async function scanFolder(folderPath: string): Promise<ImageFile[]> {
   return invoke<ImageFile[]>('scan_folder', { folderPath });
 }
 
+/** Read cached folder contents from the persistent folder index */
+export async function readFolderIndex(folderPath: string): Promise<ImageFile[]> {
+  return invoke<ImageFile[]>('read_folder_index', { folderPath });
+}
+
+/** Refresh a folder from disk and update the persistent folder index */
+export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[]> {
+  return invoke<ImageFile[]>('refresh_folder_index', { folderPath });
+}
+
 /** Get metadata (dimensions, format, file size) for an image */
 export async function getImageMetadata(filePath: string): Promise<ImageMetadata> {
   return invoke<ImageMetadata>('get_image_metadata', { filePath });

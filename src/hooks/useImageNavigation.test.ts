@@ -3,13 +3,20 @@ import { useImageNavigation } from './useImageNavigation';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { scanFolder, getParentFolder } from '../services/tauriCommands';
+import {
+  getParentFolder,
+  readFolderIndex,
+  refreshFolderIndex,
+  scanFolder,
+} from '../services/tauriCommands';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 
 // Mock the services and Tauri APIs
 vi.mock('../services/tauriCommands', () => ({
   scanFolder: vi.fn(),
+  readFolderIndex: vi.fn(),
+  refreshFolderIndex: vi.fn(),
   getParentFolder: vi.fn(),
 }));
 
@@ -203,7 +210,8 @@ describe('useImageNavigation', () => {
         modified_at: '1000',
       },
     ];
-    (scanFolder as any).mockResolvedValue(mockImages);
+    (readFolderIndex as any).mockResolvedValue([]);
+    (refreshFolderIndex as any).mockResolvedValue(mockImages);
 
     act(() => {
       useViewerStore.getState().setViewMode('grid');
@@ -217,6 +225,72 @@ describe('useImageNavigation', () => {
 
     expect(useViewerStore.getState().viewMode).toBe('viewer');
     expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
+    expect(refreshFolderIndex).toHaveBeenCalledWith('c:/test');
+  });
+
+  it('shows cached folder entries before verified refresh finishes', async () => {
+    const cachedImages = [
+      {
+        path: 'c:/test/a.jpg',
+        file_name: 'a.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/test/b.jpg',
+        file_name: 'b.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+    const verifiedImages = [
+      {
+        path: 'c:/test/c.jpg',
+        file_name: 'c.jpg',
+        extension: 'jpg',
+        size_bytes: 150,
+        modified_at: '3000',
+      },
+      {
+        path: 'c:/test/b.jpg',
+        file_name: 'b.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+    let resolveRefresh: ((images: typeof verifiedImages) => void) | undefined;
+    (readFolderIndex as any).mockResolvedValue(cachedImages);
+    (refreshFolderIndex as any).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+
+    expect(useViewerStore.getState().images).toEqual(cachedImages);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/a.jpg');
+    expect(useViewerStore.getState().isFolderScanning).toBe(true);
+
+    act(() => {
+      useViewerStore.getState().setCurrentIndex(1);
+    });
+
+    resolveRefresh?.(verifiedImages);
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().isFolderScanning).toBe(false);
+      expect(useViewerStore.getState().images).toEqual(verifiedImages);
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/test/b.jpg');
+    });
   });
 
   it('should navigate next and previous', async () => {
@@ -349,7 +423,7 @@ describe('useImageNavigation', () => {
       useViewerStore.getState().setCurrentIndex(1);
     });
 
-    (scanFolder as any).mockResolvedValue([
+    (refreshFolderIndex as any).mockResolvedValue([
       {
         path: 'c:/test/c.jpg',
         file_name: 'c.jpg',
@@ -406,7 +480,7 @@ describe('useImageNavigation', () => {
       useViewerStore.getState().setCurrentIndex(2);
     });
 
-    (scanFolder as any).mockResolvedValue([
+    (refreshFolderIndex as any).mockResolvedValue([
       {
         path: 'c:/test/a.jpg',
         file_name: 'a.jpg',
@@ -450,7 +524,7 @@ describe('useImageNavigation', () => {
       useViewerStore.getState().setCurrentIndex(0);
     });
 
-    (scanFolder as any).mockResolvedValue([]);
+    (refreshFolderIndex as any).mockResolvedValue([]);
 
     const { result } = renderHook(() => useImageNavigation());
 
@@ -482,7 +556,7 @@ describe('useImageNavigation', () => {
       useViewerStore.getState().setCurrentIndex(0);
     });
 
-    (scanFolder as any).mockResolvedValue([
+    (refreshFolderIndex as any).mockResolvedValue([
       {
         path: 'c:/test/a.jpg',
         file_name: 'a.jpg',

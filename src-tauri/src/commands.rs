@@ -1,4 +1,4 @@
-use crate::thumbnails;
+use crate::{folder_index, thumbnails};
 use image::GenericImageView;
 use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
 use little_exif::exif_tag::ExifTag;
@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 const SUPPORTED_EXTENSIONS: &[&str] =
     &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif", "svg"];
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ImageFile {
     pub path: String,
     pub file_name: String,
@@ -267,12 +267,90 @@ fn scan_folder_blocking(folder_path: String) -> Result<Vec<ImageFile>, String> {
     Ok(images.into_iter().map(|scanned| scanned.image).collect())
 }
 
+fn resolve_folder_index_path(app: &AppHandle) -> Option<PathBuf> {
+    match app.path().app_cache_dir() {
+        Ok(cache_dir) => Some(folder_index::index_root(&cache_dir)),
+        Err(err) => {
+            eprintln!(
+                "Failed to resolve app cache directory for folder index: {}. Proceeding without persistent folder cache.",
+                err
+            );
+            None
+        }
+    }
+}
+
 /// Scan a folder for supported image files
 #[tauri::command]
 pub async fn scan_folder(folder_path: String) -> Result<Vec<ImageFile>, String> {
     tauri::async_runtime::spawn_blocking(move || scan_folder_blocking(folder_path))
         .await
         .map_err(|err| format!("Scan folder worker failed: {}", err))?
+}
+
+fn read_folder_index_blocking(
+    folder_path: String,
+    index_path: Option<PathBuf>,
+) -> Result<Vec<ImageFile>, String> {
+    let path = Path::new(&folder_path);
+    if !path.is_dir() {
+        return Err(format!("'{}' is not a valid directory", folder_path));
+    }
+
+    let Some(index_path) = index_path else {
+        return Ok(Vec::new());
+    };
+
+    Ok(folder_index::read_folder_images(&index_path, path))
+}
+
+/// Read cached folder contents from the persistent folder index, if available
+#[tauri::command]
+pub async fn read_folder_index(
+    app: AppHandle,
+    folder_path: String,
+) -> Result<Vec<ImageFile>, String> {
+    let index_path = resolve_folder_index_path(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        read_folder_index_blocking(folder_path, index_path)
+    })
+    .await
+    .map_err(|err| format!("Read folder index worker failed: {}", err))?
+}
+
+fn refresh_folder_index_blocking(
+    folder_path: String,
+    index_path: Option<PathBuf>,
+) -> Result<Vec<ImageFile>, String> {
+    let scanned_images = scan_folder_blocking(folder_path.clone())?;
+
+    if let Some(index_path) = index_path {
+        let folder_path_buf = PathBuf::from(&folder_path);
+        if let Err(err) =
+            folder_index::write_folder_images(&index_path, &folder_path_buf, &scanned_images)
+        {
+            eprintln!(
+                "Failed to update persistent folder index for '{}': {}. Returning live scan results anyway.",
+                folder_path, err
+            );
+        }
+    }
+
+    Ok(scanned_images)
+}
+
+/// Refresh folder contents from disk and update the persistent folder index
+#[tauri::command]
+pub async fn refresh_folder_index(
+    app: AppHandle,
+    folder_path: String,
+) -> Result<Vec<ImageFile>, String> {
+    let index_path = resolve_folder_index_path(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_folder_index_blocking(folder_path, index_path)
+    })
+    .await
+    .map_err(|err| format!("Refresh folder index worker failed: {}", err))?
 }
 
 /// Get image metadata (dimensions, format, file size)
