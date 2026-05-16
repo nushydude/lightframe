@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 /// Supported image extensions for the viewer
-const SUPPORTED_EXTENSIONS: &[&str] =
+pub(crate) const SUPPORTED_EXTENSIONS: &[&str] =
     &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif", "svg"];
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -81,6 +81,8 @@ pub struct AppSettings {
     pub open_projector_in_grid_view: bool,
     #[serde(default = "default_performance_mode")]
     pub performance_mode: String,
+    #[serde(default = "default_auto_refresh_folder")]
+    pub auto_refresh_folder: bool,
     #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
     #[serde(default)]
@@ -116,6 +118,10 @@ fn default_performance_mode() -> String {
     "balanced".to_string()
 }
 
+fn default_auto_refresh_folder() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
@@ -136,6 +142,7 @@ impl Default for AppSettings {
             prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
             open_projector_in_grid_view: false,
             performance_mode: default_performance_mode(),
+            auto_refresh_folder: default_auto_refresh_folder(),
             quick_destinations: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
@@ -205,6 +212,66 @@ fn sort_scanned_images(images: &mut [ScannedImage]) {
     });
 }
 
+pub(crate) fn sort_image_files_by_name(images: &mut [ImageFile]) {
+    let mut sorted_images: Vec<ScannedImage> = images
+        .iter()
+        .cloned()
+        .map(|image| ScannedImage {
+            sort_key: natural_sort_key(&image.file_name),
+            lowercase_file_name: image.file_name.to_lowercase(),
+            image,
+        })
+        .collect();
+    sort_scanned_images(&mut sorted_images);
+
+    for (target, sorted) in images.iter_mut().zip(sorted_images) {
+        *target = sorted.image;
+    }
+}
+
+pub(crate) fn is_supported_image_path(file_path: &Path) -> bool {
+    let extension = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    SUPPORTED_EXTENSIONS.contains(&extension.as_str())
+}
+
+pub(crate) fn image_file_from_path(file_path: &Path) -> Option<ImageFile> {
+    if !is_supported_image_path(file_path) {
+        return None;
+    }
+
+    let metadata = fs::metadata(file_path).ok()?;
+    image_file_from_metadata(file_path, &metadata)
+}
+
+pub(crate) fn image_file_from_metadata(
+    file_path: &Path,
+    metadata: &fs::Metadata,
+) -> Option<ImageFile> {
+    if !metadata.is_file() || !is_supported_image_path(file_path) {
+        return None;
+    }
+
+    let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let extension = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    let size_bytes = metadata.len();
+    let modified_at = metadata.modified().ok().map(|t| {
+        let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        format!("{}", duration.as_secs())
+    });
+    let path = file_path.to_string_lossy().to_string();
+
+    Some(ImageFile { path, file_name, extension, size_bytes, modified_at })
+}
+
 /// Check if a path is a directory
 #[tauri::command]
 pub fn is_dir(path: String) -> bool {
@@ -228,38 +295,19 @@ fn scan_folder_blocking(folder_path: String) -> Result<Vec<ImageFile>, String> {
         };
 
         let file_path = entry.path();
-        if !file_path.is_file() {
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+
+        let Some(image) = image_file_from_metadata(&file_path, &metadata) else {
             continue;
-        }
+        };
 
-        let extension = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .unwrap_or_default();
+        let sort_key = natural_sort_key(&image.file_name);
+        let lowercase_file_name = image.file_name.to_lowercase();
 
-        if !SUPPORTED_EXTENSIONS.contains(&extension.as_str()) {
-            continue;
-        }
-
-        let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-
-        let metadata = entry.metadata().ok();
-        let size_bytes = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-        let modified_at = metadata.as_ref().and_then(|m| m.modified().ok()).map(|t| {
-            let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            format!("{}", duration.as_secs())
-        });
-
-        let path = file_path.to_string_lossy().to_string();
-        let sort_key = natural_sort_key(&file_name);
-        let lowercase_file_name = file_name.to_lowercase();
-
-        images.push(ScannedImage {
-            sort_key,
-            lowercase_file_name,
-            image: ImageFile { path, file_name, extension, size_bytes, modified_at },
-        });
+        images.push(ScannedImage { sort_key, lowercase_file_name, image });
     }
 
     sort_scanned_images(&mut images);
@@ -2125,6 +2173,7 @@ mod tests {
         assert_eq!(settings.window_height, None);
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");
+        assert!(settings.auto_refresh_folder);
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);
     }
