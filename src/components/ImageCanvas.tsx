@@ -64,6 +64,13 @@ type ImageStyleOptions = {
 
 type NavigationDirection = 'forward' | 'backward' | 'idle';
 
+type ImageBounds = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 type AdjacentPreloadPlan = {
   keepIndices: number[];
   preloadIndices: number[];
@@ -334,6 +341,53 @@ function getImageStyle(options: ImageStyleOptions): CSSProperties {
   return style;
 }
 
+function getRenderedImageBounds({
+  containerRect,
+  image,
+  imageRect,
+  metadata,
+  zoomMode,
+}: {
+  containerRect: DOMRect;
+  image: HTMLImageElement;
+  imageRect: DOMRect;
+  metadata: ImageMetadata | null;
+  zoomMode: ZoomMode;
+}): ImageBounds {
+  const baseBounds = {
+    left: imageRect.left - containerRect.left,
+    top: imageRect.top - containerRect.top,
+    width: imageRect.width,
+    height: imageRect.height,
+  };
+
+  if (zoomMode !== 'fit') {
+    return baseBounds;
+  }
+
+  const intrinsicWidth = image.naturalWidth || metadata?.width || 0;
+  const intrinsicHeight = image.naturalHeight || metadata?.height || 0;
+  if (
+    intrinsicWidth <= 0 ||
+    intrinsicHeight <= 0 ||
+    imageRect.width <= 0 ||
+    imageRect.height <= 0
+  ) {
+    return baseBounds;
+  }
+
+  const scale = Math.min(imageRect.width / intrinsicWidth, imageRect.height / intrinsicHeight);
+  const width = intrinsicWidth * scale;
+  const height = intrinsicHeight * scale;
+
+  return {
+    left: baseBounds.left + (imageRect.width - width) / 2,
+    top: baseBounds.top + (imageRect.height - height) / 2,
+    width,
+    height,
+  };
+}
+
 /** Main image display canvas with zoom/pan support */
 // fallow-ignore-next-line complexity
 export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
@@ -351,12 +405,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomMode: 'fit',
     zoomLevel: 1,
   });
-  const [imageBounds, setImageBounds] = useState<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  } | null>(null);
+  const [imageBounds, setImageBounds] = useState<ImageBounds | null>(null);
   const {
     currentImagePath,
     zoomMode,
@@ -874,13 +923,16 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
     const containerRect = container.getBoundingClientRect();
     const imageRect = image.getBoundingClientRect();
-    setImageBounds({
-      left: imageRect.left - containerRect.left,
-      top: imageRect.top - containerRect.top,
-      width: imageRect.width,
-      height: imageRect.height,
-    });
-  }, []);
+    setImageBounds(
+      getRenderedImageBounds({
+        containerRect,
+        image,
+        imageRect,
+        metadata,
+        zoomMode,
+      })
+    );
+  }, [metadata, zoomMode]);
 
   useEffect(() => {
     updateImageBounds();

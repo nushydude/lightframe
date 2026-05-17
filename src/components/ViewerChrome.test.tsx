@@ -258,6 +258,33 @@ describe('ViewerChrome', () => {
     expect(defaultProps.onStartSlideshow).toHaveBeenCalledTimes(1);
   });
 
+  it('does not mount compact bottom controls unless the compact breakpoint matches', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo.jpg',
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.queryByLabelText('More controls')).not.toBeInTheDocument();
+  });
+
   it('toggles the favorites-only filter from the toolbar', () => {
     const folderImages = [
       {

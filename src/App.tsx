@@ -55,6 +55,7 @@ function App() {
     showPerformanceTelemetry,
     errorMessage,
     isFullscreen,
+    isSlideshowActive,
     viewMode,
     setError,
     setShowControls,
@@ -469,6 +470,20 @@ function App() {
     return true;
   }, [isProjectorOpen, refreshProjectorState]);
 
+  const handleStartSlideshow = useCallback(async () => {
+    const state = useViewerStore.getState();
+    if (state.viewMode === 'grid') {
+      const didExit = await handleExitGridView();
+      if (!didExit) {
+        return;
+      }
+    } else if (state.viewMode !== 'viewer') {
+      state.setViewMode('viewer');
+    }
+
+    await startSlideshow();
+  }, [handleExitGridView, startSlideshow]);
+
   const commandPaletteCommands = useMemo(
     () =>
       createViewerCommands({
@@ -502,7 +517,7 @@ function App() {
           }
           state.enterCropMode();
         },
-        startSlideshow,
+        startSlideshow: handleStartSlideshow,
         toggleCompareMode: () => {
           const state = useViewerStore.getState();
           if (state.viewMode === 'compare') {
@@ -525,7 +540,7 @@ function App() {
       handleToggleProjector,
       handleTogglePerformanceTelemetry,
       handleResetPerformanceTelemetry,
-      startSlideshow,
+      handleStartSlideshow,
     ]
   );
 
@@ -564,7 +579,7 @@ function App() {
     goFirst,
     goLast,
     refreshFolder,
-    startSlideshow,
+    startSlideshow: handleStartSlideshow,
     stopSlideshow,
     toggleSlideshowPause,
     openCommandPalette: () => setShowCommandPalette(true),
@@ -696,7 +711,11 @@ function App() {
     'app-container',
     isFullscreen ? 'fullscreen' : '',
     showControls ? 'controls-visible' : '',
-    settings.showThumbnails && currentImagePath && viewMode === 'viewer' && !isSecondary
+    settings.showThumbnails &&
+    currentImagePath &&
+    viewMode === 'viewer' &&
+    !isSecondary &&
+    !isSlideshowActive
       ? 'with-thumbnails'
       : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
@@ -737,10 +756,10 @@ function App() {
                 onGoHome={handleGoHome}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
-                onStartSlideshow={startSlideshow}
+                onStartSlideshow={handleStartSlideshow}
                 onTogglePause={toggleSlideshowPause}
               />
-              {settings.showThumbnails && <ThumbnailStrip />}
+              {settings.showThumbnails && !isSlideshowActive && <ThumbnailStrip />}
             </>
           ) : viewMode === 'compare' ? (
             <>
@@ -752,7 +771,7 @@ function App() {
                 onGoHome={handleGoHome}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
-                onStartSlideshow={startSlideshow}
+                onStartSlideshow={handleStartSlideshow}
                 onTogglePause={toggleSlideshowPause}
               />
             </>
@@ -763,6 +782,7 @@ function App() {
               onOpenFile={openFilePicker}
               onOpenFolder={openFolderPicker}
               onRefreshFolder={refreshFolder}
+              onStartSlideshow={startSlideshow}
             />
           )}
         </>

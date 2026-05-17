@@ -28,6 +28,7 @@ import { useProjectorState } from '../hooks/useProjectorState';
 import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
 import type { QuickDestination } from '../types/settings';
+import { ToolbarIcon } from './ToolbarIcon';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -58,6 +59,9 @@ const SCALE_EXPORT_MAX_DIMENSION = 65_535;
 const SCALE_EXPORT_MAX_PIXELS = 50_000_000;
 const SCALE_EXPORT_MAX_MEGAPIXELS = SCALE_EXPORT_MAX_PIXELS / 1_000_000;
 const QUALITY_PREVIEW_DEBOUNCE_MS = 120;
+const COMPACT_BOTTOM_CONTROLS_QUERY = '(max-width: 1120px)';
+const COMPACT_ROTATE_CONTROLS_QUERY = '(max-width: 820px)';
+const RATING_VALUES = [0, 1, 2, 3, 4, 5] as const;
 const SCALE_EXPORT_SOURCE_EXTENSIONS = new Set([
   'jpg',
   'jpeg',
@@ -152,6 +156,60 @@ function getPathExtension(path: string | null): string {
   const fileName = path ? getFileName(path) : '';
   const dotIndex = fileName.lastIndexOf('.');
   return dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : '';
+}
+
+function getMediaQueryMatch(query: string): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+
+  return window.matchMedia(query).matches;
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => getMediaQueryMatch(query));
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia(query);
+    const update = () => setMatches(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener('change', update);
+
+    return () => mediaQuery.removeEventListener('change', update);
+  }, [query]);
+
+  return matches;
+}
+
+function RatingControls({
+  currentRating,
+  onSetRating,
+  className = '',
+}: {
+  currentRating: number;
+  onSetRating: (rating: number) => void;
+  className?: string;
+}) {
+  return (
+    <div className={`rating-controls ${className}`.trim()} role="group" aria-label="Image rating">
+      {RATING_VALUES.map((value) => (
+        <button
+          key={value}
+          className={`control-btn rating-btn has-tooltip ${currentRating === value ? 'active' : ''}`}
+          onClick={() => onSetRating(value)}
+          data-tooltip={value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`}
+          title={value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`}
+          aria-label={value === 0 ? 'Clear rating' : `Set rating ${value}`}
+        >
+          {value}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function getScaleExportSourceMessage(path: string | null): string | null {
@@ -376,6 +434,8 @@ export function ViewerChrome({
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
   const copyToMenuRef = useRef<HTMLDetailsElement | null>(null);
   const moveToMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const shouldUseCompactBottomControls = useMediaQuery(COMPACT_BOTTOM_CONTROLS_QUERY);
+  const shouldMoveRotateControls = useMediaQuery(COMPACT_ROTATE_CONTROLS_QUERY);
 
   useEffect(() => {
     const handler = () => setShowExif((value) => !value);
@@ -1084,12 +1144,14 @@ export function ViewerChrome({
             <button
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isFavorite ? 'active' : ''}`}
               onClick={() => void handleToggleFavorite()}
-              data-tooltip="Toggle favorite (F)"
-              title="Toggle favorite (F)"
+              data-tooltip={isFavorite ? 'Remove favorite (F)' : 'Mark as favorite (F)'}
+              title={isFavorite ? 'Remove favorite (F)' : 'Mark as favorite (F)'}
               aria-label="Toggle favorite"
               id="btn-favorite"
             >
-              <span className="top-bar-btn-icon">{isFavorite ? '★' : '☆'}</span>
+              <span className="top-bar-btn-icon">
+                <ToolbarIcon name="favorite" />
+              </span>
               <span className="top-bar-btn-label">Favorite</span>
             </button>
             <button
@@ -1100,7 +1162,9 @@ export function ViewerChrome({
               aria-label={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
               id="btn-favorites-filter"
             >
-              <span className="top-bar-btn-icon">Fav</span>
+              <span className="top-bar-btn-icon">
+                <ToolbarIcon name="favorites" />
+              </span>
               <span className="top-bar-btn-label">Only</span>
             </button>
             <button
@@ -1117,9 +1181,11 @@ export function ViewerChrome({
               disabled={!canStartSlideshow}
             >
               <span className="top-bar-btn-icon">
-                {isSlideshowActive && !isSlideshowPaused ? '||' : '>'}
+                <ToolbarIcon
+                  name={isSlideshowActive && !isSlideshowPaused ? 'pause' : 'slideshow'}
+                />
               </span>
-              <span className="top-bar-btn-label">Slide</span>
+              <span className="top-bar-btn-label">Slideshow</span>
             </button>
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
@@ -1297,7 +1363,7 @@ export function ViewerChrome({
           aria-label="Previous image"
           id="btn-ctrl-prev"
         >
-          ⏮
+          <ToolbarIcon name="skipBack" />
         </button>
 
         {!isSlideshowActive ? (
@@ -1309,7 +1375,7 @@ export function ViewerChrome({
             aria-label="Start slideshow"
             id="btn-start-slideshow"
           >
-            ▶
+            <ToolbarIcon name="slideshow" />
           </button>
         ) : (
           <button
@@ -1320,7 +1386,7 @@ export function ViewerChrome({
             aria-label="Toggle slideshow pause"
             id="btn-toggle-slideshow"
           >
-            {isSlideshowPaused ? '▶' : '⏸'}
+            <ToolbarIcon name={isSlideshowPaused ? 'slideshow' : 'pause'} />
           </button>
         )}
 
@@ -1332,7 +1398,7 @@ export function ViewerChrome({
           aria-label="Next image"
           id="btn-ctrl-next"
         >
-          ⏭
+          <ToolbarIcon name="skipForward" />
         </button>
 
         <div className="control-divider" />
@@ -1345,7 +1411,7 @@ export function ViewerChrome({
           aria-label="Zoom out"
           id="btn-zoom-out"
         >
-          −
+          <ToolbarIcon name="zoomOut" />
         </button>
 
         <span className="zoom-display">{getZoomDisplay()}</span>
@@ -1358,32 +1424,40 @@ export function ViewerChrome({
           aria-label="Zoom in"
           id="btn-zoom-in"
         >
-          +
+          <ToolbarIcon name="zoomIn" />
         </button>
 
-        <div className="control-divider" />
+        {shouldMoveRotateControls ? (
+          <div className="control-divider" />
+        ) : (
+          <>
+            <div className="control-divider control-divider--rotate-start" />
 
-        <button
-          className="control-btn has-tooltip"
-          onClick={() => useViewerStore.getState().rotateCounterClockwise()}
-          data-tooltip="Rotate counter-clockwise (L)"
-          title="Rotate counter-clockwise (L)"
-          aria-label="Rotate counter-clockwise"
-          id="btn-rotate-l"
-        >
-          ↺
-        </button>
+            <div className="control-group control-group--rotate" role="group" aria-label="Rotation">
+              <button
+                className="control-btn has-tooltip"
+                onClick={() => useViewerStore.getState().rotateCounterClockwise()}
+                data-tooltip="Rotate counter-clockwise (L)"
+                title="Rotate counter-clockwise (L)"
+                aria-label="Rotate counter-clockwise"
+                id="btn-rotate-l"
+              >
+                <ToolbarIcon name="rotateCcw" />
+              </button>
 
-        <button
-          className="control-btn has-tooltip"
-          onClick={() => useViewerStore.getState().rotateClockwise()}
-          data-tooltip="Rotate clockwise (R)"
-          title="Rotate clockwise (R)"
-          aria-label="Rotate clockwise"
-          id="btn-rotate-r"
-        >
-          ↻
-        </button>
+              <button
+                className="control-btn has-tooltip"
+                onClick={() => useViewerStore.getState().rotateClockwise()}
+                data-tooltip="Rotate clockwise (R)"
+                title="Rotate clockwise (R)"
+                aria-label="Rotate clockwise"
+                id="btn-rotate-r"
+              >
+                <ToolbarIcon name="rotateCw" />
+              </button>
+            </div>
+          </>
+        )}
 
         {hasPendingEdits && (
           <button
@@ -1417,7 +1491,9 @@ export function ViewerChrome({
           </button>
         )}
 
-        <div className="control-divider" />
+        {!shouldMoveRotateControls && (
+          <div className="control-divider control-divider--rotate-end" />
+        )}
 
         <button
           className={`control-btn has-tooltip ${zoomMode === 'fit' ? 'active' : ''}`}
@@ -1427,11 +1503,11 @@ export function ViewerChrome({
           aria-label="Recenter and fit"
           id="btn-zoom-fit"
         >
-          ⊡
+          <ToolbarIcon name="fit" />
         </button>
 
         <button
-          className={`control-btn has-tooltip ${zoomMode === 'actual' ? 'active' : ''}`}
+          className={`control-btn control-btn--text has-tooltip ${zoomMode === 'actual' ? 'active' : ''}`}
           onClick={() => setZoomMode('actual')}
           data-tooltip="Actual size (1)"
           title="Actual size (1)"
@@ -1452,7 +1528,7 @@ export function ViewerChrome({
           }}
         >
           <summary
-            className={`control-btn has-tooltip ${imageSmoothing > 0 || imageSharpening > 0 ? 'active' : ''}`}
+            className={`control-btn control-btn--text has-tooltip ${imageSmoothing > 0 || imageSharpening > 0 ? 'active' : ''}`}
             onClick={(event) => {
               const details = event.currentTarget.parentElement as HTMLDetailsElement | null;
               setIsQualityPanelOpen(!details?.open);
@@ -1632,24 +1708,59 @@ export function ViewerChrome({
           </>
         )}
 
-        <div className="control-divider" />
-
-        <div className="rating-controls" role="group" aria-label="Image rating">
-          {[0, 1, 2, 3, 4, 5].map((value) => (
-            <button
-              key={value}
-              className={`control-btn rating-btn has-tooltip ${currentRating === value ? 'active' : ''}`}
-              onClick={() => void handleSetRating(value)}
-              data-tooltip={
-                value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`
-              }
-              title={value === 0 ? 'Clear rating (Alt+0)' : `Set rating ${value} (Alt+${value})`}
-              aria-label={value === 0 ? 'Clear rating' : `Set rating ${value}`}
+        {shouldUseCompactBottomControls ? (
+          <details className="bottom-controls-menu bottom-controls-menu--compact">
+            <summary
+              className="control-btn has-tooltip"
+              data-tooltip="More controls"
+              title="More controls"
+              aria-label="More controls"
             >
-              {value}
-            </button>
-          ))}
-        </div>
+              <ToolbarIcon name="more" />
+            </summary>
+            <div className="bottom-controls-menu-panel">
+              {shouldMoveRotateControls && (
+                <div className="bottom-menu-section bottom-menu-section--visible">
+                  <div className="bottom-menu-label">Rotate</div>
+                  <div className="bottom-menu-row">
+                    <button
+                      className="control-btn"
+                      onClick={() => useViewerStore.getState().rotateCounterClockwise()}
+                      title="Rotate counter-clockwise (L)"
+                      aria-label="Rotate counter-clockwise"
+                    >
+                      <ToolbarIcon name="rotateCcw" />
+                    </button>
+                    <button
+                      className="control-btn"
+                      onClick={() => useViewerStore.getState().rotateClockwise()}
+                      title="Rotate clockwise (R)"
+                      aria-label="Rotate clockwise"
+                    >
+                      <ToolbarIcon name="rotateCw" />
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="bottom-menu-section bottom-menu-section--visible">
+                <div className="bottom-menu-label">Rating</div>
+                <RatingControls
+                  currentRating={currentRating}
+                  onSetRating={(value) => void handleSetRating(value)}
+                />
+              </div>
+            </div>
+          </details>
+        ) : (
+          <>
+            <div className="control-divider control-divider--rating" />
+            <RatingControls
+              currentRating={currentRating}
+              onSetRating={(value) => void handleSetRating(value)}
+              className="rating-controls--inline"
+            />
+          </>
+        )}
       </div>
     </>
   );

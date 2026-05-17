@@ -35,6 +35,10 @@ function shouldPersist(favorite: boolean, rating: number): boolean {
   return favorite || clampRating(rating) > 0;
 }
 
+function shouldPromoteRatingToFavorite(rating: number): boolean {
+  return clampRating(rating) >= 4;
+}
+
 function normalizeCuration(
   curationByPath: Record<string, ImageCuration>
 ): Record<string, ImageCuration> {
@@ -109,7 +113,7 @@ export const useCurationStore = create<CurationState>((set, get) => ({
 
     const normalizedRating = clampRating(rating);
     const current = get().curationByPath[filePath];
-    const favorite = Boolean(current?.favorite);
+    const favorite = Boolean(current?.favorite) || shouldPromoteRatingToFavorite(normalizedRating);
 
     try {
       await writeImageCuration(filePath, favorite, normalizedRating);

@@ -95,6 +95,7 @@ export function useSlideshow() {
     advanceSlide,
     settings.slideshowIntervalSeconds,
     images.length,
+    currentIndex,
   ]);
 
   /** Start the slideshow */
