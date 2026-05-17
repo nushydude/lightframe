@@ -1,5 +1,5 @@
-import { render } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThumbnailStrip } from './ThumbnailStrip';
 import { ContactSheet } from './ContactSheet';
 import { useViewerStore } from '../state/viewerStore';
@@ -56,8 +56,16 @@ vi.mock('../services/viewerActions', () => ({
 }));
 
 describe('thumbnail consumers', () => {
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    }) as typeof window.requestAnimationFrame;
+    window.cancelAnimationFrame = vi.fn() as typeof window.cancelAnimationFrame;
     vi.stubGlobal(
       'ResizeObserver',
       class ResizeObserver {
@@ -78,6 +86,11 @@ describe('thumbnail consumers', () => {
         quickDestinations: [],
       },
     }));
+  });
+
+  afterEach(() => {
+    window.requestAnimationFrame = originalRequestAnimationFrame;
+    window.cancelAnimationFrame = originalCancelAnimationFrame;
   });
 
   it('renders a strip placeholder when no thumbnail URL is cached yet', () => {
@@ -127,9 +140,148 @@ describe('thumbnail consumers', () => {
         onOpenFile={() => undefined}
         onOpenFolder={() => undefined}
         onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
       />
     );
 
     expect(container.querySelector('.grid-placeholder')).not.toBeNull();
+  });
+
+  it('loads thumbnail strip items for the manually scrolled viewport', () => {
+    const images = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: '1',
+    }));
+
+    useViewerStore.setState({
+      currentIndex: 0,
+      currentImagePath: images[0].path,
+      images,
+    });
+
+    const { container } = render(<ThumbnailStrip />);
+    const stripContainer = container.querySelector('.thumbnail-strip-container') as HTMLDivElement;
+
+    stripContainer.scrollLeft = 50 * 78;
+    fireEvent.scroll(stripContainer);
+
+    expect(
+      preloadThumbnailsMock.mock.calls.some(([requests]) =>
+        (requests as Array<{ path: string }>).some((request) => request.path === images[50].path)
+      )
+    ).toBe(true);
+  });
+
+  it('preloads around the current thumbnail before the first scroll sync', () => {
+    const images = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: '1',
+    }));
+
+    useViewerStore.setState({
+      currentIndex: 80,
+      currentImagePath: images[80].path,
+      images,
+    });
+
+    render(<ThumbnailStrip />);
+
+    const firstPreloadRequest = preloadThumbnailsMock.mock.calls[0]?.[0] as
+      | Array<{ path: string }>
+      | undefined;
+    expect(firstPreloadRequest?.some((request) => request.path === images[80].path)).toBe(true);
+    expect(firstPreloadRequest?.some((request) => request.path === images[0].path)).toBe(false);
+  });
+
+  it('recomputes the preload window when a mounted strip receives a new image list', () => {
+    const firstImages = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/first/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: '1',
+    }));
+    const nextImages = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/next/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: '1',
+    }));
+
+    useViewerStore.setState({
+      currentIndex: 80,
+      currentImagePath: firstImages[80].path,
+      images: firstImages,
+    });
+
+    render(<ThumbnailStrip />);
+    preloadThumbnailsMock.mockClear();
+
+    act(() => {
+      useViewerStore.setState({
+        currentIndex: 5,
+        currentImagePath: nextImages[5].path,
+        images: nextImages,
+      });
+    });
+
+    const firstPreloadRequest = preloadThumbnailsMock.mock.calls[0]?.[0] as
+      | Array<{ path: string }>
+      | undefined;
+    expect(firstPreloadRequest?.some((request) => request.path === nextImages[5].path)).toBe(true);
+    expect(firstPreloadRequest?.some((request) => request.path === nextImages[80].path)).toBe(
+      false
+    );
+  });
+
+  it('coalesces wheel thumbnail browsing through animation frames', () => {
+    const images = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: '1',
+    }));
+    let frameCallback: FrameRequestCallback | null = null;
+    const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+      frameCallback = callback;
+      return 7;
+    });
+    window.requestAnimationFrame = requestAnimationFrame as typeof window.requestAnimationFrame;
+
+    useViewerStore.setState({
+      currentIndex: 0,
+      currentImagePath: images[0].path,
+      images,
+    });
+
+    const { container } = render(<ThumbnailStrip />);
+    const stripContainer = container.querySelector('.thumbnail-strip-container') as HTMLDivElement;
+    preloadThumbnailsMock.mockClear();
+    requestAnimationFrame.mockClear();
+
+    fireEvent.wheel(stripContainer, { deltaY: 50 * 78 });
+    fireEvent.wheel(stripContainer, { deltaY: 2 * 78 });
+
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(preloadThumbnailsMock).not.toHaveBeenCalled();
+
+    act(() => {
+      frameCallback?.(0);
+    });
+
+    expect(preloadThumbnailsMock).toHaveBeenCalledTimes(1);
+    expect(
+      (preloadThumbnailsMock.mock.calls[0][0] as Array<{ path: string }>).some(
+        (request) => request.path === images[52].path
+      )
+    ).toBe(true);
   });
 });

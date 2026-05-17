@@ -217,6 +217,7 @@ interface ViewerState {
   viewMode: ViewMode;
   showOnlyFavorites: boolean;
   favoritePaths: FavoritePathMap;
+  favoriteFilterReturnPath: string | null;
   comparePrimaryIndex: number;
   compareSecondaryIndex: number;
   compareFocusedPane: CompareFocusedPane;
@@ -313,6 +314,7 @@ const initialState = {
   viewMode: 'viewer' as ViewMode,
   showOnlyFavorites: false,
   favoritePaths: {},
+  favoriteFilterReturnPath: null,
   comparePrimaryIndex: -1,
   compareSecondaryIndex: -1,
   compareFocusedPane: 'secondary' as CompareFocusedPane,
@@ -415,7 +417,8 @@ function getFilteredImagesState(
   state: ViewerState,
   nextAllImages: ImageFile[],
   nextShowOnlyFavorites: boolean,
-  nextFavoritePaths = state.favoritePaths
+  nextFavoritePaths = state.favoritePaths,
+  preferredCurrentPath = state.currentImagePath
 ): Partial<ViewerState> {
   const nextImages = getVisibleImages(nextAllImages, nextShowOnlyFavorites, nextFavoritePaths);
   const compareState = resolveCompareStateForImages(
@@ -445,8 +448,8 @@ function getFilteredImagesState(
     };
   }
 
-  const matchedIndex = state.currentImagePath
-    ? nextImages.findIndex((image) => image.path === state.currentImagePath)
+  const matchedIndex = preferredCurrentPath
+    ? nextImages.findIndex((image) => image.path === preferredCurrentPath)
     : -1;
   const nextIndex =
     matchedIndex >= 0
@@ -474,13 +477,15 @@ function getFavoriteSafeImagesState(
   state: ViewerState,
   nextAllImages: ImageFile[],
   nextShowOnlyFavorites: boolean,
-  nextFavoritePaths = state.favoritePaths
+  nextFavoritePaths = state.favoritePaths,
+  preferredCurrentPath = state.currentImagePath
 ): Partial<ViewerState> {
   const filteredState = getFilteredImagesState(
     state,
     nextAllImages,
     nextShowOnlyFavorites,
-    nextFavoritePaths
+    nextFavoritePaths,
+    preferredCurrentPath
   );
 
   if (
@@ -566,8 +571,27 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
     setShowOnlyFavorites: (showOnlyFavorites) =>
       set((state) => {
+        if (showOnlyFavorites === state.showOnlyFavorites) {
+          return {};
+        }
+
         const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
-        return getFavoriteSafeImagesState(state, sourceImages, showOnlyFavorites);
+        const preferredCurrentPath = showOnlyFavorites
+          ? state.currentImagePath
+          : (state.favoriteFilterReturnPath ?? state.currentImagePath);
+        const filterState = getFavoriteSafeImagesState(
+          state,
+          sourceImages,
+          showOnlyFavorites,
+          state.favoritePaths,
+          preferredCurrentPath
+        );
+
+        return {
+          ...filterState,
+          favoriteFilterReturnPath:
+            filterState.showOnlyFavorites === true ? state.currentImagePath : null,
+        };
       }),
 
     syncFavoriteFilter: (curationByPath) =>
@@ -597,7 +621,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         const path = images[index].path;
         recordImageSelectedTelemetry(path);
         const editFields = getEditFieldsForPath(path, state.pendingEditsByPath);
-        const zoomMode = options?.zoomMode ?? defaultZoomMode;
+        const zoomMode = options?.zoomMode ?? (state.isSlideshowActive ? 'fit' : defaultZoomMode);
         const updates: Partial<ViewerState> = {
           currentIndex: index,
           currentImagePath: path,
@@ -921,7 +945,15 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         };
       }),
 
-    startSlideshow: () => set({ isSlideshowActive: true, isSlideshowPaused: false }),
+    startSlideshow: () =>
+      set({
+        isSlideshowActive: true,
+        isSlideshowPaused: false,
+        zoomMode: 'fit',
+        zoomLevel: 1,
+        panX: 0,
+        panY: 0,
+      }),
 
     stopSlideshow: () => set({ isSlideshowActive: false, isSlideshowPaused: false }),
 

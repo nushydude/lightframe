@@ -23,6 +23,7 @@ import {
   transferImagesToDestination,
 } from '../services/viewerActions';
 import type { QuickDestination } from '../types/settings';
+import { ToolbarIcon } from './ToolbarIcon';
 
 const GRID_ITEM_SIZE = 140;
 const GRID_GAP = 20;
@@ -36,6 +37,7 @@ interface ContactSheetProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
   onRefreshFolder: () => void;
+  onStartSlideshow: () => void | Promise<void>;
 }
 
 /**
@@ -49,6 +51,7 @@ export function ContactSheet({
   onOpenFile,
   onOpenFolder,
   onRefreshFolder,
+  onStartSlideshow,
 }: ContactSheetProps) {
   const {
     images,
@@ -107,6 +110,7 @@ export function ContactSheet({
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const canEnterCompareMode = images.length > 1;
+  const canStartSlideshow = images.length > 1;
   const cropDisabledByRotation = rotation !== 0;
 
   useEffect(() => {
@@ -326,6 +330,15 @@ export function ContactSheet({
     });
   };
 
+  const handleStartSlideshow = async () => {
+    const didExit = await onExitGridView();
+    if (!didExit) {
+      return;
+    }
+
+    await onStartSlideshow();
+  };
+
   const renderQuickDestinationMenu = (mode: 'copy' | 'move') => (
     <div className="top-bar-submenu-panel">
       {quickDestinations.length === 0 ? (
@@ -457,11 +470,13 @@ export function ContactSheet({
             <button
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isFavorite ? 'active' : ''}`}
               onClick={() => void handleToggleFavorite()}
-              data-tooltip="Toggle favorite (F)"
-              title="Toggle favorite (F)"
+              data-tooltip={isFavorite ? 'Remove favorite (F)' : 'Mark as favorite (F)'}
+              title={isFavorite ? 'Remove favorite (F)' : 'Mark as favorite (F)'}
               aria-label="Toggle favorite"
             >
-              <span className="top-bar-btn-icon">{isFavorite ? '★' : '☆'}</span>
+              <span className="top-bar-btn-icon">
+                <ToolbarIcon name="favorite" />
+              </span>
               <span className="top-bar-btn-label">Favorite</span>
             </button>
             <button
@@ -471,8 +486,23 @@ export function ContactSheet({
               title={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
               aria-label={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
             >
-              <span className="top-bar-btn-icon">Fav</span>
+              <span className="top-bar-btn-icon">
+                <ToolbarIcon name="favorites" />
+              </span>
               <span className="top-bar-btn-label">Only</span>
+            </button>
+            <button
+              className="top-bar-btn top-bar-btn--labeled has-tooltip"
+              onClick={() => void handleStartSlideshow()}
+              data-tooltip="Start slideshow (F5)"
+              title="Start slideshow (F5)"
+              aria-label="Start slideshow"
+              disabled={!canStartSlideshow}
+            >
+              <span className="top-bar-btn-icon">
+                <ToolbarIcon name="slideshow" />
+              </span>
+              <span className="top-bar-btn-label">Slideshow</span>
             </button>
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"

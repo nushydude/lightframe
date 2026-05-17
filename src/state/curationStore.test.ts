@@ -63,15 +63,58 @@ describe('curationStore', () => {
     });
   });
 
-  it('sets rating with clamping and clears default-state entries', async () => {
+  it('allows favorite to be removed from an already high-rated image', async () => {
     writeImageCurationMock.mockResolvedValue(undefined);
+    useCurationStore.setState({
+      curationByPath: {
+        'C:/images/photo.jpg': {
+          path: 'C:/images/photo.jpg',
+          favorite: true,
+          rating: 5,
+          updated_at: 10,
+        },
+      },
+      isLoaded: true,
+    });
 
-    await useCurationStore.getState().setRating('C:/images/photo.jpg', 8);
+    await useCurationStore.getState().toggleFavorite('C:/images/photo.jpg');
 
     expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/photo.jpg', false, 5);
     expect(useCurationStore.getState().curationByPath['C:/images/photo.jpg']).toMatchObject({
       favorite: false,
       rating: 5,
+    });
+  });
+
+  it('promotes 4-star and 5-star ratings to favorites', async () => {
+    writeImageCurationMock.mockResolvedValue(undefined);
+
+    await useCurationStore.getState().setRating('C:/images/photo.jpg', 8);
+
+    expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/photo.jpg', true, 5);
+    expect(useCurationStore.getState().curationByPath['C:/images/photo.jpg']).toMatchObject({
+      favorite: true,
+      rating: 5,
+    });
+
+    await useCurationStore.getState().setRating('C:/images/photo.jpg', 0);
+
+    expect(writeImageCurationMock).toHaveBeenLastCalledWith('C:/images/photo.jpg', true, 0);
+    expect(useCurationStore.getState().curationByPath['C:/images/photo.jpg']).toMatchObject({
+      favorite: true,
+      rating: 0,
+    });
+  });
+
+  it('clears default-state entries for non-favorite low ratings', async () => {
+    writeImageCurationMock.mockResolvedValue(undefined);
+
+    await useCurationStore.getState().setRating('C:/images/photo.jpg', 3);
+
+    expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/photo.jpg', false, 3);
+    expect(useCurationStore.getState().curationByPath['C:/images/photo.jpg']).toMatchObject({
+      favorite: false,
+      rating: 3,
     });
 
     await useCurationStore.getState().setRating('C:/images/photo.jpg', 0);

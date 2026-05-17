@@ -90,6 +90,36 @@ describe('viewerStore', () => {
     expect(state.zoomLevel).toBe(1);
   });
 
+  it('keeps slideshow navigation fit to window', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+      zoomMode: 'custom',
+      zoomLevel: 3,
+      panX: 120,
+      panY: -80,
+    });
+    useViewerStore.getState().setDefaultZoomMode('actual');
+
+    useViewerStore.getState().startSlideshow();
+
+    expect(useViewerStore.getState().zoomMode).toBe('fit');
+    expect(useViewerStore.getState().zoomLevel).toBe(1);
+    expect(useViewerStore.getState().panX).toBe(0);
+    expect(useViewerStore.getState().panY).toBe(0);
+
+    useViewerStore.getState().setZoomMode('actual');
+    useViewerStore.getState().setCurrentIndex(1);
+
+    expect(useViewerStore.getState().currentImagePath).toBe('2.jpg');
+    expect(useViewerStore.getState().zoomMode).toBe('fit');
+    expect(useViewerStore.getState().zoomLevel).toBe(1);
+  });
+
   it('reset preserves defaultZoomMode for next image open', () => {
     useViewerStore.getState().setDefaultZoomMode('fill');
     useViewerStore.getState().reset();
@@ -186,6 +216,29 @@ describe('viewerStore', () => {
       '2.jpg',
       '3.jpg',
     ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('1.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+  });
+
+  it('returns to the pre-filter image when favorites-only is disabled', () => {
+    const folderImages = [
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ];
+
+    useViewerStore.getState().setImages(folderImages);
+    useViewerStore.getState().setCurrentIndex(2);
+    useViewerStore.getState().syncFavoriteFilter({
+      '2.jpg': { favorite: true },
+    });
+
+    useViewerStore.getState().setShowOnlyFavorites(true);
+    expect(useViewerStore.getState().currentImagePath).toBe('2.jpg');
+
+    useViewerStore.getState().setShowOnlyFavorites(false);
+    expect(useViewerStore.getState().currentImagePath).toBe('3.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
   });
 
   it('refreshes the favorites filter when curation changes', () => {

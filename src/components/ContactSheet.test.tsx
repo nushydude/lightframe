@@ -115,6 +115,7 @@ describe('ContactSheet', () => {
         onOpenFile={() => undefined}
         onOpenFolder={() => undefined}
         onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
       />
     );
 
@@ -137,6 +138,7 @@ describe('ContactSheet', () => {
         onOpenFile={() => undefined}
         onOpenFolder={() => undefined}
         onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
       />
     );
 
@@ -146,5 +148,91 @@ describe('ContactSheet', () => {
       expect(openSecondaryWindowMock).toHaveBeenCalledTimes(1);
       expect(refreshProjectorStateMock).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('starts slideshow from grid view after the grid exit flow succeeds', async () => {
+    const onStartSlideshow = vi.fn();
+    const onExitGridView = vi.fn(async () => {
+      useViewerStore.getState().setViewMode('viewer');
+      return true;
+    });
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={onExitGridView}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={onStartSlideshow}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start slideshow' }));
+
+    await waitFor(() => {
+      expect(onExitGridView).toHaveBeenCalledTimes(1);
+      expect(onStartSlideshow).toHaveBeenCalledTimes(1);
+      expect(useViewerStore.getState().viewMode).toBe('viewer');
+    });
+  });
+
+  it('does not start slideshow when the grid exit flow is canceled', async () => {
+    const onStartSlideshow = vi.fn();
+    const onExitGridView = vi.fn(async () => false);
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={onExitGridView}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={onStartSlideshow}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start slideshow' }));
+
+    await waitFor(() => {
+      expect(onExitGridView).toHaveBeenCalledTimes(1);
+    });
+    expect(onStartSlideshow).not.toHaveBeenCalled();
   });
 });
