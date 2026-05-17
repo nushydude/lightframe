@@ -3,6 +3,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useMemo,
   type CSSProperties,
   type SyntheticEvent,
 } from 'react';
@@ -244,56 +245,91 @@ function getAdjacentPreloadPlan(
   };
 }
 
-function getImageStyle({
-  zoomMode,
-  panX,
-  panY,
-  rotation,
-  zoomLevel,
-  isFullResolutionReady,
-  metadata,
-  pendingCropPreview,
-  isCropMode,
-}: ImageStyleOptions): CSSProperties {
-  const style: CSSProperties = {};
-  const rotationStr = rotation !== 0 ? `rotate(${rotation}deg)` : '';
+function getRotationTransform(rotation: number): string {
+  return rotation !== 0 ? `rotate(${rotation}deg)` : '';
+}
+
+function applyZoomStyle(
+  style: CSSProperties,
+  {
+    zoomMode,
+    panX,
+    panY,
+    rotation,
+    zoomLevel,
+  }: Pick<ImageStyleOptions, 'zoomMode' | 'panX' | 'panY' | 'rotation' | 'zoomLevel'>
+): void {
+  const rotationStr = getRotationTransform(rotation);
 
   if (zoomMode === 'actual') {
     style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
     style.maxWidth = 'none';
     style.maxHeight = 'none';
-  } else if (zoomMode === 'custom') {
+    return;
+  }
+
+  if (zoomMode === 'custom') {
     style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
     style.maxWidth = 'none';
     style.maxHeight = 'none';
-  } else if (zoomMode === 'fill') {
+    return;
+  }
+
+  if (zoomMode === 'fill') {
     style.width = '100%';
     style.height = '100%';
     style.objectFit = 'cover';
     style.transform = rotationStr;
-  } else {
-    style.transform = rotationStr;
-
-    if (rotation === 90 || rotation === 270) {
-      style.maxWidth = '100vh';
-      style.maxHeight = '100vw';
-    }
+    return;
   }
 
-  if (
+  style.transform = rotationStr;
+  if (rotation === 90 || rotation === 270) {
+    style.maxWidth = '100vh';
+    style.maxHeight = '100vw';
+  }
+}
+
+function applyPreviewDimensions(
+  style: CSSProperties,
+  {
+    zoomMode,
+    isFullResolutionReady,
+    metadata,
+  }: Pick<ImageStyleOptions, 'zoomMode' | 'isFullResolutionReady' | 'metadata'>
+): void {
+  const shouldPinPreviewSize =
     !isFullResolutionReady &&
     metadata?.width != null &&
     metadata?.height != null &&
-    (zoomMode === 'actual' || zoomMode === 'custom')
-  ) {
-    style.width = `${metadata.width}px`;
-    style.height = `${metadata.height}px`;
+    (zoomMode === 'actual' || zoomMode === 'custom');
+
+  if (!shouldPinPreviewSize) {
+    return;
   }
 
-  if (pendingCropPreview && !isCropMode) {
-    style.clipPath = getPreviewClipPath(pendingCropPreview);
-    style.transformOrigin = 'center center';
+  style.width = `${metadata.width}px`;
+  style.height = `${metadata.height}px`;
+}
+
+function applyCropPreviewStyle(
+  style: CSSProperties,
+  { pendingCropPreview, isCropMode }: Pick<ImageStyleOptions, 'pendingCropPreview' | 'isCropMode'>
+): void {
+  if (!pendingCropPreview || isCropMode) {
+    return;
   }
+
+  style.clipPath = getPreviewClipPath(pendingCropPreview);
+  style.transformOrigin = 'center center';
+}
+
+function getImageStyle(options: ImageStyleOptions): CSSProperties {
+  const style: CSSProperties = {};
+
+  applyZoomStyle(style, options);
+  applyPreviewDimensions(style, options);
+  applyCropPreviewStyle(style, options);
 
   return style;
 }
@@ -345,8 +381,13 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
 
   const images = useViewerStore((s) => s.images);
+  const allImages = useViewerStore((s) => s.allImages);
   const performanceMode = useSettingsStore((state) => state.settings.performanceMode);
   const performanceProfile = getPerformanceModeProfile(performanceMode);
+  const cacheRetentionPaths = useMemo(
+    () => new Set((allImages.length > 0 ? allImages : images).map((image) => image.path)),
+    [allImages, images]
+  );
 
   useEffect(() => {
     zoomStateRef.current = { zoomMode, zoomLevel };
@@ -609,9 +650,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   }, [currentIndex]);
 
   useEffect(() => {
-    const folderPaths = new Set(images.map((image) => image.path));
-    trimImageAssetCache(folderPaths, Number.POSITIVE_INFINITY, { pruneMissing: true });
-  }, [images]);
+    trimImageAssetCache(cacheRetentionPaths, Number.POSITIVE_INFINITY, { pruneMissing: true });
+  }, [cacheRetentionPaths]);
 
   // Preload adjacent images
   useEffect(() => {
@@ -679,6 +719,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
         trimImageAssetCache(keepSet, NAVIGATION_CACHE_MAX_FULL_ASSET_ENTRIES, {
           pruneMissing: true,
+          pruneMissingPaths: cacheRetentionPaths,
+          cancelOutsidePaths: cacheRetentionPaths,
         });
       });
     }, NAVIGATION_CACHE_PRELOAD_DEBOUNCE_MS);
@@ -688,7 +730,14 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       preloadAbortController.abort();
       window.clearTimeout(timer);
     };
-  }, [currentImagePath, currentIndex, images, loadGeneration, performanceProfile]);
+  }, [
+    cacheRetentionPaths,
+    currentImagePath,
+    currentIndex,
+    images,
+    loadGeneration,
+    performanceProfile,
+  ]);
 
   const previewSrc = previewAsset?.url ?? '';
   const fullSrc = fullAsset?.url ?? '';

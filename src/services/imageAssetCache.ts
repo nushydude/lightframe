@@ -56,6 +56,8 @@ type ScheduledCacheReadOptions = CacheReadOptions & {
 
 type CacheTrimOptions = {
   pruneMissing?: boolean;
+  pruneMissingPaths?: Set<string>;
+  cancelOutsidePaths?: Set<string>;
 };
 
 const fullImageAssetCache = new Map<string, ImageAssetEntry>();
@@ -534,8 +536,9 @@ export function trimImageAssetCache(
   options?: CacheTrimOptions
 ): void {
   if (options?.pruneMissing) {
-    maybePruneEntries(fullImageAssetCache, keepPaths);
-    prunePreviewAssetEntries(keepPaths);
+    const prunePaths = options.pruneMissingPaths ?? keepPaths;
+    maybePruneEntries(fullImageAssetCache, prunePaths);
+    prunePreviewAssetEntries(prunePaths);
   }
 
   if (Number.isFinite(maxEntries)) {
@@ -545,11 +548,12 @@ export function trimImageAssetCache(
 
   trimCacheEntries(fullImageAssetCache, keepPaths, maxEntries);
   enforcePreviewBudget(latestProtectedPreviewPaths);
+  const cancelKeepPaths = options?.cancelOutsidePaths ?? keepPaths;
   imageWorkScheduler.cancelQueued(
     (task) =>
       (task.priority === IMAGE_WORK_PRIORITY.backgroundPreload ||
         task.priority === IMAGE_WORK_PRIORITY.adjacentDirectional) &&
-      !keepPaths.has(task.sourcePath) &&
+      !cancelKeepPaths.has(task.sourcePath) &&
       (task.key.startsWith('preview::') || task.key.startsWith('full::'))
   );
   syncImageAssetTelemetry();

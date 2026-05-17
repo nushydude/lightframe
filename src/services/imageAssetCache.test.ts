@@ -170,6 +170,29 @@ describe('imageAssetCache', () => {
     expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
   });
 
+  it('trimImageAssetCache can prune against a wider folder scope than the visible keep set', async () => {
+    const { requestFullAsset, trimImageAssetCache } = await loadCacheModule();
+
+    const visiblePath = 'C:/images/favorite.jpg';
+    const hiddenPath = 'C:/images/not-favorite.jpg';
+    const stalePath = 'C:/images/removed.jpg';
+
+    await requestFullAsset(visiblePath);
+    await requestFullAsset(hiddenPath);
+    await requestFullAsset(stalePath);
+    expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
+
+    trimImageAssetCache(new Set([visiblePath]), 12, {
+      pruneMissing: true,
+      pruneMissingPaths: new Set([visiblePath, hiddenPath]),
+    });
+
+    await requestFullAsset(visiblePath);
+    await requestFullAsset(hiddenPath);
+    await requestFullAsset(stalePath);
+    expect(convertFileSrcMock).toHaveBeenCalledTimes(4);
+  });
+
   it('caches preview asset URLs and reuses them for repeated reads', async () => {
     const { getPreviewAsset } = await loadCacheModule();
     const path = 'C:/images/preview-a.jpg';

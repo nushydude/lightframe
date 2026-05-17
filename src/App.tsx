@@ -62,6 +62,8 @@ function App() {
     setShowPerformanceTelemetry,
     setFullscreen,
     setDefaultZoomMode,
+    resetZoom,
+    syncFavoriteFilter,
     reset,
   } = useViewerStore();
 
@@ -69,6 +71,7 @@ function App() {
   const loadCuration = useCurationStore((state) => state.loadCuration);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
+  const curationByPath = useCurationStore((state) => state.curationByPath);
 
   const {
     openImage,
@@ -103,6 +106,7 @@ function App() {
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const { showControls } = useViewerStore();
   const [isSecondary, setIsSecondary] = useState(false);
+  const isProjectorWindow = appWindowRef.current.label === 'secondary';
 
   const showMainWindowOnce = useCallback(async () => {
     if (startupShowAttemptedRef.current) return;
@@ -144,8 +148,8 @@ function App() {
 
   // Keep viewer default zoom mode in sync with settings for newly opened images.
   useEffect(() => {
-    setDefaultZoomMode(settings.defaultFitMode);
-  }, [settings.defaultFitMode, setDefaultZoomMode]);
+    setDefaultZoomMode(isProjectorWindow ? 'fit' : settings.defaultFitMode);
+  }, [isProjectorWindow, settings.defaultFitMode, setDefaultZoomMode]);
 
   // Handle CLI arguments (default file association) and resolve startup readiness
   useEffect(() => {
@@ -158,7 +162,7 @@ function App() {
       await Promise.all([loadSettings(), loadCuration()]);
       if (!isCancelled) {
         const loadedSettings = useSettingsStore.getState().settings;
-        const loadedDefaultFitMode = loadedSettings.defaultFitMode;
+        const loadedDefaultFitMode = isProjectorWindow ? 'fit' : loadedSettings.defaultFitMode;
         useViewerStore.getState().setDefaultZoomMode(loadedDefaultFitMode);
 
         if (
@@ -211,7 +215,7 @@ function App() {
       isCancelled = true;
       if (unlisten) unlisten();
     };
-  }, [loadCuration, loadSettings, openImage, openImageForStartup, setError]);
+  }, [isProjectorWindow, loadCuration, loadSettings, openImage, openImageForStartup, setError]);
 
   useEffect(() => {
     if (!hasStartupResolved || startupShowAttempted) return;
@@ -530,6 +534,18 @@ function App() {
   }, [showPerformanceTelemetry]);
 
   useEffect(() => {
+    syncFavoriteFilter(curationByPath);
+  }, [curationByPath, syncFavoriteFilter]);
+
+  useEffect(() => {
+    if (!isSecondary || !currentImagePath) {
+      return;
+    }
+
+    resetZoom();
+  }, [currentImagePath, isSecondary, resetZoom]);
+
+  useEffect(() => {
     if (firstImagePathTelemetryRecordedRef.current || !currentImagePath) {
       return;
     }
@@ -596,7 +612,7 @@ function App() {
         const state = useViewerStore.getState();
         const nextIndex = state.images.findIndex((image) => image.path === event.payload.imagePath);
         if (nextIndex >= 0) {
-          state.setCurrentIndex(nextIndex);
+          state.setCurrentIndex(nextIndex, { zoomMode: 'fit' });
           return;
         }
 

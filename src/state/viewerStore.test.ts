@@ -73,6 +73,23 @@ describe('viewerStore', () => {
     expect(state.zoomMode).toBe('actual');
   });
 
+  it('setCurrentIndex can override default zoom mode for projector navigation', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+    });
+    useViewerStore.getState().setDefaultZoomMode('fill');
+    useViewerStore.getState().setCurrentIndex(1, { zoomMode: 'fit' });
+
+    const state = useViewerStore.getState();
+    expect(state.currentIndex).toBe(1);
+    expect(state.currentImagePath).toBe('2.jpg');
+    expect(state.zoomMode).toBe('fit');
+    expect(state.zoomLevel).toBe(1);
+  });
+
   it('reset preserves defaultZoomMode for next image open', () => {
     useViewerStore.getState().setDefaultZoomMode('fill');
     useViewerStore.getState().reset();
@@ -139,6 +156,69 @@ describe('viewerStore', () => {
     // Zoom way in
     for (let i = 0; i < 30; i++) useViewerStore.getState().zoomIn();
     expect(useViewerStore.getState().zoomLevel).toBe(20);
+  });
+
+  it('filters the active image list to favorites without losing the full folder list', () => {
+    const folderImages = [
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ];
+    useViewerStore.getState().setImages(folderImages);
+    useViewerStore.getState().setCurrentIndex(0);
+    useViewerStore.getState().syncFavoriteFilter({
+      '2.jpg': { favorite: true },
+    });
+
+    useViewerStore.getState().setShowOnlyFavorites(true);
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['2.jpg']);
+    expect(useViewerStore.getState().allImages.map((image) => image.path)).toEqual([
+      '1.jpg',
+      '2.jpg',
+      '3.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('2.jpg');
+
+    useViewerStore.getState().setShowOnlyFavorites(false);
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      '1.jpg',
+      '2.jpg',
+      '3.jpg',
+    ]);
+  });
+
+  it('refreshes the favorites filter when curation changes', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+    useViewerStore.getState().syncFavoriteFilter({
+      '1.jpg': { favorite: true },
+      '2.jpg': { favorite: true },
+    });
+    useViewerStore.getState().setShowOnlyFavorites(true);
+    useViewerStore.getState().setCurrentIndex(1);
+
+    useViewerStore.getState().syncFavoriteFilter({
+      '1.jpg': { favorite: true },
+    });
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg']);
+    expect(useViewerStore.getState().currentImagePath).toBe('1.jpg');
+  });
+
+  it('keeps the full list visible when favorites-only has no matches', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+
+    useViewerStore.getState().setShowOnlyFavorites(true);
+
+    expect(useViewerStore.getState().showOnlyFavorites).toBe(false);
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg', '2.jpg']);
+    expect(useViewerStore.getState().errorMessage).toContain('No favorite images');
   });
 
   it('should reset store to initial state', () => {

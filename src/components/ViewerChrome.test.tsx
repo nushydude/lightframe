@@ -5,7 +5,7 @@ import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, save } from '@tauri-apps/plugin-dialog';
+import { confirm, message, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
 
 const projectorState = vi.hoisted(() => ({
@@ -229,6 +229,66 @@ describe('ViewerChrome', () => {
     expect(screen.getByText(/▶ Slideshow/i)).toBeInTheDocument();
   });
 
+  it('shows a top-bar slideshow button', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo.jpg',
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(container.querySelector('#btn-top-slideshow') as HTMLButtonElement);
+
+    expect(defaultProps.onStartSlideshow).toHaveBeenCalledTimes(1);
+  });
+
+  it('toggles the favorites-only filter from the toolbar', () => {
+    const folderImages = [
+      {
+        path: 'C:/photo1.jpg',
+        file_name: 'photo1.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1',
+      },
+      {
+        path: 'C:/photo2.jpg',
+        file_name: 'photo2.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2',
+      },
+    ];
+    useViewerStore.getState().setImages(folderImages);
+    useViewerStore.getState().setCurrentIndex(0);
+    useViewerStore.getState().syncFavoriteFilter({
+      'C:/photo2.jpg': { favorite: true },
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Show only favorites'));
+
+    expect(useViewerStore.getState().showOnlyFavorites).toBe(true);
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['C:/photo2.jpg']);
+  });
+
   it('should call zoomIn and zoomOut from store', () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg' });
     const spyIn = vi.spyOn(useViewerStore.getState(), 'zoomIn');
@@ -289,6 +349,268 @@ describe('ViewerChrome', () => {
     });
 
     expect(saveCopySpy).not.toHaveBeenCalled();
+  });
+
+  it('saves a high-quality scaled copy with export adjustments', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+      imageSmoothing: 20,
+      imageSharpening: 30,
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-scaled.jpg');
+    const scaleSpy = vi.spyOn(tauriCommands, 'saveScaledCopy').mockResolvedValue(undefined);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+    fireEvent.change(screen.getByLabelText('Scaled copy width'), {
+      target: { value: '600' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+
+    expect(scaleSpy).toHaveBeenCalledWith(
+      'C:/Images/photo.jpg',
+      'C:/Images/photo-scaled.jpg',
+      600,
+      400,
+      20,
+      30
+    );
+  });
+
+  it('shows a small debounced quality preview sample without filtering the main canvas', async () => {
+    vi.useFakeTimers();
+    try {
+      useViewerStore.setState({
+        currentImagePath: 'C:/Images/photo.jpg',
+        images: [
+          {
+            path: 'C:/Images/photo.jpg',
+            file_name: 'photo.jpg',
+            extension: 'jpg',
+            size_bytes: 100,
+            modified_at: '1',
+          },
+        ],
+        currentIndex: 0,
+        imageSmoothing: 20,
+        imageSharpening: 30,
+      });
+
+      const image = document.createElement('img');
+      image.src = 'asset://localhost/photo.jpg';
+      Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+      Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+      const container = document.createElement('div');
+      container.className = 'image-canvas';
+      container.appendChild(image);
+      document.body.appendChild(container);
+
+      render(<ViewerChrome {...defaultProps} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Scaled export quality'));
+      });
+
+      const sample = screen.getByLabelText('Approximate scaled export preview sample');
+      const sampleImage = sample.querySelector('img') as HTMLImageElement;
+      expect(sampleImage.getAttribute('src')).toContain('photo.jpg');
+      expect(sampleImage.getAttribute('style')).toContain('blur(0.25px)');
+      expect(image.style.filter).toBe('');
+
+      fireEvent.change(screen.getByLabelText('Export smoothing'), {
+        target: { value: '80' },
+      });
+      expect(sampleImage.getAttribute('style')).toContain('blur(0.25px)');
+
+      await act(async () => {
+        vi.advanceTimersByTime(120);
+      });
+
+      expect(sampleImage.getAttribute('style')).toContain('blur(1px)');
+      expect(image.style.filter).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disables scaled export for sources the Rust export pipeline cannot decode', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.heic',
+      images: [
+        {
+          path: 'C:/Images/photo.heic',
+          file_name: 'photo.heic',
+          extension: 'heic',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    const scaleSpy = vi.spyOn(tauriCommands, 'saveScaledCopy').mockResolvedValue(undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+
+    expect(screen.getByText(/Scaled export supports JPEG/)).toBeInTheDocument();
+    const saveButton = screen.getByRole('button', { name: 'Save' });
+    expect(saveButton).toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    expect(save).not.toHaveBeenCalled();
+    expect(scaleSpy).not.toHaveBeenCalled();
+  });
+
+  it('defaults AVIF scaled exports to JPEG and restricts the save dialog filters', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.avif',
+      images: [
+        {
+          path: 'C:/Images/photo.avif',
+          file_name: 'photo.avif',
+          extension: 'avif',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(save).mockResolvedValue(null);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultPath: 'C:/Images/photo-scaled-1200x800.jpg',
+        filters: expect.arrayContaining([
+          expect.objectContaining({ name: 'JPEG image', extensions: ['jpg', 'jpeg'] }),
+          expect.objectContaining({ name: 'PNG image', extensions: ['png'] }),
+        ]),
+      })
+    );
+  });
+
+  it('rejects unsupported scaled export output extensions from the save dialog', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-scaled.heic');
+    const scaleSpy = vi.spyOn(tauriCommands, 'saveScaledCopy').mockResolvedValue(undefined);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+
+    expect(message).toHaveBeenCalledWith(
+      expect.stringContaining('Scaled export can save JPEG'),
+      expect.objectContaining({ kind: 'error' })
+    );
+    expect(scaleSpy).not.toHaveBeenCalled();
+  });
+
+  it('blocks scaled copies above the export pixel cap before opening the save dialog', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    const scaleSpy = vi.spyOn(tauriCommands, 'saveScaledCopy').mockResolvedValue(undefined);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+    fireEvent.change(screen.getByLabelText('Scaled copy width'), {
+      target: { value: '65535' },
+    });
+
+    const saveButton = screen.getByRole('button', { name: 'Save' });
+    expect(saveButton).toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    expect(save).not.toHaveBeenCalled();
+    expect(message).not.toHaveBeenCalled();
+    expect(scaleSpy).not.toHaveBeenCalled();
   });
 
   it('does not call overwrite command when overwrite confirmation is canceled', async () => {

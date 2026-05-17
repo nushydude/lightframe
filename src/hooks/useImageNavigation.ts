@@ -80,7 +80,10 @@ function getFolderRefreshSnapshot(): FolderRefreshSnapshot | null {
     previousImagePath: state.currentImagePath,
     previousIndex: state.currentIndex,
     previousImagesByPath: new Map(
-      state.images.map((image) => [normalizePathKey(image.path), image])
+      (state.allImages.length > 0 ? state.allImages : state.images).map((image) => [
+        normalizePathKey(image.path),
+        image,
+      ])
     ),
   };
 }
@@ -139,6 +142,7 @@ export function useImageNavigation() {
   const emptyFolderOpenMessage = 'No supported images found in the selected folder';
   const {
     images,
+    allImages,
     currentIndex,
     currentImagePath,
     folderPath,
@@ -167,22 +171,24 @@ export function useImageNavigation() {
   );
 
   useEffect(() => {
-    if (images.length === 0 || settings.sortOrder === 'name') return;
+    const sourceImages = allImages.length > 0 ? allImages : images;
+    if (sourceImages.length === 0 || settings.sortOrder === 'name') return;
 
-    const sorted = sortImages([...images], settings.sortOrder);
-    const hasOrderChanged = sorted.some((image, index) => image.path !== images[index]?.path);
+    const sorted = sortImages([...sourceImages], settings.sortOrder);
+    const hasOrderChanged = sorted.some((image, index) => image.path !== sourceImages[index]?.path);
     if (!hasOrderChanged) return;
 
-    const currentPath = images[currentIndex]?.path;
+    const currentPath = useViewerStore.getState().currentImagePath;
     setImages(sorted);
 
     if (currentPath) {
-      const newIndex = sorted.findIndex((image) => image.path === currentPath);
+      const visibleImages = useViewerStore.getState().images;
+      const newIndex = visibleImages.findIndex((image) => image.path === currentPath);
       if (newIndex >= 0 && newIndex !== currentIndex) {
         setCurrentIndex(newIndex);
       }
     }
-  }, [currentIndex, images, setCurrentIndex, setImages, settings.sortOrder]);
+  }, [allImages, currentIndex, images, setCurrentIndex, setImages, settings.sortOrder]);
 
   const applyActiveSortOrder = useCallback(
     (folderImages: ImageFile[]) => sortImages(folderImages, settings.sortOrder),
@@ -199,21 +205,26 @@ export function useImageNavigation() {
       }
     ) => {
       setImages(folderImages);
+      const visibleImages = useViewerStore.getState().images;
 
-      if (folderImages.length === 0) {
+      if (visibleImages.length === 0) {
         useViewerStore.setState({ currentImagePath: null, currentIndex: -1 });
-        setError(options.emptyMessage);
+        setError(
+          useViewerStore.getState().showOnlyFavorites && folderImages.length > 0
+            ? 'No favorite images found in the current folder'
+            : options.emptyMessage
+        );
         return;
       }
 
       const matchedIndex = options.preferredPath
-        ? folderImages.findIndex((image) => image.path === options.preferredPath)
+        ? visibleImages.findIndex((image) => image.path === options.preferredPath)
         : -1;
       const nextIndex =
         matchedIndex >= 0
           ? matchedIndex
-          : Math.min(Math.max(options.preferredIndex, 0), folderImages.length - 1);
-      const nextPath = folderImages[nextIndex]?.path ?? null;
+          : Math.min(Math.max(options.preferredIndex, 0), visibleImages.length - 1);
+      const nextPath = visibleImages[nextIndex]?.path ?? null;
       const state = useViewerStore.getState();
 
       if (state.currentIndex !== nextIndex || state.currentImagePath !== nextPath) {
@@ -608,7 +619,7 @@ export function useImageNavigation() {
 
       const reconciliation = reconcileFolderWatcherPayload({
         payload,
-        images: state.images,
+        images: state.allImages.length > 0 ? state.allImages : state.images,
         currentIndex: state.currentIndex,
         currentImagePath: state.currentImagePath,
         sortOrder: settings.sortOrder,

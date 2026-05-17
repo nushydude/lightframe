@@ -189,6 +189,25 @@ export async function saveCroppedCopy(
   return invoke('save_cropped_copy', { filePath, cropRect, outputPath, rotationDegrees });
 }
 
+/** Save a high-quality scaled copy of an image without overwriting the original */
+export async function saveScaledCopy(
+  filePath: string,
+  outputPath: string,
+  width: number,
+  height: number,
+  smoothing: number,
+  sharpening: number
+): Promise<void> {
+  return invoke('save_scaled_copy', {
+    filePath,
+    outputPath,
+    width,
+    height,
+    smoothing,
+    sharpening,
+  });
+}
+
 /** Overwrite an image with a cropped version after explicit confirmation */
 export async function overwriteWithCrop(
   filePath: string,

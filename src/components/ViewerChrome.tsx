@@ -4,10 +4,12 @@ import { confirm, message, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
 import {
   closeSecondaryWindow,
+  getImageMetadata,
   getFileName,
   openSecondaryWindow,
   overwriteWithCrop,
   saveCroppedCopy,
+  saveScaledCopy,
 } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
 import {
@@ -52,6 +54,43 @@ type SecondaryToolbarActionId =
   | 'settings';
 
 const TOOLBAR_USAGE_STORAGE_KEY = 'lightframe.toolbar-usage.v1';
+const SCALE_EXPORT_MAX_DIMENSION = 65_535;
+const SCALE_EXPORT_MAX_PIXELS = 50_000_000;
+const SCALE_EXPORT_MAX_MEGAPIXELS = SCALE_EXPORT_MAX_PIXELS / 1_000_000;
+const QUALITY_PREVIEW_DEBOUNCE_MS = 120;
+const SCALE_EXPORT_SOURCE_EXTENSIONS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'bmp',
+  'tiff',
+  'tif',
+  'avif',
+]);
+const SCALE_EXPORT_OUTPUT_EXTENSIONS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'bmp',
+  'tiff',
+  'tif',
+]);
+const SCALE_EXPORT_SOURCE_MESSAGE =
+  'Scaled export supports JPEG, PNG, GIF, WebP, BMP, TIFF, and AVIF sources.';
+const SCALE_EXPORT_OUTPUT_MESSAGE =
+  'Scaled export can save JPEG, PNG, GIF, WebP, BMP, or TIFF files.';
+const SCALE_EXPORT_SAVE_FILTERS = [
+  { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
+  { name: 'PNG image', extensions: ['png'] },
+  { name: 'WebP image', extensions: ['webp'] },
+  { name: 'TIFF image', extensions: ['tif', 'tiff'] },
+  { name: 'BMP image', extensions: ['bmp'] },
+  { name: 'GIF image', extensions: ['gif'] },
+];
 
 function readToolbarUsage(): Partial<Record<SecondaryToolbarActionId, number>> {
   if (typeof window === 'undefined') {
@@ -80,6 +119,177 @@ function readToolbarUsage(): Partial<Record<SecondaryToolbarActionId, number>> {
   }
 }
 
+function parseScaleDimension(value: string): number | null {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.round(parsed);
+}
+
+function getScaleValidationMessage(width: number | null, height: number | null): string | null {
+  if (width == null && height == null) {
+    return null;
+  }
+
+  if (!width || !height) {
+    return 'Width and height must be greater than zero.';
+  }
+
+  if (width > SCALE_EXPORT_MAX_DIMENSION || height > SCALE_EXPORT_MAX_DIMENSION) {
+    return `Maximum side length is ${SCALE_EXPORT_MAX_DIMENSION}px.`;
+  }
+
+  if (width * height > SCALE_EXPORT_MAX_PIXELS) {
+    return `Maximum export size is ${SCALE_EXPORT_MAX_MEGAPIXELS} MP.`;
+  }
+
+  return null;
+}
+
+function getPathExtension(path: string | null): string {
+  const fileName = path ? getFileName(path) : '';
+  const dotIndex = fileName.lastIndexOf('.');
+  return dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : '';
+}
+
+function getScaleExportSourceMessage(path: string | null): string | null {
+  const extension = getPathExtension(path);
+  if (!extension || SCALE_EXPORT_SOURCE_EXTENSIONS.has(extension)) {
+    return null;
+  }
+
+  return SCALE_EXPORT_SOURCE_MESSAGE;
+}
+
+function getScaleExportOutputMessage(path: string): string | null {
+  const extension = getPathExtension(path);
+  if (extension && SCALE_EXPORT_OUTPUT_EXTENSIONS.has(extension)) {
+    return null;
+  }
+
+  return SCALE_EXPORT_OUTPUT_MESSAGE;
+}
+
+function getActiveCanvasImageDimensions(): { width: number; height: number } | null {
+  const activeImage = getActiveCanvasImageElement();
+  const width = activeImage?.naturalWidth ?? 0;
+  const height = activeImage?.naturalHeight ?? 0;
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
+}
+
+function getActiveCanvasImageElement(): HTMLImageElement | null {
+  return document.querySelector('.image-canvas img') as HTMLImageElement | null;
+}
+
+function getActiveCanvasImageSource(): string {
+  const activeImage = getActiveCanvasImageElement();
+  return activeImage?.currentSrc || activeImage?.src || '';
+}
+
+function getQualityPreviewFilter(smoothing: number, sharpening: number): string | undefined {
+  const filters: string[] = [];
+  if (smoothing > 0) {
+    filters.push(`blur(${(smoothing / 100) * 1.25}px)`);
+  }
+  if (sharpening > 0) {
+    const contrast = 1 + (sharpening / 100) * 0.35;
+    const saturation = 1 + (sharpening / 100) * 0.12;
+    filters.push(`contrast(${contrast}) saturate(${saturation})`);
+  }
+
+  return filters.length > 0 ? filters.join(' ') : undefined;
+}
+
+function QualityPreviewSample({
+  currentImagePath,
+  smoothing,
+  sharpening,
+}: {
+  currentImagePath: string | null;
+  smoothing: number;
+  sharpening: number;
+}) {
+  const [source, setSource] = useState('');
+  const [previewSmoothing, setPreviewSmoothing] = useState(smoothing);
+  const [previewSharpening, setPreviewSharpening] = useState(sharpening);
+
+  useEffect(() => {
+    const activeImage = getActiveCanvasImageElement();
+    const refreshSource = () => setSource(getActiveCanvasImageSource());
+
+    refreshSource();
+    activeImage?.addEventListener('load', refreshSource);
+    const refreshTimer = window.setTimeout(refreshSource, 0);
+
+    return () => {
+      activeImage?.removeEventListener('load', refreshSource);
+      window.clearTimeout(refreshTimer);
+    };
+  }, [currentImagePath]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPreviewSmoothing(smoothing);
+      setPreviewSharpening(sharpening);
+    }, QUALITY_PREVIEW_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [smoothing, sharpening]);
+
+  if (!source) {
+    return null;
+  }
+
+  const filter = getQualityPreviewFilter(previewSmoothing, previewSharpening);
+
+  return (
+    <div
+      className="quality-preview"
+      role="img"
+      aria-label="Approximate scaled export preview sample"
+    >
+      <img src={source} alt="" draggable={false} style={filter ? { filter } : undefined} />
+    </div>
+  );
+}
+
+async function getSourceImageDimensions(
+  currentImagePath: string
+): Promise<{ width: number; height: number } | null> {
+  try {
+    const metadata = await getImageMetadata(currentImagePath);
+    if (metadata?.width && metadata.height) {
+      return { width: metadata.width, height: metadata.height };
+    }
+  } catch (err) {
+    console.warn('Failed to read source dimensions for scaled export:', err);
+  }
+
+  return getActiveCanvasImageDimensions();
+}
+
+function buildScaledDefaultPath(currentImagePath: string, width: number, height: number): string {
+  const originalName = getFileName(currentImagePath);
+  const dotIndex = originalName.lastIndexOf('.');
+  const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
+  const originalExtension = getPathExtension(currentImagePath);
+  const extension = SCALE_EXPORT_OUTPUT_EXTENSIONS.has(originalExtension)
+    ? `.${originalExtension}`
+    : '.jpg';
+
+  return currentImagePath.replace(
+    originalName,
+    `${baseName}-scaled-${width}x${height}${extension}`
+  );
+}
+
 /** Top bar and navigation overlay controls */
 // fallow-ignore-next-line complexity
 export function ViewerChrome({
@@ -102,10 +312,18 @@ export function ViewerChrome({
     isSlideshowPaused,
     zoomMode,
     zoomLevel,
+    imageSmoothing,
+    imageSharpening,
     isFolderScanning,
+    showOnlyFavorites,
     setFullscreen,
     setShowSettings,
     setZoomMode,
+    resetZoom,
+    setImageSmoothing,
+    setImageSharpening,
+    resetImageAdjustments,
+    setShowOnlyFavorites,
     zoomIn,
     zoomOut,
     removeImage,
@@ -150,6 +368,10 @@ export function ViewerChrome({
   >(() => readToolbarUsage());
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
+  const [scaleWidth, setScaleWidth] = useState('');
+  const [scaleHeight, setScaleHeight] = useState('');
+  const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
+  const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
   const copyToMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -163,6 +385,12 @@ export function ViewerChrome({
       window.removeEventListener('toggle-exif', handler);
     };
   }, []);
+
+  useEffect(() => {
+    setScaleWidth('');
+    setScaleHeight('');
+    setScaleAspectRatio(null);
+  }, [currentImagePath]);
 
   const closeOverflowMenus = () => {
     if (copyToMenuRef.current) {
@@ -207,6 +435,7 @@ export function ViewerChrome({
   const canEnterCompareMode = images.length > 1;
   const cropDisabledByRotation = rotation !== 0 || viewMode === 'compare';
   const canPreviewCrop = isCropMode && cropRect !== null;
+  const canStartSlideshow = images.length > 1;
   const currentPendingEdit = currentImagePath ? pendingEditsByPath[currentImagePath] : undefined;
   const hasPendingEdits = Boolean(currentPendingEdit);
   const canCommitPendingEdits =
@@ -214,6 +443,11 @@ export function ViewerChrome({
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const currentRating = currentCuration?.rating ?? 0;
+  const parsedScaleWidth = parseScaleDimension(scaleWidth);
+  const parsedScaleHeight = parseScaleDimension(scaleHeight);
+  const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
+  const scaleValidationMessage = getScaleValidationMessage(parsedScaleWidth, parsedScaleHeight);
+  const scaleBlockingMessage = scaleExportSourceMessage ?? scaleValidationMessage;
 
   const toggleFullscreen = async () => {
     try {
@@ -294,6 +528,123 @@ export function ViewerChrome({
       return;
     }
     await setRating(currentImagePath, rating);
+  };
+
+  const syncScaleDimensionsFromImage = async () => {
+    if (!currentImagePath) {
+      return null;
+    }
+
+    const dimensions = await getSourceImageDimensions(currentImagePath);
+    if (!dimensions) {
+      return null;
+    }
+
+    setScaleAspectRatio(dimensions.width / dimensions.height);
+    setScaleWidth(String(dimensions.width));
+    setScaleHeight(String(dimensions.height));
+    return dimensions;
+  };
+
+  const handleScaleWidthChange = (value: string) => {
+    setScaleWidth(value);
+    const width = parseScaleDimension(value);
+    const fallbackDimensions = getActiveCanvasImageDimensions();
+    const aspectRatio =
+      scaleAspectRatio ??
+      (fallbackDimensions ? fallbackDimensions.width / fallbackDimensions.height : null);
+    if (width && aspectRatio) {
+      setScaleAspectRatio(aspectRatio);
+      setScaleHeight(String(Math.max(1, Math.round(width / aspectRatio))));
+    }
+  };
+
+  const handleScaleHeightChange = (value: string) => {
+    setScaleHeight(value);
+    const height = parseScaleDimension(value);
+    const fallbackDimensions = getActiveCanvasImageDimensions();
+    const aspectRatio =
+      scaleAspectRatio ??
+      (fallbackDimensions ? fallbackDimensions.width / fallbackDimensions.height : null);
+    if (height && aspectRatio) {
+      setScaleAspectRatio(aspectRatio);
+      setScaleWidth(String(Math.max(1, Math.round(height * aspectRatio))));
+    }
+  };
+
+  const handleSaveScaledCopy = async () => {
+    if (!currentImagePath) {
+      return;
+    }
+
+    const sourceMessage = getScaleExportSourceMessage(currentImagePath);
+    if (sourceMessage) {
+      await message(sourceMessage, {
+        title: 'Scale Copy',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const fallbackDimensions = await getSourceImageDimensions(currentImagePath);
+    const width = parseScaleDimension(scaleWidth) ?? fallbackDimensions?.width ?? null;
+    const height = parseScaleDimension(scaleHeight) ?? fallbackDimensions?.height ?? null;
+    const validationMessage = getScaleValidationMessage(width, height);
+
+    if (validationMessage) {
+      await message(validationMessage, {
+        title: 'Scale Copy',
+        kind: 'error',
+      });
+      return;
+    }
+
+    if (!width || !height) {
+      await message('Unable to determine dimensions for scaled export.', {
+        title: 'Scale Copy',
+        kind: 'error',
+      });
+      return;
+    }
+
+    const outputPath = await save({
+      filters: SCALE_EXPORT_SAVE_FILTERS,
+      defaultPath: buildScaledDefaultPath(currentImagePath, width, height),
+    });
+
+    if (!outputPath) {
+      return;
+    }
+
+    const outputMessage = getScaleExportOutputMessage(outputPath);
+    if (outputMessage) {
+      await message(outputMessage, {
+        title: 'Scale Copy',
+        kind: 'error',
+      });
+      return;
+    }
+
+    try {
+      await saveScaledCopy(
+        currentImagePath,
+        outputPath,
+        width,
+        height,
+        imageSmoothing,
+        imageSharpening
+      );
+      await message(`Saved scaled copy to:\n${outputPath}`, {
+        title: 'Scaled Copy Saved',
+        kind: 'info',
+      });
+    } catch (err) {
+      console.error('Failed to save scaled copy:', err);
+      await message(`Failed to save scaled copy: ${err}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
   };
 
   const handleToggleInfo = () => {
@@ -742,6 +1093,35 @@ export function ViewerChrome({
               <span className="top-bar-btn-label">Favorite</span>
             </button>
             <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${showOnlyFavorites ? 'active' : ''}`}
+              onClick={() => setShowOnlyFavorites(!showOnlyFavorites)}
+              data-tooltip={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
+              title={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
+              aria-label={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
+              id="btn-favorites-filter"
+            >
+              <span className="top-bar-btn-icon">Fav</span>
+              <span className="top-bar-btn-label">Only</span>
+            </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isSlideshowActive ? 'active' : ''}`}
+              onClick={isSlideshowActive ? onTogglePause : onStartSlideshow}
+              data-tooltip={
+                isSlideshowActive ? 'Pause or resume slideshow (Space)' : 'Start slideshow (F5)'
+              }
+              title={
+                isSlideshowActive ? 'Pause or resume slideshow (Space)' : 'Start slideshow (F5)'
+              }
+              aria-label={isSlideshowActive ? 'Toggle slideshow pause' : 'Start slideshow'}
+              id="btn-top-slideshow"
+              disabled={!canStartSlideshow}
+            >
+              <span className="top-bar-btn-icon">
+                {isSlideshowActive && !isSlideshowPaused ? '||' : '>'}
+              </span>
+              <span className="top-bar-btn-label">Slide</span>
+            </button>
+            <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
               onClick={toggleFullscreen}
               data-tooltip="Toggle fullscreen (F11)"
@@ -1041,10 +1421,10 @@ export function ViewerChrome({
 
         <button
           className={`control-btn has-tooltip ${zoomMode === 'fit' ? 'active' : ''}`}
-          onClick={() => setZoomMode('fit')}
-          data-tooltip="Fit to screen (0)"
-          title="Fit to screen (0)"
-          aria-label="Fit to screen"
+          onClick={resetZoom}
+          data-tooltip="Recenter and fit (0)"
+          title="Recenter and fit (0)"
+          aria-label="Recenter and fit"
           id="btn-zoom-fit"
         >
           ⊡
@@ -1060,6 +1440,116 @@ export function ViewerChrome({
         >
           1:1
         </button>
+
+        <details
+          className="quality-menu"
+          onToggle={(event) => {
+            const isOpen = event.currentTarget.open;
+            setIsQualityPanelOpen(isOpen);
+            if (isOpen && (!scaleWidth || !scaleHeight)) {
+              void syncScaleDimensionsFromImage();
+            }
+          }}
+        >
+          <summary
+            className={`control-btn has-tooltip ${imageSmoothing > 0 || imageSharpening > 0 ? 'active' : ''}`}
+            onClick={(event) => {
+              const details = event.currentTarget.parentElement as HTMLDetailsElement | null;
+              setIsQualityPanelOpen(!details?.open);
+            }}
+            data-tooltip="Scaled export quality"
+            title="Scaled export quality"
+            aria-label="Scaled export quality"
+            id="btn-quality-panel"
+          >
+            HQ
+          </summary>
+          <div className="quality-panel">
+            {isQualityPanelOpen && (
+              <QualityPreviewSample
+                currentImagePath={currentImagePath}
+                smoothing={imageSmoothing}
+                sharpening={imageSharpening}
+              />
+            )}
+            <label className="quality-field">
+              <span>Export smooth</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={imageSmoothing}
+                onChange={(event) => setImageSmoothing(Number(event.target.value))}
+                aria-label="Export smoothing"
+              />
+            </label>
+            <label className="quality-field">
+              <span>Export sharpen</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={imageSharpening}
+                onChange={(event) => setImageSharpening(Number(event.target.value))}
+                aria-label="Export sharpening"
+              />
+            </label>
+            <div className="quality-dimensions">
+              <label className="quality-number-field">
+                <span>W</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={SCALE_EXPORT_MAX_DIMENSION}
+                  value={scaleWidth}
+                  onChange={(event) => handleScaleWidthChange(event.target.value)}
+                  aria-label="Scaled copy width"
+                />
+              </label>
+              <label className="quality-number-field">
+                <span>H</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={SCALE_EXPORT_MAX_DIMENSION}
+                  value={scaleHeight}
+                  onChange={(event) => handleScaleHeightChange(event.target.value)}
+                  aria-label="Scaled copy height"
+                />
+              </label>
+            </div>
+            <div
+              className={`quality-limit ${scaleBlockingMessage ? 'warning' : ''}`}
+              aria-live="polite"
+            >
+              {scaleBlockingMessage ?? `Maximum export size is ${SCALE_EXPORT_MAX_MEGAPIXELS} MP.`}
+            </div>
+            <div className="quality-actions">
+              <button
+                className="setting-button-secondary"
+                type="button"
+                onClick={() => void syncScaleDimensionsFromImage()}
+              >
+                1:1
+              </button>
+              <button
+                className="setting-button-secondary"
+                type="button"
+                onClick={resetImageAdjustments}
+              >
+                Reset
+              </button>
+              <button
+                className="setting-button-primary"
+                type="button"
+                onClick={() => void handleSaveScaledCopy()}
+                disabled={Boolean(scaleBlockingMessage)}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </details>
 
         {(isCropMode || pendingCropPreview) && (
           <>
