@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canRequestFullResolutionSafely,
+  getFullResolutionSafetyMessage,
   isLikelyLargeImage,
   PREVIEW_MAX_DIMENSION,
   shouldPreloadAdjacentFullResolution,
@@ -64,6 +66,20 @@ describe('imagePreviewStrategy', () => {
     expect(shouldLoadFullResolutionImmediately(largeImage, 'fit', 1)).toBe(false);
     expect(shouldLoadFullResolutionImmediately(largeImage, 'actual', 1)).toBe(true);
     expect(shouldLoadFullResolutionImmediately(largeImage, 'fit', 1.3)).toBe(true);
+  });
+
+  it('keeps oversized non-tiled images on the preview path even when zoomed', () => {
+    const oversizedImage = {
+      width: 20_000,
+      height: 12_000,
+      file_size_bytes: 200_000_000,
+      format: 'TIFF',
+    };
+
+    expect(canRequestFullResolutionSafely(oversizedImage)).toBe(false);
+    expect(shouldLoadFullResolutionImmediately(oversizedImage, 'fit', 1)).toBe(false);
+    expect(shouldLoadFullResolutionImmediately(oversizedImage, 'actual', 1)).toBe(false);
+    expect(getFullResolutionSafetyMessage(oversizedImage)).toContain('TIFF');
   });
 
   it('preloads adjacent full resolution only when metadata confirms a small image', () => {
