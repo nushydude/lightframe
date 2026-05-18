@@ -32,6 +32,8 @@ import { getImageMetadata } from '../services/tauriCommands';
 import type { ImageMetadata } from '../types/image';
 import { useZoomPan } from '../hooks/useZoomPan';
 import {
+  canRequestFullResolutionSafely,
+  getFullResolutionSafetyMessage,
   PREVIEW_MAX_DIMENSION,
   shouldPreloadAdjacentFullResolution,
   shouldLoadFullResolutionImmediately,
@@ -41,7 +43,6 @@ import { CropOverlay } from './CropOverlay';
 import { getPreviewClipPath } from './cropPreview';
 import { TiledImageRenderer } from './TiledImageRenderer';
 import {
-  isTileDecodeSupportedForPath,
   isTiledRendererCandidate,
   shouldDeferFullResolutionForTiledCandidate,
   shouldUseTiledRenderer,
@@ -88,6 +89,8 @@ type DirectionalWindow = {
   backwardCount: number;
   forwardCount: number;
 };
+
+const PREVIEW_STALL_FULL_RESOLUTION_DELAY_MS = 350;
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -405,6 +408,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const activeWorkAbortControllerRef = useRef<AbortController | null>(null);
   const fullLoadKeyRef = useRef<string | null>(null);
   const imageDisplayErrorRef = useRef<string | null>(null);
+  const fullResolutionSafetyMessageRef = useRef<string | null>(null);
   const metadataByPathRef = useRef(new Map<string, ImageMetadata>());
   const previousIndexRef = useRef<number | null>(null);
   const navigationDirectionRef = useRef<NavigationDirection>('idle');
@@ -432,6 +436,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [fullAsset, setFullAsset] = useState<LoadedImageAsset | null>(null);
   const [isFullResolutionReady, setIsFullResolutionReady] = useState(false);
   const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
+  const [isMetadataResolved, setIsMetadataResolved] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [fullLoadFailed, setFullLoadFailed] = useState(false);
   const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
@@ -466,6 +471,33 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     imageDisplayErrorRef.current = null;
     setError(null);
   }, [setError]);
+
+  const clearFullResolutionSafetyMessage = useCallback(() => {
+    const safetyMessage = fullResolutionSafetyMessageRef.current;
+    fullResolutionSafetyMessageRef.current = null;
+
+    if (safetyMessage && imageDisplayErrorRef.current === safetyMessage) {
+      clearImageDisplayError();
+    }
+  }, [clearImageDisplayError]);
+
+  const blockUnsafeFullResolutionLoad = useCallback(
+    (imageMetadata: ImageMetadata | null) => {
+      const safetyMessage = getFullResolutionSafetyMessage(imageMetadata);
+      if (!safetyMessage) {
+        clearFullResolutionSafetyMessage();
+        return false;
+      }
+
+      fullResolutionSafetyMessageRef.current = safetyMessage;
+      fullLoadKeyRef.current = null;
+      setFullLoadFailed(true);
+      setIsLoading(false);
+      setImageDisplayError(safetyMessage);
+      return true;
+    },
+    [clearFullResolutionSafetyMessage, setImageDisplayError]
+  );
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -565,16 +597,20 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       setPreviewAsset(null);
       setFullAsset(null);
       setMetadata(null);
+      setIsMetadataResolved(false);
       setIsFullResolutionReady(false);
       setFullLoadFailed(false);
       setPreviewDisplayFailed(false);
       setTileLoadFailed(false);
       setIsLoading(false);
       imageDisplayErrorRef.current = null;
+      fullResolutionSafetyMessageRef.current = null;
       return;
     }
 
     let cancelled = false;
+    let previewSettled = false;
+    let previewFallbackTimer: number | null = null;
     const currentWorkAbortController = new AbortController();
     activeWorkAbortControllerRef.current?.abort();
     activeWorkAbortControllerRef.current = currentWorkAbortController;
@@ -585,12 +621,14 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setPreviewAsset(null);
     setFullAsset(null);
     setMetadata(null);
+    setIsMetadataResolved(false);
     setIsFullResolutionReady(false);
     setFullLoadFailed(false);
     setPreviewDisplayFailed(false);
     setTileLoadFailed(false);
     setIsLoading(true);
     imageDisplayErrorRef.current = null;
+    fullResolutionSafetyMessageRef.current = null;
 
     const isCurrentRequest = () => !cancelled && isActiveRequest(requestId);
     const loadCurrentMetadata = async (): Promise<ImageMetadata | null> => {
@@ -603,6 +641,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         if (isCurrentRequest()) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
           setMetadata(imageMetadata);
+          setIsMetadataResolved(true);
           recordImageCodecTelemetry(
             currentImagePath,
             imageMetadata.codec_backend ?? 'unsupported',
@@ -613,6 +652,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       } catch (err) {
         if (!isAbortError(err)) {
           console.warn('Failed to read image metadata:', err);
+        }
+        if (isCurrentRequest()) {
+          setIsMetadataResolved(true);
         }
         return null;
       }
@@ -645,15 +687,14 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       const shouldRequestFull =
         !shouldUseTiles &&
         !shouldDeferFull &&
-        (!isTileCandidate ||
-          shouldLoadFullResolutionImmediately(
-            imageMetadata,
-            currentZoomMode,
-            currentZoomLevel,
-            PREVIEW_MAX_DIMENSION
-          ));
+        shouldLoadFullResolutionImmediately(
+          imageMetadata,
+          currentZoomMode,
+          currentZoomLevel,
+          PREVIEW_MAX_DIMENSION
+        );
 
-      return { shouldRequestFull, shouldUseTiles };
+      return { shouldDeferFull, shouldRequestFull, shouldUseTiles };
     };
 
     const queueInitialFullLoad = (shouldRequestFull: boolean) => {
@@ -664,22 +705,66 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
     };
 
-    const loadCurrentPreview = async (shouldUseTiles: boolean) => {
+    const clearPreviewFallbackTimer = () => {
+      if (previewFallbackTimer == null) {
+        return;
+      }
+
+      window.clearTimeout(previewFallbackTimer);
+      previewFallbackTimer = null;
+    };
+
+    const queuePreviewFallbackFullLoad = (
+      imageMetadata: ImageMetadata | null,
+      shouldUseTiles: boolean,
+      shouldDeferFull: boolean
+    ) => {
+      if (shouldUseTiles || shouldDeferFull || !canRequestFullResolutionSafely(imageMetadata)) {
+        return;
+      }
+
+      clearPreviewFallbackTimer();
+      previewFallbackTimer = window.setTimeout(() => {
+        previewFallbackTimer = null;
+        if (previewSettled || !isCurrentRequest()) {
+          return;
+        }
+
+        ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
+      }, PREVIEW_STALL_FULL_RESOLUTION_DELAY_MS);
+    };
+
+    const loadCurrentPreview = async (
+      shouldUseTiles: boolean,
+      imageMetadata: ImageMetadata | null
+    ) => {
       try {
         const preview = await loadPreviewForPath(
           currentImagePath,
           currentWorkAbortController.signal
         );
         if (isCurrentRequest()) {
+          previewSettled = true;
+          clearPreviewFallbackTimer();
           setPreviewAsset({ path: currentImagePath, url: preview });
         }
       } catch (err) {
         if (isAbortError(err)) {
           return;
         }
+        previewSettled = true;
+        clearPreviewFallbackTimer();
         console.error('Failed to load preview image:', err);
         if (shouldUseTiles && isCurrentRequest()) {
           setIsLoading(false);
+          return;
+        }
+        if (
+          !shouldUseTiles &&
+          isCurrentRequest() &&
+          !canRequestFullResolutionSafely(imageMetadata)
+        ) {
+          blockUnsafeFullResolutionLoad(imageMetadata);
           return;
         }
         if (!shouldUseTiles && isCurrentRequest()) {
@@ -695,15 +780,20 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
     const loadImage = async () => {
       const imageMetadata = await loadCurrentMetadata();
-      const { shouldRequestFull, shouldUseTiles } = getInitialRenderPlan(imageMetadata);
+      const { shouldDeferFull, shouldRequestFull, shouldUseTiles } =
+        getInitialRenderPlan(imageMetadata);
       queueInitialFullLoad(shouldRequestFull);
-      await loadCurrentPreview(shouldUseTiles);
+      if (!shouldRequestFull) {
+        queuePreviewFallbackFullLoad(imageMetadata, shouldUseTiles, shouldDeferFull);
+      }
+      await loadCurrentPreview(shouldUseTiles, imageMetadata);
     };
 
     void loadImage();
 
     return () => {
       cancelled = true;
+      clearPreviewFallbackTimer();
       currentWorkAbortController.abort();
       if (activeWorkAbortControllerRef.current === currentWorkAbortController) {
         activeWorkAbortControllerRef.current = null;
@@ -714,6 +804,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     currentImagePath,
     ensureFullResolutionLoaded,
     isActiveRequest,
+    blockUnsafeFullResolutionLoad,
     loadMetadataForPath,
     loadPreviewForPath,
   ]);
@@ -724,10 +815,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     }
 
     if (!shouldRequestFullResolution(zoomMode, zoomLevel)) {
+      clearFullResolutionSafetyMessage();
       return;
     }
 
-    if (!metadata && isTileDecodeSupportedForPath(currentImagePath)) {
+    if (!isMetadataResolved) {
       return;
     }
 
@@ -760,6 +852,10 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       return;
     }
 
+    if (blockUnsafeFullResolutionLoad(metadata)) {
+      return;
+    }
+
     ensureFullResolutionLoaded(
       currentImagePath,
       activeRequestIdRef.current,
@@ -767,9 +863,12 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     );
   }, [
     currentImagePath,
+    clearFullResolutionSafetyMessage,
     ensureFullResolutionLoaded,
     isCropMode,
     isFullResolutionReady,
+    isMetadataResolved,
+    blockUnsafeFullResolutionLoad,
     metadata,
     pendingCropPreview,
     rotation,

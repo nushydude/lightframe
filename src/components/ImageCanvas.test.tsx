@@ -441,7 +441,7 @@ describe('ImageCanvas', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('renders the full asset immediately so preview rendering cannot block display', async () => {
+  it('renders the full asset when preview rendering stalls', async () => {
     getPreviewAssetMock.mockImplementationOnce(() => new Promise(() => {}));
     getImageMetadataMock.mockResolvedValueOnce({
       width: 4000,
@@ -478,6 +478,12 @@ describe('ImageCanvas', () => {
     const { container } = render(<ImageCanvas />);
 
     await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(350);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -823,6 +829,82 @@ describe('ImageCanvas', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe(
       'asset://localhost/cache/preview.jpg?v=preview'
     );
+  });
+
+  it('keeps oversized non-JPEG images on the preview path during deep zoom', async () => {
+    zoomPanState.zoomLevel = 1.5;
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 20_000,
+      height: 12_000,
+      file_size_bytes: 180_000_000,
+      format: 'TIFF',
+      rust_decode_supported: true,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/huge.tif',
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [
+        {
+          path: 'C:/images/huge.tif',
+          file_name: 'huge.tif',
+          extension: 'tif',
+          size_bytes: 180_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+    expect(getImageTileMock).not.toHaveBeenCalled();
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://localhost/cache/preview.jpg?v=preview'
+    );
+    expect(useViewerStore.getState().errorMessage).toContain('Full-resolution zoom is limited');
+  });
+
+  it('falls back to the browser asset when a safe native-codec preview is unavailable', async () => {
+    getPreviewAssetMock.mockRejectedValueOnce(new Error('native preview unavailable'));
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 4000,
+      height: 3000,
+      file_size_bytes: 12_000_000,
+      format: 'HEIC',
+      rust_decode_supported: false,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/native.heic',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/native.heic',
+          file_name: 'native.heic',
+          extension: 'heic',
+          size_bytes: 12_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/native.heic', expect.anything());
   });
 
   it('falls back to the full asset when tiled decoding fails', async () => {
