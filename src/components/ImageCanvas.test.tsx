@@ -870,6 +870,91 @@ describe('ImageCanvas', () => {
       'asset://localhost/cache/preview.jpg?v=preview'
     );
     expect(useViewerStore.getState().errorMessage).toContain('Full-resolution zoom is limited');
+
+    await act(async () => {
+      fireEvent.load(container.querySelector('img') as HTMLImageElement);
+      await Promise.resolve();
+    });
+
+    expect(useViewerStore.getState().errorMessage).toContain('Full-resolution zoom is limited');
+  });
+
+  it('does not use stale previous-image metadata to authorize full-resolution loads', async () => {
+    zoomPanState.zoomLevel = 1.5;
+    let resolveHugeMetadata:
+      | ((metadata: Awaited<ReturnType<typeof getImageMetadataMock>>) => void)
+      | null = null;
+    getImageMetadataMock
+      .mockResolvedValueOnce({
+        width: 1200,
+        height: 900,
+        file_size_bytes: 1024,
+        format: 'JPEG',
+        rust_decode_supported: true,
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveHugeMetadata = resolve;
+          })
+      );
+
+    const firstImage = {
+      path: 'C:/images/small.jpg',
+      file_name: 'small.jpg',
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: '1',
+    };
+    const secondImage = {
+      path: 'C:/images/huge.tif',
+      file_name: 'huge.tif',
+      extension: 'tif',
+      size_bytes: 180_000_000,
+      modified_at: '1',
+    };
+
+    useViewerStore.setState({
+      currentImagePath: firstImage.path,
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [firstImage, secondImage],
+    });
+
+    render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).toHaveBeenCalledWith(firstImage.path, expect.anything());
+    requestFullAssetMock.mockClear();
+
+    await act(async () => {
+      useViewerStore.getState().setCurrentImage(secondImage.path, 1);
+      useViewerStore.getState().setZoomLevel(1.5);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveHugeMetadata?.({
+        width: 20_000,
+        height: 12_000,
+        file_size_bytes: 180_000_000,
+        format: 'TIFF',
+        rust_decode_supported: true,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().errorMessage).toContain('Full-resolution zoom is limited');
   });
 
   it('falls back to the browser asset when a safe native-codec preview is unavailable', async () => {
@@ -907,7 +992,7 @@ describe('ImageCanvas', () => {
     expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/native.heic', expect.anything());
   });
 
-  it('falls back to the full asset when tiled decoding fails', async () => {
+  it('falls back to the full asset when safe tiled decoding fails', async () => {
     const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
       () =>
         ({
@@ -926,8 +1011,8 @@ describe('ImageCanvas', () => {
     zoomPanState.zoomLevel = 1.5;
     getImageTileMock.mockRejectedValueOnce(new Error('tile decode failed'));
     getImageMetadataMock.mockResolvedValueOnce({
-      width: 12_000,
-      height: 8_000,
+      width: 8000,
+      height: 6000,
       file_size_bytes: 48_000_000,
       format: 'JPEG',
       rust_decode_supported: true,
@@ -959,6 +1044,64 @@ describe('ImageCanvas', () => {
 
     expect(getImageTileMock).toHaveBeenCalled();
     expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/huge.jpg', expect.anything());
+
+    warnSpy.mockRestore();
+    rectSpy.mockRestore();
+  });
+
+  it('keeps oversized JPEGs on preview when tiled decoding fails', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          width: 1000,
+          height: 800,
+          left: 0,
+          top: 0,
+          right: 1000,
+          bottom: 800,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    zoomPanState.zoomLevel = 1.5;
+    getImageTileMock.mockRejectedValueOnce(new Error('tile decode failed'));
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 12_000,
+      height: 8_000,
+      file_size_bytes: 96_000_000,
+      format: 'JPEG',
+      rust_decode_supported: true,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/oversized.jpg',
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [
+        {
+          path: 'C:/images/oversized.jpg',
+          file_name: 'oversized.jpg',
+          extension: 'jpg',
+          size_bytes: 96_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getImageTileMock).toHaveBeenCalled();
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().errorMessage).toContain('Full-resolution zoom is limited');
 
     warnSpy.mockRestore();
     rectSpy.mockRestore();

@@ -90,7 +90,18 @@ type DirectionalWindow = {
   forwardCount: number;
 };
 
+type MetadataLoadState = {
+  path: string | null;
+  metadata: ImageMetadata | null;
+  resolved: boolean;
+};
+
 const PREVIEW_STALL_FULL_RESOLUTION_DELAY_MS = 350;
+const EMPTY_METADATA_LOAD_STATE: MetadataLoadState = {
+  path: null,
+  metadata: null,
+  resolved: false,
+};
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -435,8 +446,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [previewAsset, setPreviewAsset] = useState<LoadedImageAsset | null>(null);
   const [fullAsset, setFullAsset] = useState<LoadedImageAsset | null>(null);
   const [isFullResolutionReady, setIsFullResolutionReady] = useState(false);
-  const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
-  const [isMetadataResolved, setIsMetadataResolved] = useState(false);
+  const [metadataLoadState, setMetadataLoadState] =
+    useState<MetadataLoadState>(EMPTY_METADATA_LOAD_STATE);
   const [isLoading, setIsLoading] = useState(false);
   const [fullLoadFailed, setFullLoadFailed] = useState(false);
   const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
@@ -450,6 +461,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     () => new Set((allImages.length > 0 ? allImages : images).map((image) => image.path)),
     [allImages, images]
   );
+  const metadata = metadataLoadState.path === currentImagePath ? metadataLoadState.metadata : null;
+  const isMetadataResolved =
+    Boolean(currentImagePath) &&
+    metadataLoadState.path === currentImagePath &&
+    metadataLoadState.resolved;
 
   useEffect(() => {
     zoomStateRef.current = { zoomMode, zoomLevel };
@@ -596,8 +612,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       activeWorkAbortControllerRef.current = null;
       setPreviewAsset(null);
       setFullAsset(null);
-      setMetadata(null);
-      setIsMetadataResolved(false);
+      setMetadataLoadState(EMPTY_METADATA_LOAD_STATE);
       setIsFullResolutionReady(false);
       setFullLoadFailed(false);
       setPreviewDisplayFailed(false);
@@ -620,8 +635,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
     setPreviewAsset(null);
     setFullAsset(null);
-    setMetadata(null);
-    setIsMetadataResolved(false);
+    setMetadataLoadState({
+      path: currentImagePath,
+      metadata: null,
+      resolved: false,
+    });
     setIsFullResolutionReady(false);
     setFullLoadFailed(false);
     setPreviewDisplayFailed(false);
@@ -640,8 +658,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         );
         if (isCurrentRequest()) {
           metadataByPathRef.current.set(currentImagePath, imageMetadata);
-          setMetadata(imageMetadata);
-          setIsMetadataResolved(true);
+          setMetadataLoadState({
+            path: currentImagePath,
+            metadata: imageMetadata,
+            resolved: true,
+          });
           recordImageCodecTelemetry(
             currentImagePath,
             imageMetadata.codec_backend ?? 'unsupported',
@@ -654,7 +675,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           console.warn('Failed to read image metadata:', err);
         }
         if (isCurrentRequest()) {
-          setIsMetadataResolved(true);
+          setMetadataLoadState({
+            path: currentImagePath,
+            metadata: null,
+            resolved: true,
+          });
         }
         return null;
       }
@@ -1063,7 +1088,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       setIsLoading(false);
       setPreviewDisplayFailed(false);
       recordPreviewVisibleTelemetry(previewAsset.path);
-      clearImageDisplayError();
+      if (imageDisplayErrorRef.current !== fullResolutionSafetyMessageRef.current) {
+        clearImageDisplayError();
+      }
     },
     [
       clearImageDisplayError,
@@ -1125,7 +1152,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setIsLoading(false);
     setPreviewDisplayFailed(false);
     recordPreviewVisibleTelemetry(previewAsset.path);
-    clearImageDisplayError();
+    if (imageDisplayErrorRef.current !== fullResolutionSafetyMessageRef.current) {
+      clearImageDisplayError();
+    }
   }, [clearImageDisplayError, currentImagePath, previewAsset]);
 
   const handleTiledPreviewError = useCallback(() => {
@@ -1139,12 +1168,16 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     }
 
     setTileLoadFailed(true);
+    if (blockUnsafeFullResolutionLoad(metadata)) {
+      return;
+    }
+
     ensureFullResolutionLoaded(
       currentImagePath,
       activeRequestIdRef.current,
       activeWorkAbortControllerRef.current?.signal
     );
-  }, [currentImagePath, ensureFullResolutionLoaded]);
+  }, [blockUnsafeFullResolutionLoad, currentImagePath, ensureFullResolutionLoaded, metadata]);
 
   const shouldPreloadFullImage =
     !isTiledRendererActive &&
