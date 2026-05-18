@@ -12,10 +12,14 @@ const {
   trimImageAssetCacheMock,
   invalidateImageAssetMock,
   getImageMetadataMock,
+  getImageTileMock,
+  generatedImageAssetToUrlMock,
+  recordImageCodecTelemetryMock,
   recordFullResolutionReadyTelemetryMock,
   recordPreviewVisibleTelemetryMock,
   recordVisibleImageSourceUpdatedTelemetryMock,
   recordImageSelectedTelemetryMock,
+  zoomPanState,
 } = vi.hoisted(() => ({
   getPreviewAssetMock: vi.fn(async () => 'asset://localhost/cache/preview.jpg?v=preview'),
   requestFullAssetMock: vi.fn(async () => 'asset://localhost/full.jpg'),
@@ -23,16 +27,34 @@ const {
   preloadFullAssetMock: vi.fn(async () => undefined),
   trimImageAssetCacheMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
+  getImageTileMock: vi.fn(async () => ({
+    file_path: 'C:/cache/tile.jpg',
+    cache_key: 'tile',
+    width: 512,
+    height: 512,
+  })),
+  generatedImageAssetToUrlMock: vi.fn(
+    (asset: { file_path: string; cache_key: string }) =>
+      `asset://localhost/${asset.file_path}?v=${asset.cache_key}`
+  ),
+  recordImageCodecTelemetryMock: vi.fn(),
   getImageMetadataMock: vi.fn(async () => ({
     width: 1200,
     height: 900,
     file_size_bytes: 1024,
     format: 'JPEG',
+    rust_decode_supported: true,
   })),
   recordFullResolutionReadyTelemetryMock: vi.fn(),
   recordPreviewVisibleTelemetryMock: vi.fn(),
   recordVisibleImageSourceUpdatedTelemetryMock: vi.fn(),
   recordImageSelectedTelemetryMock: vi.fn(),
+  zoomPanState: {
+    zoomLevel: 1,
+    panX: 0,
+    panY: 0,
+    isDragging: false,
+  },
 }));
 
 vi.mock('../services/imageAssetCache', () => ({
@@ -68,9 +90,12 @@ vi.mock('../services/imageWorkScheduler', () => ({
 
 vi.mock('../services/tauriCommands', () => ({
   getImageMetadata: getImageMetadataMock,
+  getImageTile: getImageTileMock,
+  generatedImageAssetToUrl: generatedImageAssetToUrlMock,
 }));
 
 vi.mock('../services/performanceTelemetry', () => ({
+  recordImageCodecTelemetry: recordImageCodecTelemetryMock,
   recordFullResolutionReadyTelemetry: recordFullResolutionReadyTelemetryMock,
   recordPreviewVisibleTelemetry: recordPreviewVisibleTelemetryMock,
   recordVisibleImageSourceUpdatedTelemetry: recordVisibleImageSourceUpdatedTelemetryMock,
@@ -80,10 +105,10 @@ vi.mock('../services/performanceTelemetry', () => ({
 vi.mock('../hooks/useZoomPan', () => ({
   useZoomPan: () => ({
     zoomMode: 'fit',
-    zoomLevel: 1,
-    panX: 0,
-    panY: 0,
-    isDragging: false,
+    zoomLevel: zoomPanState.zoomLevel,
+    panX: zoomPanState.panX,
+    panY: zoomPanState.panY,
+    isDragging: zoomPanState.isDragging,
     handleMouseDown: vi.fn(),
     handleMouseMove: vi.fn(),
     handleMouseUp: vi.fn(),
@@ -95,15 +120,30 @@ describe('ImageCanvas', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    zoomPanState.zoomLevel = 1;
+    zoomPanState.panX = 0;
+    zoomPanState.panY = 0;
+    zoomPanState.isDragging = false;
     getPreviewAssetMock.mockImplementation(
       async () => 'asset://localhost/cache/preview.jpg?v=preview'
     );
     requestFullAssetMock.mockImplementation(async () => 'asset://localhost/full.jpg');
+    getImageTileMock.mockImplementation(async () => ({
+      file_path: 'C:/cache/tile.jpg',
+      cache_key: 'tile',
+      width: 512,
+      height: 512,
+    }));
+    generatedImageAssetToUrlMock.mockImplementation(
+      (asset: { file_path: string; cache_key: string }) =>
+        `asset://localhost/${asset.file_path}?v=${asset.cache_key}`
+    );
     getImageMetadataMock.mockImplementation(async () => ({
       width: 1200,
       height: 900,
       file_size_bytes: 1024,
       format: 'JPEG',
+      rust_decode_supported: true,
     }));
     vi.useFakeTimers();
     useViewerStore.getState().reset();
@@ -408,6 +448,7 @@ describe('ImageCanvas', () => {
       height: 3000,
       file_size_bytes: 1024,
       format: 'JPEG',
+      rust_decode_supported: true,
     });
 
     class FakeImage {
@@ -687,5 +728,157 @@ describe('ImageCanvas', () => {
 
     expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg', expect.anything());
     expect(container.querySelector('img')?.getAttribute('src')).toBe('asset://localhost/full.jpg');
+  });
+
+  it('uses tiles instead of a full asset for deep-zoom huge JPEGs', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          width: 1000,
+          height: 800,
+          left: 0,
+          top: 0,
+          right: 1000,
+          bottom: 800,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect
+    );
+    zoomPanState.zoomLevel = 1.5;
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 12_000,
+      height: 8_000,
+      file_size_bytes: 48_000_000,
+      format: 'JPEG',
+      rust_decode_supported: true,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/huge.jpg',
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [
+        {
+          path: 'C:/images/huge.jpg',
+          file_name: 'huge.jpg',
+          extension: 'jpg',
+          size_bytes: 48_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+    expect(container.querySelector('.tiled-image-renderer')).not.toBeNull();
+    expect(getImageTileMock).toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('keeps zoomed-out huge JPEGs on the preview path', async () => {
+    zoomPanState.zoomLevel = 0.1;
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 20_000,
+      height: 16_000,
+      file_size_bytes: 80_000_000,
+      format: 'JPEG',
+      rust_decode_supported: true,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/huge.jpg',
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [
+        {
+          path: 'C:/images/huge.jpg',
+          file_name: 'huge.jpg',
+          extension: 'jpg',
+          size_bytes: 80_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.tiled-image-renderer')).toBeNull();
+    expect(getImageTileMock).not.toHaveBeenCalled();
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://localhost/cache/preview.jpg?v=preview'
+    );
+  });
+
+  it('falls back to the full asset when tiled decoding fails', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          width: 1000,
+          height: 800,
+          left: 0,
+          top: 0,
+          right: 1000,
+          bottom: 800,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    zoomPanState.zoomLevel = 1.5;
+    getImageTileMock.mockRejectedValueOnce(new Error('tile decode failed'));
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 12_000,
+      height: 8_000,
+      file_size_bytes: 48_000_000,
+      format: 'JPEG',
+      rust_decode_supported: true,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/huge.jpg',
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [
+        {
+          path: 'C:/images/huge.jpg',
+          file_name: 'huge.jpg',
+          extension: 'jpg',
+          size_bytes: 48_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getImageTileMock).toHaveBeenCalled();
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/huge.jpg', expect.anything());
+
+    warnSpy.mockRestore();
+    rectSpy.mockRestore();
   });
 });

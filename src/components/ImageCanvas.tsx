@@ -39,6 +39,13 @@ import {
 } from './imagePreviewStrategy';
 import { CropOverlay } from './CropOverlay';
 import { getPreviewClipPath } from './cropPreview';
+import { TiledImageRenderer } from './TiledImageRenderer';
+import {
+  isTileDecodeSupportedForPath,
+  isTiledRendererCandidate,
+  shouldDeferFullResolutionForTiledCandidate,
+  shouldUseTiledRenderer,
+} from './tiledRenderer';
 
 type ImageCanvasProps = {
   onWheelNext?: () => void;
@@ -428,6 +435,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [fullLoadFailed, setFullLoadFailed] = useState(false);
   const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
+  const [tileLoadFailed, setTileLoadFailed] = useState(false);
 
   const images = useViewerStore((s) => s.images);
   const allImages = useViewerStore((s) => s.allImages);
@@ -560,6 +568,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       setIsFullResolutionReady(false);
       setFullLoadFailed(false);
       setPreviewDisplayFailed(false);
+      setTileLoadFailed(false);
       setIsLoading(false);
       imageDisplayErrorRef.current = null;
       return;
@@ -579,17 +588,14 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setIsFullResolutionReady(false);
     setFullLoadFailed(false);
     setPreviewDisplayFailed(false);
+    setTileLoadFailed(false);
     setIsLoading(true);
     imageDisplayErrorRef.current = null;
 
-    ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
-
-    const loadImage = async () => {
-      const isCurrentRequest = () => !cancelled && isActiveRequest(requestId);
-      let imageMetadata: ImageMetadata | null = null;
-
+    const isCurrentRequest = () => !cancelled && isActiveRequest(requestId);
+    const loadCurrentMetadata = async (): Promise<ImageMetadata | null> => {
       try {
-        imageMetadata = await loadMetadataForPath(
+        const imageMetadata = await loadMetadataForPath(
           currentImagePath,
           requestId,
           currentWorkAbortController.signal
@@ -603,12 +609,62 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
             imageMetadata.native_decode_supported ?? false
           );
         }
+        return imageMetadata;
       } catch (err) {
         if (!isAbortError(err)) {
           console.warn('Failed to read image metadata:', err);
         }
+        return null;
+      }
+    };
+
+    const getInitialRenderPlan = (imageMetadata: ImageMetadata | null) => {
+      const { zoomMode: currentZoomMode, zoomLevel: currentZoomLevel } = zoomStateRef.current;
+      const viewerSnapshot = useViewerStore.getState();
+      const isTileCandidate = isTiledRendererCandidate(imageMetadata, currentImagePath);
+      const shouldUseTiles =
+        isTileCandidate &&
+        shouldUseTiledRenderer({
+          metadata: imageMetadata,
+          filePath: currentImagePath,
+          zoomMode: currentZoomMode,
+          zoomLevel: currentZoomLevel,
+          rotation: viewerSnapshot.rotation,
+          isCropMode: viewerSnapshot.isCropMode,
+          hasPendingCropPreview: Boolean(viewerSnapshot.pendingCropPreview),
+        });
+      const shouldDeferFull = shouldDeferFullResolutionForTiledCandidate({
+        metadata: imageMetadata,
+        filePath: currentImagePath,
+        zoomMode: currentZoomMode,
+        zoomLevel: currentZoomLevel,
+        rotation: viewerSnapshot.rotation,
+        isCropMode: viewerSnapshot.isCropMode,
+        hasPendingCropPreview: Boolean(viewerSnapshot.pendingCropPreview),
+      });
+      const shouldRequestFull =
+        !shouldUseTiles &&
+        !shouldDeferFull &&
+        (!isTileCandidate ||
+          shouldLoadFullResolutionImmediately(
+            imageMetadata,
+            currentZoomMode,
+            currentZoomLevel,
+            PREVIEW_MAX_DIMENSION
+          ));
+
+      return { shouldRequestFull, shouldUseTiles };
+    };
+
+    const queueInitialFullLoad = (shouldRequestFull: boolean) => {
+      if (!shouldRequestFull || !isCurrentRequest()) {
+        return;
       }
 
+      ensureFullResolutionLoaded(currentImagePath, requestId, currentWorkAbortController.signal);
+    };
+
+    const loadCurrentPreview = async (shouldUseTiles: boolean) => {
       try {
         const preview = await loadPreviewForPath(
           currentImagePath,
@@ -622,7 +678,11 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           return;
         }
         console.error('Failed to load preview image:', err);
-        if (isCurrentRequest()) {
+        if (shouldUseTiles && isCurrentRequest()) {
+          setIsLoading(false);
+          return;
+        }
+        if (!shouldUseTiles && isCurrentRequest()) {
           ensureFullResolutionLoaded(
             currentImagePath,
             requestId,
@@ -631,24 +691,13 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         }
         return;
       }
+    };
 
-      const { zoomMode: currentZoomMode, zoomLevel: currentZoomLevel } = zoomStateRef.current;
-      if (
-        shouldLoadFullResolutionImmediately(
-          imageMetadata,
-          currentZoomMode,
-          currentZoomLevel,
-          PREVIEW_MAX_DIMENSION
-        )
-      ) {
-        if (isCurrentRequest()) {
-          ensureFullResolutionLoaded(
-            currentImagePath,
-            requestId,
-            currentWorkAbortController.signal
-          );
-        }
-      }
+    const loadImage = async () => {
+      const imageMetadata = await loadCurrentMetadata();
+      const { shouldRequestFull, shouldUseTiles } = getInitialRenderPlan(imageMetadata);
+      queueInitialFullLoad(shouldRequestFull);
+      await loadCurrentPreview(shouldUseTiles);
     };
 
     void loadImage();
@@ -678,12 +727,56 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       return;
     }
 
+    if (!metadata && isTileDecodeSupportedForPath(currentImagePath)) {
+      return;
+    }
+
+    if (
+      !tileLoadFailed &&
+      shouldUseTiledRenderer({
+        metadata,
+        filePath: currentImagePath,
+        zoomMode,
+        zoomLevel,
+        rotation,
+        isCropMode,
+        hasPendingCropPreview: Boolean(pendingCropPreview),
+      })
+    ) {
+      return;
+    }
+
+    if (
+      shouldDeferFullResolutionForTiledCandidate({
+        metadata,
+        filePath: currentImagePath,
+        zoomMode,
+        zoomLevel,
+        rotation,
+        isCropMode,
+        hasPendingCropPreview: Boolean(pendingCropPreview),
+      })
+    ) {
+      return;
+    }
+
     ensureFullResolutionLoaded(
       currentImagePath,
       activeRequestIdRef.current,
       activeWorkAbortControllerRef.current?.signal
     );
-  }, [currentImagePath, ensureFullResolutionLoaded, isFullResolutionReady, zoomLevel, zoomMode]);
+  }, [
+    currentImagePath,
+    ensureFullResolutionLoaded,
+    isCropMode,
+    isFullResolutionReady,
+    metadata,
+    pendingCropPreview,
+    rotation,
+    tileLoadFailed,
+    zoomLevel,
+    zoomMode,
+  ]);
 
   useEffect(() => {
     const previousIndex = previousIndexRef.current;
@@ -791,7 +884,22 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const previewSrc = previewAsset?.url ?? '';
   const fullSrc = fullAsset?.url ?? '';
   const fullFallbackSrc = fullLoadFailed ? '' : fullSrc;
-  const imageSrc = isFullResolutionReady ? fullSrc : previewSrc || fullFallbackSrc;
+  const isTiledRendererActive =
+    !tileLoadFailed &&
+    shouldUseTiledRenderer({
+      metadata,
+      filePath: currentImagePath,
+      zoomMode,
+      zoomLevel,
+      rotation,
+      isCropMode,
+      hasPendingCropPreview: Boolean(pendingCropPreview),
+    });
+  const imageSrc = isTiledRendererActive
+    ? previewSrc
+    : isFullResolutionReady
+      ? fullSrc
+      : previewSrc || fullFallbackSrc;
   const isImageLoading = isLoading && !previewSrc && !isFullResolutionReady;
 
   useEffect(() => {
@@ -910,8 +1018,41 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     ]
   );
 
+  const handleTiledPreviewLoad = useCallback(() => {
+    if (previewAsset?.path !== currentImagePath || !previewAsset?.path) {
+      return;
+    }
+
+    setIsLoading(false);
+    setPreviewDisplayFailed(false);
+    recordPreviewVisibleTelemetry(previewAsset.path);
+    clearImageDisplayError();
+  }, [clearImageDisplayError, currentImagePath, previewAsset]);
+
+  const handleTiledPreviewError = useCallback(() => {
+    setPreviewDisplayFailed(true);
+    setIsLoading(false);
+  }, []);
+
+  const handleTileLoadError = useCallback(() => {
+    if (!currentImagePath) {
+      return;
+    }
+
+    setTileLoadFailed(true);
+    ensureFullResolutionLoaded(
+      currentImagePath,
+      activeRequestIdRef.current,
+      activeWorkAbortControllerRef.current?.signal
+    );
+  }, [currentImagePath, ensureFullResolutionLoaded]);
+
   const shouldPreloadFullImage =
-    Boolean(fullSrc) && Boolean(previewSrc) && !isFullResolutionReady && !fullLoadFailed;
+    !isTiledRendererActive &&
+    Boolean(fullSrc) &&
+    Boolean(previewSrc) &&
+    !isFullResolutionReady &&
+    !fullLoadFailed;
 
   const updateImageBounds = useCallback(() => {
     const container = containerRef.current;
@@ -980,7 +1121,23 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
     >
-      {imageSrc && (
+      {isTiledRendererActive && metadata && (
+        <TiledImageRenderer
+          key={`${currentImagePath}::${metadata.file_size_bytes}::${metadata.width}::${metadata.height}`}
+          containerRef={containerRef}
+          filePath={currentImagePath}
+          metadata={metadata}
+          previewSrc={previewSrc}
+          zoomMode={zoomMode}
+          zoomLevel={zoomLevel}
+          panX={panX}
+          panY={panY}
+          onPreviewLoad={handleTiledPreviewLoad}
+          onPreviewError={handleTiledPreviewError}
+          onTileError={handleTileLoadError}
+        />
+      )}
+      {!isTiledRendererActive && imageSrc && (
         <img
           key={imageSrc}
           ref={imgRef}
@@ -1008,7 +1165,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           draggable={false}
         />
       )}
-      {isCropMode && cropRect && rotation === 0 && imageBounds && (
+      {!isTiledRendererActive && isCropMode && cropRect && rotation === 0 && imageBounds && (
         <CropOverlay imageBounds={imageBounds} cropRect={cropRect} />
       )}
     </div>
