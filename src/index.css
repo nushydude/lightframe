@@ -728,6 +728,29 @@ body,
   pointer-events: none;
 }
 
+.tiled-image-renderer {
+  position: absolute;
+  pointer-events: none;
+}
+
+.image-canvas .tiled-image-renderer img {
+  position: absolute;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.tiled-image-preview {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.tiled-image-tile {
+  image-rendering: auto;
+}
+
 .crop-overlay {
   position: absolute;
   z-index: calc(var(--z-controls) + 1);

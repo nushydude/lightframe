@@ -1,21 +1,35 @@
 use crate::native_codecs;
 use crate::path_normalization::normalize_path_for_key;
 use image::GenericImageView;
+use libjpeg_turbo_rs::{CropRegion, Subsampling};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 const THUMBNAIL_SIZE: u32 = 160;
 const THUMBNAIL_CACHE_VERSION: &str = "thumb-v3";
 const PREVIEW_CACHE_VERSION: &str = "preview-v1";
+const TILE_CACHE_VERSION: &str = "tile-v1";
 const MAX_CACHE_ENTRIES: usize = 2_000;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const CLEANUP_INTERVAL: usize = 32;
+const MIN_TILE_SIZE: u32 = 128;
+const MAX_TILE_SIZE: u32 = 2_048;
+const TILE_SOURCE_CACHE_VERSION: &str = "tile-source-v1";
+const MAX_TILE_SOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 static CACHE_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CACHE_TMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static JPEG_TILE_SOURCE_CACHE: OnceLock<Mutex<Option<CachedJpegSource>>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct CachedJpegSource {
+    key: String,
+    bytes: Arc<Vec<u8>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatSupport {
@@ -30,6 +44,23 @@ pub struct FormatSupport {
 pub struct SourceMetadata {
     pub size_bytes: u64,
     pub modified_epoch_nanos: u128,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TileRequest {
+    pub source_width: u32,
+    pub source_height: u32,
+    pub tile_size: u32,
+    pub tile_x: u32,
+    pub tile_y: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TileBounds {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,6 +138,28 @@ pub fn build_preview_cache_key(
         Some(max_dimension),
         invalidation_bust.filter(|value| *value > 0),
     )
+}
+
+pub fn build_tile_cache_key(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    request: TileRequest,
+) -> Result<String, String> {
+    validate_tile_request(request)?;
+
+    let normalized = normalize_path_for_key(file_path);
+    Ok([
+        TILE_CACHE_VERSION.to_string(),
+        normalized,
+        metadata.modified_epoch_nanos.to_string(),
+        metadata.size_bytes.to_string(),
+        request.source_width.to_string(),
+        request.source_height.to_string(),
+        request.tile_size.to_string(),
+        request.tile_x.to_string(),
+        request.tile_y.to_string(),
+    ]
+    .join("|"))
 }
 
 pub fn hash_cache_key(cache_key: &str) -> String {
@@ -273,6 +326,75 @@ pub fn get_or_create_preview(
     })
 }
 
+pub fn tile_decode_supported_for_path(file_path: &Path) -> bool {
+    matches!(normalized_extension(file_path).as_deref(), Some("jpg" | "jpeg"))
+}
+
+pub fn validate_tile_request(request: TileRequest) -> Result<TileBounds, String> {
+    if request.source_width == 0 || request.source_height == 0 {
+        return Err("source dimensions must be greater than zero".to_string());
+    }
+
+    if !(MIN_TILE_SIZE..=MAX_TILE_SIZE).contains(&request.tile_size) {
+        return Err(format!("tile_size must be between {} and {}", MIN_TILE_SIZE, MAX_TILE_SIZE));
+    }
+
+    let x = u64::from(request.tile_x)
+        .checked_mul(u64::from(request.tile_size))
+        .ok_or_else(|| "tile x coordinate overflowed".to_string())?;
+    let y = u64::from(request.tile_y)
+        .checked_mul(u64::from(request.tile_size))
+        .ok_or_else(|| "tile y coordinate overflowed".to_string())?;
+
+    if x >= u64::from(request.source_width) || y >= u64::from(request.source_height) {
+        return Err("tile is outside the source image bounds".to_string());
+    }
+
+    let width = u64::from(request.tile_size).min(u64::from(request.source_width) - x);
+    let height = u64::from(request.tile_size).min(u64::from(request.source_height) - y);
+
+    Ok(TileBounds { x: x as u32, y: y as u32, width: width as u32, height: height as u32 })
+}
+
+pub fn get_or_create_tile(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    request: TileRequest,
+) -> Result<GeneratedImageAsset, String> {
+    if !tile_decode_supported_for_path(file_path) {
+        return Err("Tiled rendering currently supports JPEG images only".to_string());
+    }
+
+    let bounds = validate_tile_request(request)?;
+    let cache_key = build_tile_cache_key(file_path, metadata, request)?;
+    let cache_hash = hash_cache_key(&cache_key);
+    let cache_available = ensure_cache_root(cache_root);
+
+    if cache_available {
+        if let Some(asset) =
+            cached_asset_from_disk(cache_root, &cache_hash, &[GeneratedImageFormat::Jpeg])
+        {
+            return Ok(asset);
+        }
+    }
+
+    let source = get_cached_jpeg_tile_source(file_path, metadata)?;
+    let jpeg_bytes = generate_jpeg_tile(source.as_ref().as_slice(), bounds)?;
+    cache_asset_bytes(
+        cache_root,
+        cache_available,
+        &cache_hash,
+        GeneratedImageFormat::Jpeg,
+        &jpeg_bytes,
+        Some((bounds.width, bounds.height)),
+    )
+    .map(|mut asset| {
+        asset.cache_key = cache_hash;
+        asset
+    })
+}
+
 fn build_versioned_cache_key(
     version: &str,
     file_path: &Path,
@@ -323,6 +445,67 @@ fn generate_best_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::Imag
     }
 
     generate_thumbnail_jpeg(file_path)
+}
+
+fn get_cached_jpeg_tile_source(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+) -> Result<Arc<Vec<u8>>, String> {
+    let source_key = hash_cache_key(&build_versioned_cache_key(
+        TILE_SOURCE_CACHE_VERSION,
+        file_path,
+        metadata,
+        None,
+        None,
+    ));
+    let cache = JPEG_TILE_SOURCE_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard =
+        cache.lock().map_err(|_| "JPEG tile source cache lock is poisoned".to_string())?;
+
+    if let Some(entry) = guard.as_ref() {
+        if entry.key == source_key {
+            return Ok(Arc::clone(&entry.bytes));
+        }
+    }
+
+    let bytes = Arc::new(
+        fs::read(file_path)
+            .map_err(|error| format!("Failed to read JPEG source for tile: {}", error))?,
+    );
+    if metadata.size_bytes <= MAX_TILE_SOURCE_CACHE_BYTES {
+        *guard = Some(CachedJpegSource { key: source_key, bytes: Arc::clone(&bytes) });
+    } else {
+        *guard = None;
+    }
+
+    Ok(bytes)
+}
+
+fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, String> {
+    let tile = libjpeg_turbo_rs::decompress_cropped(
+        source,
+        CropRegion {
+            x: bounds.x as usize,
+            y: bounds.y as usize,
+            width: bounds.width as usize,
+            height: bounds.height as usize,
+        },
+    )
+    .map_err(|error| format!("Failed to decode JPEG tile: {}", error))?;
+
+    if tile.width == 0 || tile.height == 0 {
+        return Err("Decoded tile is empty".to_string());
+    }
+
+    libjpeg_turbo_rs::compress(
+        &tile.data,
+        tile.width,
+        tile.height,
+        tile.pixel_format,
+        92,
+        Subsampling::S444,
+    )
+    .map_err(|error| format!("Failed to encode JPEG tile: {}", error))
 }
 
 fn cached_thumbnail_formats(file_path: &Path) -> &'static [GeneratedImageFormat] {
@@ -709,6 +892,73 @@ mod tests {
         let busted = build_preview_cache_key(path, &metadata, 2048, Some(1_767_225_605_000));
 
         assert_ne!(base, busted);
+    }
+
+    #[test]
+    fn tile_cache_key_changes_with_coordinates() {
+        let metadata = SourceMetadata { size_bytes: 42, modified_epoch_nanos: 123 };
+        let path = Path::new("C:/images/photo.jpg");
+        let first = build_tile_cache_key(
+            path,
+            &metadata,
+            TileRequest {
+                source_width: 4_000,
+                source_height: 3_000,
+                tile_size: 512,
+                tile_x: 0,
+                tile_y: 1,
+            },
+        )
+        .unwrap();
+        let second = build_tile_cache_key(
+            path,
+            &metadata,
+            TileRequest {
+                source_width: 4_000,
+                source_height: 3_000,
+                tile_size: 512,
+                tile_x: 1,
+                tile_y: 1,
+            },
+        )
+        .unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn tile_validation_clips_edge_tiles_to_source_bounds() {
+        let bounds = validate_tile_request(TileRequest {
+            source_width: 1_100,
+            source_height: 900,
+            tile_size: 512,
+            tile_x: 2,
+            tile_y: 1,
+        })
+        .unwrap();
+
+        assert_eq!(bounds, TileBounds { x: 1_024, y: 512, width: 76, height: 388 });
+    }
+
+    #[test]
+    fn tile_validation_rejects_out_of_bounds_requests() {
+        let error = validate_tile_request(TileRequest {
+            source_width: 1_100,
+            source_height: 900,
+            tile_size: 512,
+            tile_x: 3,
+            tile_y: 1,
+        })
+        .unwrap_err();
+
+        assert!(error.contains("outside"));
+    }
+
+    #[test]
+    fn tile_decode_support_is_jpeg_only() {
+        assert!(tile_decode_supported_for_path(Path::new("photo.jpg")));
+        assert!(tile_decode_supported_for_path(Path::new("photo.jpeg")));
+        assert!(!tile_decode_supported_for_path(Path::new("photo.png")));
     }
 
     #[test]

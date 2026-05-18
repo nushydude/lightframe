@@ -665,6 +665,66 @@ pub async fn get_preview_image(
     .map_err(|err| format!("Preview image worker failed: {}", err))?
 }
 
+fn get_image_tile_blocking(
+    file_path: String,
+    source_width: u32,
+    source_height: u32,
+    tile_size: u32,
+    tile_x: u32,
+    tile_y: u32,
+    app_cache_dir: PathBuf,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let (actual_width, actual_height) = image::image_dimensions(path)
+        .map_err(|e| format!("Failed to read tile source dimensions: {}", e))?;
+    if actual_width != source_width || actual_height != source_height {
+        return Err(format!(
+            "Tile source dimensions are stale: expected {}x{}, found {}x{}",
+            source_width, source_height, actual_width, actual_height
+        ));
+    }
+
+    let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
+    let tile_cache_dir = app_cache_dir.join("tiles");
+    thumbnails::get_or_create_tile(
+        path,
+        &metadata,
+        &tile_cache_dir,
+        thumbnails::TileRequest { source_width, source_height, tile_size, tile_x, tile_y },
+    )
+}
+
+#[tauri::command]
+pub async fn get_image_tile(
+    app: AppHandle,
+    file_path: String,
+    source_width: u32,
+    source_height: u32,
+    tile_size: u32,
+    tile_x: u32,
+    tile_y: u32,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let app_cache_dir =
+        app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        get_image_tile_blocking(
+            file_path,
+            source_width,
+            source_height,
+            tile_size,
+            tile_x,
+            tile_y,
+            app_cache_dir,
+        )
+    })
+    .await
+    .map_err(|err| format!("Image tile worker failed: {}", err))?
+}
+
 /// Get the settings file path
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let config_dir =
@@ -2288,6 +2348,73 @@ mod tests {
         assert_eq!(height, 360);
         assert_eq!(preview_asset.width, Some(640));
         assert_eq!(preview_asset.height, Some(360));
+    }
+
+    #[test]
+    fn test_get_image_tile_blocking_writes_expected_jpeg_tile() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large.jpg");
+        let cache_dir = dir.path().join("cache");
+        fs::write(&image_path, make_test_jpeg(640, 480, Subsampling::S444)).unwrap();
+
+        let tile_asset = get_image_tile_blocking(
+            image_path.to_string_lossy().to_string(),
+            640,
+            480,
+            256,
+            2,
+            1,
+            cache_dir,
+        )
+        .unwrap();
+        let tile = image::open(&tile_asset.file_path).unwrap();
+
+        assert!(tile_asset.file_path.ends_with(".jpg"));
+        assert_eq!(tile.dimensions(), (128, 224));
+        assert_eq!(tile_asset.width, Some(128));
+        assert_eq!(tile_asset.height, Some(224));
+    }
+
+    #[test]
+    fn test_get_image_tile_blocking_rejects_out_of_bounds_tiles() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large.jpg");
+        let cache_dir = dir.path().join("cache");
+        fs::write(&image_path, make_test_jpeg(640, 480, Subsampling::S444)).unwrap();
+
+        let error = get_image_tile_blocking(
+            image_path.to_string_lossy().to_string(),
+            640,
+            480,
+            256,
+            3,
+            1,
+            cache_dir,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("outside"));
+    }
+
+    #[test]
+    fn test_get_image_tile_blocking_rejects_stale_source_dimensions() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large.jpg");
+        let cache_dir = dir.path().join("cache");
+        fs::write(&image_path, make_test_jpeg(640, 480, Subsampling::S444)).unwrap();
+
+        let error = get_image_tile_blocking(
+            image_path.to_string_lossy().to_string(),
+            800,
+            480,
+            256,
+            0,
+            0,
+            cache_dir,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("stale"));
     }
 
     #[test]

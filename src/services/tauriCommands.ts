@@ -113,6 +113,25 @@ export async function getPreviewImage(
   });
 }
 
+/** Generate a cached native-resolution viewport tile for a large image */
+export async function getImageTile(
+  filePath: string,
+  sourceWidth: number,
+  sourceHeight: number,
+  tileSize: number,
+  tileX: number,
+  tileY: number
+): Promise<GeneratedImageAsset> {
+  return invoke<GeneratedImageAsset>('get_image_tile', {
+    filePath,
+    sourceWidth,
+    sourceHeight,
+    tileSize,
+    tileX,
+    tileY,
+  });
+}
+
 /** Read persisted application settings */
 export async function readSettings(): Promise<AppSettings> {
   const raw = await invoke<Record<string, unknown>>('read_settings');

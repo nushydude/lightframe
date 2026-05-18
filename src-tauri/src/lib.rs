@@ -44,6 +44,7 @@ pub fn run() {
             commands::refresh_folder_index,
             commands::get_image_metadata,
             commands::get_preview_image,
+            commands::get_image_tile,
             commands::read_settings,
             commands::write_settings,
             commands::read_curation_metadata,

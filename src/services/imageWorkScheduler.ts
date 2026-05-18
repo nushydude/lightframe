@@ -56,6 +56,7 @@ type ImageWorkJob<T> = {
   priority: ImageWorkPriority;
   state: 'queued' | 'running';
   sequence: number;
+  settled: boolean;
   run: (context: { signal: AbortSignal }) => Promise<T>;
   controller: AbortController;
   consumers: Map<number, ImageWorkConsumer<T>>;
@@ -228,7 +229,14 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     job: ImageWorkJob<T>,
     settle: (consumer: ImageWorkConsumer<T>) => void
   ): void {
-    jobsByKey.delete(job.key);
+    if (job.settled) {
+      return;
+    }
+
+    job.settled = true;
+    if (jobsByKey.get(job.key) === job) {
+      jobsByKey.delete(job.key);
+    }
     removeQueuedJob(job as ImageWorkJob<unknown>);
     for (const consumer of job.consumers.values()) {
       if (!consumer.canceled) {
@@ -250,7 +258,10 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       const [job] = queuedJobs.splice(nextIndex, 1);
       if (!job || job.consumers.size === 0) {
         if (job) {
-          jobsByKey.delete(job.key);
+          job.settled = true;
+          if (jobsByKey.get(job.key) === job) {
+            jobsByKey.delete(job.key);
+          }
         }
         notify();
         continue;
@@ -297,6 +308,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
         priority: options.priority,
         state: 'queued',
         sequence: nextSequence,
+        settled: false,
         run: async ({ signal }) => options.run({ signal }),
         controller: new AbortController(),
         consumers: new Map<number, ImageWorkConsumer<T>>(),
@@ -335,11 +347,21 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       consumer.reject(createAbortError());
       job.consumers.delete(consumerId);
 
-      if (job.consumers.size === 0 && job.state === 'queued') {
-        if (removeQueuedJob(job as ImageWorkJob<unknown>)) {
-          droppedQueued += 1;
+      if (job.consumers.size === 0) {
+        if (job.state === 'queued') {
+          if (removeQueuedJob(job as ImageWorkJob<unknown>)) {
+            droppedQueued += 1;
+          }
+          jobsByKey.delete(job.key);
+          job.settled = true;
+        } else {
+          job.controller.abort();
+          if (jobsByKey.get(job.key) === job) {
+            jobsByKey.delete(job.key);
+          }
+          job.settled = true;
+          pump();
         }
-        jobsByKey.delete(job.key);
       }
 
       removeAbortListener?.();

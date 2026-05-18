@@ -166,4 +166,52 @@ describe('imageWorkScheduler', () => {
     expect(scheduler.getSnapshot().droppedQueued).toBe(1);
     expect(scheduler.getSnapshot().queueDepth).toBe(0);
   });
+
+  it('frees an interactive slot when running work loses its last consumer', async () => {
+    const scheduler = createImageWorkScheduler({
+      maxConcurrent: 1,
+      maxInteractiveConcurrent: 1,
+      maxVisibleConcurrent: 1,
+      maxBackgroundConcurrent: 1,
+    });
+    const staleBlocker = createDeferred<string>();
+    const abortController = new AbortController();
+    const started: string[] = [];
+    let staleAbortObserved = false;
+
+    const staleWork = scheduler.schedule({
+      key: 'stale',
+      priority: IMAGE_WORK_PRIORITY.currentFull,
+      sourcePath: 'C:/images/stale.jpg',
+      signal: abortController.signal,
+      run: async ({ signal }) => {
+        signal.addEventListener('abort', () => {
+          staleAbortObserved = true;
+        });
+        started.push('stale');
+        return staleBlocker.promise;
+      },
+    });
+
+    const freshWork = scheduler.schedule({
+      key: 'fresh',
+      priority: IMAGE_WORK_PRIORITY.currentFull,
+      sourcePath: 'C:/images/fresh.jpg',
+      run: async () => {
+        started.push('fresh');
+        return 'fresh';
+      },
+    });
+
+    expect(started).toEqual(['stale']);
+
+    abortController.abort();
+
+    await expect(staleWork.promise).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(freshWork.promise).resolves.toBe('fresh');
+    expect(staleAbortObserved).toBe(true);
+    expect(started).toEqual(['stale', 'fresh']);
+
+    staleBlocker.resolve('stale');
+  });
 });
