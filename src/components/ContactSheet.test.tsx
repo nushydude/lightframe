@@ -15,6 +15,7 @@ const {
   openSecondaryWindowMock,
   refreshProjectorStateMock,
   writeImageCurationMock,
+  writeImageCurationBatchMock,
 } = vi.hoisted(() => ({
   copyCurrentImageMock: vi.fn(async () => undefined),
   deleteCurrentImageMock: vi.fn(async () => undefined),
@@ -28,6 +29,7 @@ const {
   openSecondaryWindowMock: vi.fn(async () => undefined),
   refreshProjectorStateMock: vi.fn(async () => undefined),
   writeImageCurationMock: vi.fn(async () => undefined),
+  writeImageCurationBatchMock: vi.fn((): Promise<void> => Promise.resolve()),
 }));
 
 const projectorState = vi.hoisted(() => ({
@@ -61,6 +63,7 @@ vi.mock('../services/tauriCommands', () => ({
   openSecondaryWindow: openSecondaryWindowMock,
   readCurationMetadata: vi.fn(async () => ({})),
   writeImageCuration: writeImageCurationMock,
+  writeImageCurationBatch: writeImageCurationBatchMock,
 }));
 
 vi.mock('../services/imageAssetCache', () => ({
@@ -75,6 +78,14 @@ vi.mock('../services/viewerActions', () => ({
   showTransferResultMessage: showTransferResultMessageMock,
   transferImagesToDestination: transferImagesToDestinationMock,
 }));
+
+function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 describe('ContactSheet', () => {
   beforeEach(() => {
@@ -285,14 +296,69 @@ describe('ContactSheet', () => {
 
     fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Favorite' }));
     await waitFor(() => {
-      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/current.jpg', true, 0);
-      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/next.jpg', true, 0);
+      expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
+        { filePath: 'C:/images/current.jpg', favorite: true, rating: 0 },
+        { filePath: 'C:/images/next.jpg', favorite: true, rating: 0 },
+      ]);
     });
 
     fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Rate selected 5' }));
     await waitFor(() => {
-      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/current.jpg', true, 5);
-      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/next.jpg', true, 5);
+      expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
+        { filePath: 'C:/images/current.jpg', favorite: true, rating: 5 },
+        { filePath: 'C:/images/next.jpg', favorite: true, rating: 5 },
+      ]);
+    });
+  });
+
+  it('disables batch curation actions while a selected-image mutation is pending', async () => {
+    const batch = createDeferredVoid();
+    writeImageCurationBatchMock.mockReturnValue(batch.promise);
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Selected image actions' });
+    fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Favorite' }));
+
+    const rateFiveButton = within(bulkToolbar).getByRole('button', { name: 'Rate selected 5' });
+    await waitFor(() => {
+      expect(rateFiveButton).toBeDisabled();
+    });
+
+    fireEvent.click(rateFiveButton);
+    expect(writeImageCurationBatchMock).toHaveBeenCalledTimes(1);
+
+    batch.resolve();
+    await waitFor(() => {
+      expect(rateFiveButton).not.toBeDisabled();
     });
   });
 

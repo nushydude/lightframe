@@ -83,10 +83,12 @@ export function ContactSheet({
   const [columns, setColumns] = useState(1);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [bulkCurationPending, setBulkCurationPending] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
+  const bulkCurationPendingRef = useRef(false);
   const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
 
   const totalRows = Math.ceil(images.length / columns);
@@ -288,20 +290,27 @@ export function ContactSheet({
     setLastSelectedIndex(null);
   };
 
-  const handleBulkFavorite = async (favorite: boolean) => {
-    if (!hasSelection) {
+  const runBulkCurationAction = async (action: () => Promise<void>) => {
+    if (!hasSelection || bulkCurationPendingRef.current) {
       return;
     }
 
-    await setFavoriteForPaths(selectedPaths, favorite);
+    bulkCurationPendingRef.current = true;
+    setBulkCurationPending(true);
+    try {
+      await action();
+    } finally {
+      bulkCurationPendingRef.current = false;
+      setBulkCurationPending(false);
+    }
+  };
+
+  const handleBulkFavorite = async (favorite: boolean) => {
+    await runBulkCurationAction(() => setFavoriteForPaths([...selectedPaths], favorite));
   };
 
   const handleBulkRating = async (rating: number) => {
-    if (!hasSelection) {
-      return;
-    }
-
-    await setRatingForPaths(selectedPaths, rating);
+    await runBulkCurationAction(() => setRatingForPaths([...selectedPaths], rating));
   };
 
   const handleCopyCurrent = async () => {
@@ -684,7 +693,12 @@ export function ContactSheet({
         </div>
       </div>
       {hasSelection && (
-        <div className="contact-sheet-bulk-bar" role="toolbar" aria-label="Selected image actions">
+        <div
+          className="contact-sheet-bulk-bar"
+          role="toolbar"
+          aria-label="Selected image actions"
+          aria-busy={bulkCurationPending}
+        >
           <span className="contact-sheet-bulk-count">{selectedPaths.length} selected</span>
           <button className="top-bar-menu-item" type="button" onClick={handleSelectAll}>
             Select All
@@ -697,6 +711,7 @@ export function ContactSheet({
             className="top-bar-menu-item"
             type="button"
             onClick={() => void handleBulkFavorite(true)}
+            disabled={bulkCurationPending}
           >
             Favorite
           </button>
@@ -704,6 +719,7 @@ export function ContactSheet({
             className="top-bar-menu-item"
             type="button"
             onClick={() => void handleBulkFavorite(false)}
+            disabled={bulkCurationPending}
           >
             Unfavorite
           </button>
@@ -714,6 +730,7 @@ export function ContactSheet({
                 className="top-bar-menu-item contact-sheet-rating-btn"
                 type="button"
                 onClick={() => void handleBulkRating(rating)}
+                disabled={bulkCurationPending}
                 aria-label={rating === 0 ? 'Clear selected ratings' : `Rate selected ${rating}`}
               >
                 {rating}

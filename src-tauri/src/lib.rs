@@ -49,6 +49,7 @@ pub fn run() {
             commands::write_settings,
             commands::read_curation_metadata,
             commands::write_image_curation,
+            commands::write_image_curation_batch,
             commands::clear_image_curation,
             commands::move_to_trash,
             commands::copy_image_to_folder,

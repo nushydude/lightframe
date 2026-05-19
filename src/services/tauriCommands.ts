@@ -41,6 +41,12 @@ export interface GeneratedImageAsset {
   file_size_bytes?: number | null;
 }
 
+export interface ImageCurationUpdate {
+  filePath: string;
+  favorite: boolean;
+  rating: number;
+}
+
 export type FolderWatcherChangeKind = 'added' | 'removed' | 'modified' | 'renamed';
 
 export interface FolderWatcherChange {
@@ -155,6 +161,15 @@ export async function writeImageCuration(
   rating: number
 ): Promise<void> {
   return invoke('write_image_curation', { filePath, favorite, rating });
+}
+
+/** Write favorite/rating metadata for multiple image paths in one backend pass */
+export async function writeImageCurationBatch(updates: ImageCurationUpdate[]): Promise<void> {
+  if (updates.length === 0) {
+    return;
+  }
+
+  return invoke('write_image_curation_batch', { updates });
 }
 
 /** Remove curation metadata for a single image path */

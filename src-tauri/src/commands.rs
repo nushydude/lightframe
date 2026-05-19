@@ -110,6 +110,14 @@ pub struct ImageCuration {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCurationUpdate {
+    pub file_path: String,
+    pub favorite: bool,
+    pub rating: i32,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct QuickDestination {
     pub id: String,
@@ -837,6 +845,30 @@ fn apply_curation_update(
     );
 }
 
+fn apply_curation_updates(
+    metadata: &mut HashMap<String, ImageCuration>,
+    updates: Vec<ImageCurationUpdate>,
+    updated_at: u64,
+) -> usize {
+    let mut applied = 0;
+    for update in updates {
+        let normalized_path = update.file_path.trim().to_string();
+        if normalized_path.is_empty() {
+            continue;
+        }
+
+        apply_curation_update(
+            metadata,
+            normalized_path,
+            update.favorite,
+            update.rating,
+            updated_at,
+        );
+        applied += 1;
+    }
+    applied
+}
+
 /// Read application settings
 #[tauri::command]
 pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
@@ -888,6 +920,21 @@ pub async fn write_image_curation(
         rating,
         unix_timestamp_seconds(),
     );
+    write_curation_metadata_to_path(&path, &metadata)
+}
+
+#[tauri::command]
+pub async fn write_image_curation_batch(
+    app: AppHandle,
+    updates: Vec<ImageCurationUpdate>,
+) -> Result<(), String> {
+    let path = curation_path(&app)?;
+    let mut metadata = read_curation_metadata_from_path(&path);
+    let applied = apply_curation_updates(&mut metadata, updates, unix_timestamp_seconds());
+    if applied == 0 {
+        return Ok(());
+    }
+
     write_curation_metadata_to_path(&path, &metadata)
 }
 
@@ -1956,6 +2003,45 @@ mod tests {
         apply_curation_update(&mut metadata, "C:/images/photo.jpg".to_string(), false, 0, 44);
 
         assert!(!metadata.contains_key("C:/images/photo.jpg"));
+    }
+
+    #[test]
+    fn test_apply_curation_updates_applies_multiple_paths_once() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "C:/images/existing.jpg".to_string(),
+            ImageCuration {
+                path: "C:/images/existing.jpg".to_string(),
+                favorite: true,
+                rating: 2,
+                updated_at: 10,
+            },
+        );
+
+        let applied = apply_curation_updates(
+            &mut metadata,
+            vec![
+                ImageCurationUpdate {
+                    file_path: " C:/images/new.jpg ".to_string(),
+                    favorite: true,
+                    rating: 7,
+                },
+                ImageCurationUpdate {
+                    file_path: "C:/images/existing.jpg".to_string(),
+                    favorite: false,
+                    rating: 0,
+                },
+                ImageCurationUpdate { file_path: " ".to_string(), favorite: true, rating: 5 },
+            ],
+            88,
+        );
+
+        assert_eq!(applied, 2);
+        let new_entry = metadata.get("C:/images/new.jpg").unwrap();
+        assert!(new_entry.favorite);
+        assert_eq!(new_entry.rating, 5);
+        assert_eq!(new_entry.updated_at, 88);
+        assert!(!metadata.contains_key("C:/images/existing.jpg"));
     }
 
     #[test]

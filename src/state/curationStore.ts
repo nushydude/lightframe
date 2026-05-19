@@ -4,6 +4,8 @@ import {
   clearImageCuration as clearImageCurationCommand,
   readCurationMetadata,
   writeImageCuration,
+  writeImageCurationBatch,
+  type ImageCurationUpdate,
 } from '../services/tauriCommands';
 
 interface CurationState {
@@ -43,6 +45,14 @@ function shouldPromoteRatingToFavorite(rating: number): boolean {
 
 function uniqueValidPaths(filePaths: string[]): string[] {
   return Array.from(new Set(filePaths.map((path) => path.trim()).filter(Boolean)));
+}
+
+let curationMutationQueue: Promise<void> = Promise.resolve();
+
+function enqueueCurationMutation(work: () => Promise<void>): Promise<void> {
+  const run = curationMutationQueue.catch(() => undefined).then(work);
+  curationMutationQueue = run.catch(() => undefined);
+  return run;
 }
 
 function normalizeCuration(
@@ -88,139 +98,152 @@ export const useCurationStore = create<CurationState>((set, get) => ({
   },
 
   toggleFavorite: async (filePath) => {
-    if (!filePath) {
-      return;
-    }
+    await enqueueCurationMutation(async () => {
+      if (!filePath) {
+        return;
+      }
 
-    const current = get().curationByPath[filePath];
-    const nextFavorite = !current?.favorite;
-    const currentRating = clampRating(current?.rating ?? 0);
+      const current = get().curationByPath[filePath];
+      const nextFavorite = !current?.favorite;
+      const currentRating = clampRating(current?.rating ?? 0);
 
-    try {
-      await writeImageCuration(filePath, nextFavorite, currentRating);
-      set((state) => {
-        const next = { ...state.curationByPath };
-        if (shouldPersist(nextFavorite, currentRating)) {
-          next[filePath] = buildEntry(filePath, nextFavorite, currentRating);
-        } else {
-          delete next[filePath];
-        }
-        return { curationByPath: next };
-      });
-    } catch (err) {
-      console.error('Failed to toggle favorite:', err);
-    }
+      try {
+        await writeImageCuration(filePath, nextFavorite, currentRating);
+        set((state) => {
+          const next = { ...state.curationByPath };
+          if (shouldPersist(nextFavorite, currentRating)) {
+            next[filePath] = buildEntry(filePath, nextFavorite, currentRating);
+          } else {
+            delete next[filePath];
+          }
+          return { curationByPath: next };
+        });
+      } catch (err) {
+        console.error('Failed to toggle favorite:', err);
+      }
+    });
   },
 
   setRating: async (filePath, rating) => {
-    if (!filePath) {
-      return;
-    }
+    await enqueueCurationMutation(async () => {
+      if (!filePath) {
+        return;
+      }
 
-    const normalizedRating = clampRating(rating);
-    const current = get().curationByPath[filePath];
-    const favorite = Boolean(current?.favorite) || shouldPromoteRatingToFavorite(normalizedRating);
+      const normalizedRating = clampRating(rating);
+      const current = get().curationByPath[filePath];
+      const favorite =
+        Boolean(current?.favorite) || shouldPromoteRatingToFavorite(normalizedRating);
 
-    try {
-      await writeImageCuration(filePath, favorite, normalizedRating);
-      set((state) => {
-        const next = { ...state.curationByPath };
-        if (shouldPersist(favorite, normalizedRating)) {
-          next[filePath] = buildEntry(filePath, favorite, normalizedRating);
-        } else {
-          delete next[filePath];
-        }
-        return { curationByPath: next };
-      });
-    } catch (err) {
-      console.error('Failed to set rating:', err);
-    }
+      try {
+        await writeImageCuration(filePath, favorite, normalizedRating);
+        set((state) => {
+          const next = { ...state.curationByPath };
+          if (shouldPersist(favorite, normalizedRating)) {
+            next[filePath] = buildEntry(filePath, favorite, normalizedRating);
+          } else {
+            delete next[filePath];
+          }
+          return { curationByPath: next };
+        });
+      } catch (err) {
+        console.error('Failed to set rating:', err);
+      }
+    });
   },
 
   setFavoriteForPaths: async (filePaths, favorite) => {
-    const paths = uniqueValidPaths(filePaths);
-    if (paths.length === 0) {
-      return;
-    }
+    await enqueueCurationMutation(async () => {
+      const paths = uniqueValidPaths(filePaths);
+      if (paths.length === 0) {
+        return;
+      }
 
-    const updates: Record<string, ImageCuration | null> = {};
-    const snapshot = get().curationByPath;
+      const snapshot = get().curationByPath;
+      const batchUpdates = paths.map((filePath): ImageCurationUpdate => {
+        const currentRating = clampRating(snapshot[filePath]?.rating ?? 0);
+        return { filePath, favorite, rating: currentRating };
+      });
 
-    for (const filePath of paths) {
-      const currentRating = clampRating(snapshot[filePath]?.rating ?? 0);
       try {
-        await writeImageCuration(filePath, favorite, currentRating);
-        updates[filePath] = shouldPersist(favorite, currentRating)
-          ? buildEntry(filePath, favorite, currentRating)
-          : null;
+        await writeImageCurationBatch(batchUpdates);
+        set((state) => {
+          const next = { ...state.curationByPath };
+          for (const update of batchUpdates) {
+            const normalizedRating = clampRating(update.rating);
+            if (shouldPersist(update.favorite, normalizedRating)) {
+              next[update.filePath] = buildEntry(
+                update.filePath,
+                update.favorite,
+                normalizedRating
+              );
+            } else {
+              delete next[update.filePath];
+            }
+          }
+          return { curationByPath: next };
+        });
       } catch (err) {
         console.error('Failed to set favorite:', err);
       }
-    }
-
-    set((state) => {
-      const next = { ...state.curationByPath };
-      for (const [filePath, update] of Object.entries(updates)) {
-        if (update) {
-          next[filePath] = update;
-        } else {
-          delete next[filePath];
-        }
-      }
-      return { curationByPath: next };
     });
   },
 
   setRatingForPaths: async (filePaths, rating) => {
-    const paths = uniqueValidPaths(filePaths);
-    if (paths.length === 0) {
-      return;
-    }
+    await enqueueCurationMutation(async () => {
+      const paths = uniqueValidPaths(filePaths);
+      if (paths.length === 0) {
+        return;
+      }
 
-    const normalizedRating = clampRating(rating);
-    const updates: Record<string, ImageCuration | null> = {};
-    const snapshot = get().curationByPath;
+      const normalizedRating = clampRating(rating);
+      const snapshot = get().curationByPath;
+      const batchUpdates = paths.map((filePath): ImageCurationUpdate => {
+        const favorite =
+          Boolean(snapshot[filePath]?.favorite) || shouldPromoteRatingToFavorite(normalizedRating);
+        return { filePath, favorite, rating: normalizedRating };
+      });
 
-    for (const filePath of paths) {
-      const favorite =
-        Boolean(snapshot[filePath]?.favorite) || shouldPromoteRatingToFavorite(normalizedRating);
       try {
-        await writeImageCuration(filePath, favorite, normalizedRating);
-        updates[filePath] = shouldPersist(favorite, normalizedRating)
-          ? buildEntry(filePath, favorite, normalizedRating)
-          : null;
+        await writeImageCurationBatch(batchUpdates);
+        set((state) => {
+          const next = { ...state.curationByPath };
+          for (const update of batchUpdates) {
+            const normalizedUpdateRating = clampRating(update.rating);
+            if (shouldPersist(update.favorite, normalizedUpdateRating)) {
+              next[update.filePath] = buildEntry(
+                update.filePath,
+                update.favorite,
+                normalizedUpdateRating
+              );
+            } else {
+              delete next[update.filePath];
+            }
+          }
+          return { curationByPath: next };
+        });
       } catch (err) {
         console.error('Failed to set rating:', err);
       }
-    }
-
-    set((state) => {
-      const next = { ...state.curationByPath };
-      for (const [filePath, update] of Object.entries(updates)) {
-        if (update) {
-          next[filePath] = update;
-        } else {
-          delete next[filePath];
-        }
-      }
-      return { curationByPath: next };
     });
   },
 
   clearImageCuration: async (filePath) => {
-    if (!filePath) {
-      return;
-    }
+    await enqueueCurationMutation(async () => {
+      if (!filePath) {
+        return;
+      }
 
-    try {
-      await clearImageCurationCommand(filePath);
-      set((state) => {
-        const next = { ...state.curationByPath };
-        delete next[filePath];
-        return { curationByPath: next };
-      });
-    } catch (err) {
-      console.error('Failed to clear curation metadata:', err);
-    }
+      try {
+        await clearImageCurationCommand(filePath);
+        set((state) => {
+          const next = { ...state.curationByPath };
+          delete next[filePath];
+          return { curationByPath: next };
+        });
+      } catch (err) {
+        console.error('Failed to clear curation metadata:', err);
+      }
+    });
   },
 }));
