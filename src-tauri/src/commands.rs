@@ -9,6 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
@@ -123,6 +124,33 @@ pub struct QuickDestination {
     pub id: String,
     pub label: String,
     pub path: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageTransferMode {
+    Copy,
+    Move,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageTransferSuccess {
+    pub source_path: String,
+    pub target_path: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageTransferFailure {
+    pub source_path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ImageTransferResult {
+    pub successes: Vec<ImageTransferSuccess>,
+    pub failures: Vec<ImageTransferFailure>,
 }
 
 fn default_show_thumbnails() -> bool {
@@ -748,6 +776,15 @@ fn curation_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir.join("curation.json"))
 }
 
+static CURATION_METADATA_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_curation_metadata() -> Result<MutexGuard<'static, ()>, String> {
+    CURATION_METADATA_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Curation metadata lock poisoned".to_string())
+}
+
 fn clamp_rating(rating: i32) -> u8 {
     rating.clamp(0, 5) as u8
 }
@@ -895,6 +932,7 @@ pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(),
 pub async fn read_curation_metadata(
     app: AppHandle,
 ) -> Result<HashMap<String, ImageCuration>, String> {
+    let _lock = lock_curation_metadata()?;
     let path = curation_path(&app)?;
     Ok(read_curation_metadata_from_path(&path))
 }
@@ -911,6 +949,7 @@ pub async fn write_image_curation(
         return Err("file_path must not be empty".to_string());
     }
 
+    let _lock = lock_curation_metadata()?;
     let path = curation_path(&app)?;
     let mut metadata = read_curation_metadata_from_path(&path);
     apply_curation_update(
@@ -928,6 +967,7 @@ pub async fn write_image_curation_batch(
     app: AppHandle,
     updates: Vec<ImageCurationUpdate>,
 ) -> Result<(), String> {
+    let _lock = lock_curation_metadata()?;
     let path = curation_path(&app)?;
     let mut metadata = read_curation_metadata_from_path(&path);
     let applied = apply_curation_updates(&mut metadata, updates, unix_timestamp_seconds());
@@ -945,6 +985,7 @@ pub async fn clear_image_curation(app: AppHandle, file_path: String) -> Result<(
         return Err("file_path must not be empty".to_string());
     }
 
+    let _lock = lock_curation_metadata()?;
     let path = curation_path(&app)?;
     let mut metadata = read_curation_metadata_from_path(&path);
     metadata.remove(&normalized_path);
@@ -1165,6 +1206,33 @@ fn move_image_to_folder_blocking(
     Err("Unable to resolve a unique destination file name".to_string())
 }
 
+fn transfer_images_to_folder_blocking(
+    file_paths: Vec<String>,
+    destination_folder: String,
+    mode: ImageTransferMode,
+) -> ImageTransferResult {
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+
+    for source_path in file_paths {
+        let result = match mode {
+            ImageTransferMode::Copy => {
+                copy_image_to_folder_blocking(source_path.clone(), destination_folder.clone())
+            }
+            ImageTransferMode::Move => {
+                move_image_to_folder_blocking(source_path.clone(), destination_folder.clone())
+            }
+        };
+
+        match result {
+            Ok(target_path) => successes.push(ImageTransferSuccess { source_path, target_path }),
+            Err(error) => failures.push(ImageTransferFailure { source_path, error }),
+        }
+    }
+
+    ImageTransferResult { successes, failures }
+}
+
 /// Move a file to the OS trash / recycle bin
 #[tauri::command]
 pub async fn move_to_trash(file_path: String) -> Result<(), String> {
@@ -1193,6 +1261,19 @@ pub async fn move_image_to_folder(
     })
     .await
     .map_err(|err| format!("Move image worker failed: {}", err))?
+}
+
+#[tauri::command]
+pub async fn transfer_images_to_folder(
+    file_paths: Vec<String>,
+    destination_folder: String,
+    mode: ImageTransferMode,
+) -> Result<ImageTransferResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_images_to_folder_blocking(file_paths, destination_folder, mode)
+    })
+    .await
+    .map_err(|err| format!("Transfer images worker failed: {}", err))
 }
 
 /// Copy an image file to the OS clipboard
@@ -2162,6 +2243,32 @@ mod tests {
 
         assert!(!source_path.exists());
         assert_eq!(fs::read(Path::new(&moved_path)).unwrap(), b"source");
+    }
+
+    #[test]
+    fn test_transfer_images_to_folder_blocking_reports_successes_and_failures() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        let missing_path = dir.path().join("missing.jpg");
+        let destination_dir = dir.path().join("destination");
+        fs::create_dir(&destination_dir).unwrap();
+        fs::write(&source_path, b"source").unwrap();
+
+        let result = transfer_images_to_folder_blocking(
+            vec![
+                source_path.to_string_lossy().to_string(),
+                missing_path.to_string_lossy().to_string(),
+            ],
+            destination_dir.to_string_lossy().to_string(),
+            ImageTransferMode::Copy,
+        );
+
+        assert_eq!(result.successes.len(), 1);
+        assert_eq!(result.successes[0].source_path, source_path.to_string_lossy());
+        assert!(Path::new(&result.successes[0].target_path).exists());
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0].source_path, missing_path.to_string_lossy());
+        assert!(result.failures[0].error.contains("valid file"));
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub fn run() {
             commands::move_to_trash,
             commands::copy_image_to_folder,
             commands::move_image_to_folder,
+            commands::transfer_images_to_folder,
             commands::copy_image_to_clipboard,
             commands::open_in_external_application,
             commands::get_exif_metadata,

@@ -6,13 +6,11 @@ import { useSettingsStore } from '../state/settingsStore';
 import {
   evictThumbnailsExcept,
   getCachedThumbnail,
-  invalidateThumbnail,
   preloadThumbnails,
 } from '../services/thumbnailCache';
 import { closeSecondaryWindow, openSecondaryWindow } from '../services/tauriCommands';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 import { useProjectorState } from '../hooks/useProjectorState';
-import { invalidateImageAsset } from '../services/imageAssetCache';
 import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
 import {
   copyCurrentImage,
@@ -244,20 +242,7 @@ export function ContactSheet({
   };
 
   const removeMovedImages = (paths: string[]) => {
-    const state = useViewerStore.getState();
-    const indexByPath = new Map(state.images.map((image, index) => [image.path, index]));
-    const indices = paths
-      .map((path) => {
-        invalidateThumbnail(path);
-        invalidateImageAsset(path);
-        return indexByPath.get(path);
-      })
-      .filter((index): index is number => index !== undefined)
-      .sort((a, b) => b - a);
-
-    for (const index of indices) {
-      useViewerStore.getState().removeImage(index);
-    }
+    useViewerStore.getState().removeImagesByPaths(paths);
   };
 
   const handleBulkTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {

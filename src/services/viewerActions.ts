@@ -1,11 +1,10 @@
 import { confirm, message } from '@tauri-apps/plugin-dialog';
 import {
   copyImageToClipboard,
-  copyImageToFolder,
-  moveImageToFolder,
   moveToTrash,
   openInExternalApplication,
   revealInExplorer,
+  transferImagesToFolder,
 } from './tauriCommands';
 import { useSettingsStore } from '../state/settingsStore';
 import type { QuickDestination } from '../types/settings';
@@ -45,25 +44,15 @@ export async function transferImagesToDestination(
   destination: QuickDestination,
   mode: 'copy' | 'move'
 ): Promise<QuickTransferResult> {
-  const successes: QuickTransferSuccess[] = [];
-  const failures: QuickTransferFailure[] = [];
-
-  for (const imagePath of imagePaths) {
-    try {
-      const targetPath =
-        mode === 'copy'
-          ? await copyImageToFolder(imagePath, destination.path)
-          : await moveImageToFolder(imagePath, destination.path);
-      successes.push({ sourcePath: imagePath, targetPath });
-    } catch (err) {
-      failures.push({
-        sourcePath: imagePath,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  try {
+    return await transferImagesToFolder(imagePaths, destination.path, mode);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return {
+      successes: [],
+      failures: imagePaths.map((sourcePath) => ({ sourcePath, error })),
+    };
   }
-
-  return { successes, failures };
 }
 
 export async function showTransferResultMessage(

@@ -261,6 +261,52 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('1.jpg');
   });
 
+  it('removes multiple images in one pass while preserving the nearest current image', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '4.jpg', file_name: '4', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      allImages: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '4.jpg', file_name: '4', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 1,
+      currentImagePath: '2.jpg',
+      pendingEditsByPath: {
+        '1.jpg': {
+          rotationDegrees: 90,
+          cropRect: null,
+          pendingCropPreview: null,
+          updatedAt: 1,
+          history: [],
+        },
+        '3.jpg': {
+          rotationDegrees: 180,
+          cropRect: null,
+          pendingCropPreview: null,
+          updatedAt: 2,
+          history: [],
+        },
+      },
+    });
+
+    useViewerStore.getState().removeImagesByPaths(['1.jpg', '2.jpg', '3.jpg']);
+
+    const state = useViewerStore.getState();
+    expect(state.images.map((image) => image.path)).toEqual(['4.jpg']);
+    expect(state.allImages.map((image) => image.path)).toEqual(['4.jpg']);
+    expect(state.currentImagePath).toBe('4.jpg');
+    expect(state.currentIndex).toBe(0);
+    expect(state.pendingEditsByPath).toEqual({});
+    expect(invalidateImageAssetMock).toHaveBeenCalledTimes(3);
+    expect(invalidateThumbnailMock).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps the full list visible when favorites-only has no matches', () => {
     useViewerStore.getState().setImages([
       { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },

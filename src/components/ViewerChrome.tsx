@@ -550,16 +550,6 @@ export function ViewerChrome({
     closeOverflowMenus();
   };
 
-  const removeImageByPath = (path: string) => {
-    const state = useViewerStore.getState();
-    const index = state.images.findIndex((image) => image.path === path);
-    if (index >= 0) {
-      invalidateImageAsset(path);
-      invalidateThumbnail(path);
-      state.removeImage(index);
-    }
-  };
-
   const handleQuickTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
     if (!currentImagePath) {
       return;
@@ -567,9 +557,9 @@ export function ViewerChrome({
 
     const result = await transferImagesToDestination([currentImagePath], destination, mode);
     if (mode === 'move') {
-      for (const success of result.successes) {
-        removeImageByPath(success.sourcePath);
-      }
+      useViewerStore
+        .getState()
+        .removeImagesByPaths(result.successes.map((success) => success.sourcePath));
     }
     await showTransferResultMessage(result, destination, mode);
     recordToolbarActionUsage(mode === 'copy' ? 'copy-to' : 'move-to');
