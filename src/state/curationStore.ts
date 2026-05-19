@@ -12,6 +12,8 @@ interface CurationState {
   loadCuration: () => Promise<void>;
   toggleFavorite: (filePath: string) => Promise<void>;
   setRating: (filePath: string, rating: number) => Promise<void>;
+  setFavoriteForPaths: (filePaths: string[], favorite: boolean) => Promise<void>;
+  setRatingForPaths: (filePaths: string[], rating: number) => Promise<void>;
   clearImageCuration: (filePath: string) => Promise<void>;
 }
 
@@ -37,6 +39,10 @@ function shouldPersist(favorite: boolean, rating: number): boolean {
 
 function shouldPromoteRatingToFavorite(rating: number): boolean {
   return clampRating(rating) >= 4;
+}
+
+function uniqueValidPaths(filePaths: string[]): string[] {
+  return Array.from(new Set(filePaths.map((path) => path.trim()).filter(Boolean)));
 }
 
 function normalizeCuration(
@@ -129,6 +135,76 @@ export const useCurationStore = create<CurationState>((set, get) => ({
     } catch (err) {
       console.error('Failed to set rating:', err);
     }
+  },
+
+  setFavoriteForPaths: async (filePaths, favorite) => {
+    const paths = uniqueValidPaths(filePaths);
+    if (paths.length === 0) {
+      return;
+    }
+
+    const updates: Record<string, ImageCuration | null> = {};
+    const snapshot = get().curationByPath;
+
+    for (const filePath of paths) {
+      const currentRating = clampRating(snapshot[filePath]?.rating ?? 0);
+      try {
+        await writeImageCuration(filePath, favorite, currentRating);
+        updates[filePath] = shouldPersist(favorite, currentRating)
+          ? buildEntry(filePath, favorite, currentRating)
+          : null;
+      } catch (err) {
+        console.error('Failed to set favorite:', err);
+      }
+    }
+
+    set((state) => {
+      const next = { ...state.curationByPath };
+      for (const [filePath, update] of Object.entries(updates)) {
+        if (update) {
+          next[filePath] = update;
+        } else {
+          delete next[filePath];
+        }
+      }
+      return { curationByPath: next };
+    });
+  },
+
+  setRatingForPaths: async (filePaths, rating) => {
+    const paths = uniqueValidPaths(filePaths);
+    if (paths.length === 0) {
+      return;
+    }
+
+    const normalizedRating = clampRating(rating);
+    const updates: Record<string, ImageCuration | null> = {};
+    const snapshot = get().curationByPath;
+
+    for (const filePath of paths) {
+      const favorite =
+        Boolean(snapshot[filePath]?.favorite) || shouldPromoteRatingToFavorite(normalizedRating);
+      try {
+        await writeImageCuration(filePath, favorite, normalizedRating);
+        updates[filePath] = shouldPersist(favorite, normalizedRating)
+          ? buildEntry(filePath, favorite, normalizedRating)
+          : null;
+      } catch (err) {
+        console.error('Failed to set rating:', err);
+      }
+    }
+
+    set((state) => {
+      const next = { ...state.curationByPath };
+      for (const [filePath, update] of Object.entries(updates)) {
+        if (update) {
+          next[filePath] = update;
+        } else {
+          delete next[filePath];
+        }
+      }
+      return { curationByPath: next };
+    });
   },
 
   clearImageCuration: async (filePath) => {

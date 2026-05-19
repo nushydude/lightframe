@@ -142,4 +142,52 @@ describe('curationStore', () => {
     expect(clearImageCurationMock).toHaveBeenCalledWith('C:/images/photo.jpg');
     expect(useCurationStore.getState().curationByPath['C:/images/photo.jpg']).toBeUndefined();
   });
+
+  it('sets favorite state for multiple paths', async () => {
+    writeImageCurationMock.mockResolvedValue(undefined);
+    useCurationStore.setState({
+      curationByPath: {
+        'C:/images/two.jpg': {
+          path: 'C:/images/two.jpg',
+          favorite: true,
+          rating: 4,
+          updated_at: 10,
+        },
+      },
+      isLoaded: true,
+    });
+
+    await useCurationStore
+      .getState()
+      .setFavoriteForPaths(['C:/images/one.jpg', 'C:/images/two.jpg', 'C:/images/one.jpg'], false);
+
+    expect(writeImageCurationMock).toHaveBeenCalledTimes(2);
+    expect(writeImageCurationMock).toHaveBeenNthCalledWith(1, 'C:/images/one.jpg', false, 0);
+    expect(writeImageCurationMock).toHaveBeenNthCalledWith(2, 'C:/images/two.jpg', false, 4);
+    expect(useCurationStore.getState().curationByPath['C:/images/one.jpg']).toBeUndefined();
+    expect(useCurationStore.getState().curationByPath['C:/images/two.jpg']).toMatchObject({
+      favorite: false,
+      rating: 4,
+    });
+  });
+
+  it('sets ratings for multiple paths and promotes high ratings to favorites', async () => {
+    writeImageCurationMock.mockResolvedValue(undefined);
+
+    await useCurationStore
+      .getState()
+      .setRatingForPaths(['C:/images/one.jpg', 'C:/images/two.jpg'], 5);
+
+    expect(writeImageCurationMock).toHaveBeenCalledTimes(2);
+    expect(writeImageCurationMock).toHaveBeenNthCalledWith(1, 'C:/images/one.jpg', true, 5);
+    expect(writeImageCurationMock).toHaveBeenNthCalledWith(2, 'C:/images/two.jpg', true, 5);
+    expect(useCurationStore.getState().curationByPath['C:/images/one.jpg']).toMatchObject({
+      favorite: true,
+      rating: 5,
+    });
+    expect(useCurationStore.getState().curationByPath['C:/images/two.jpg']).toMatchObject({
+      favorite: true,
+      rating: 5,
+    });
+  });
 });

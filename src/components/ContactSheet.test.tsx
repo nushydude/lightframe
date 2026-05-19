@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContactSheet } from './ContactSheet';
 import { useViewerStore } from '../state/viewerStore';
@@ -10,15 +10,24 @@ const {
   deleteCurrentImageMock,
   openCurrentImageInEditorMock,
   revealCurrentImageMock,
+  showTransferResultMessageMock,
+  transferImagesToDestinationMock,
   openSecondaryWindowMock,
   refreshProjectorStateMock,
+  writeImageCurationMock,
 } = vi.hoisted(() => ({
   copyCurrentImageMock: vi.fn(async () => undefined),
   deleteCurrentImageMock: vi.fn(async () => undefined),
   openCurrentImageInEditorMock: vi.fn(async () => undefined),
   revealCurrentImageMock: vi.fn(async () => undefined),
+  showTransferResultMessageMock: vi.fn(async () => undefined),
+  transferImagesToDestinationMock: vi.fn(async () => ({
+    successes: [] as Array<{ sourcePath: string; targetPath: string }>,
+    failures: [] as Array<{ sourcePath: string; error: string }>,
+  })),
   openSecondaryWindowMock: vi.fn(async () => undefined),
   refreshProjectorStateMock: vi.fn(async () => undefined),
+  writeImageCurationMock: vi.fn(async () => undefined),
 }));
 
 const projectorState = vi.hoisted(() => ({
@@ -47,8 +56,11 @@ vi.mock('../hooks/useProjectorState', () => ({
 }));
 
 vi.mock('../services/tauriCommands', () => ({
+  clearImageCuration: vi.fn(async () => undefined),
   closeSecondaryWindow: vi.fn(async () => undefined),
   openSecondaryWindow: openSecondaryWindowMock,
+  readCurationMetadata: vi.fn(async () => ({})),
+  writeImageCuration: writeImageCurationMock,
 }));
 
 vi.mock('../services/imageAssetCache', () => ({
@@ -60,11 +72,8 @@ vi.mock('../services/viewerActions', () => ({
   deleteCurrentImage: deleteCurrentImageMock,
   openCurrentImageInEditor: openCurrentImageInEditorMock,
   revealCurrentImage: revealCurrentImageMock,
-  showTransferResultMessage: vi.fn(async () => undefined),
-  transferImagesToDestination: vi.fn(async () => ({
-    successes: [],
-    failures: [],
-  })),
+  showTransferResultMessage: showTransferResultMessageMock,
+  transferImagesToDestination: transferImagesToDestinationMock,
 }));
 
 describe('ContactSheet', () => {
@@ -103,6 +112,7 @@ describe('ContactSheet', () => {
         ...state.settings,
         externalEditorLabel: 'Paint.NET',
         openProjectorInGridView: true,
+        quickDestinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Favorites' }],
       },
     }));
   });
@@ -234,5 +244,165 @@ describe('ContactSheet', () => {
       expect(onExitGridView).toHaveBeenCalledTimes(1);
     });
     expect(onStartSlideshow).not.toHaveBeenCalled();
+  });
+
+  it('shows batch curation actions for selected grid images', async () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+    fireEvent.click(screen.getByText('next.jpg'), { ctrlKey: true });
+
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Selected image actions' });
+    expect(within(bulkToolbar).getByText('2 selected')).toBeInTheDocument();
+
+    fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Favorite' }));
+    await waitFor(() => {
+      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/current.jpg', true, 0);
+      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/next.jpg', true, 0);
+    });
+
+    fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Rate selected 5' }));
+    await waitFor(() => {
+      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/current.jpg', true, 5);
+      expect(writeImageCurationMock).toHaveBeenCalledWith('C:/images/next.jpg', true, 5);
+    });
+  });
+
+  it('copies selected grid images to a quick destination', async () => {
+    transferImagesToDestinationMock.mockResolvedValue({
+      successes: [
+        { sourcePath: 'C:/images/current.jpg', targetPath: 'D:/Favorites/current.jpg' },
+        { sourcePath: 'C:/images/next.jpg', targetPath: 'D:/Favorites/next.jpg' },
+      ],
+      failures: [],
+    });
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+    fireEvent.click(screen.getByText('next.jpg'), { ctrlKey: true });
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Selected image actions' });
+    fireEvent.click(within(bulkToolbar).getByText('Copy To'));
+    fireEvent.click(within(bulkToolbar).getAllByRole('button', { name: 'Favorites' })[0]);
+
+    await waitFor(() => {
+      expect(transferImagesToDestinationMock).toHaveBeenCalledWith(
+        ['C:/images/current.jpg', 'C:/images/next.jpg'],
+        { id: 'fav', label: 'Favorites', path: 'D:/Favorites' },
+        'copy'
+      );
+      expect(showTransferResultMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ failures: [] }),
+        { id: 'fav', label: 'Favorites', path: 'D:/Favorites' },
+        'copy'
+      );
+    });
+  });
+
+  it('removes moved selected grid images from the folder view', async () => {
+    transferImagesToDestinationMock.mockResolvedValue({
+      successes: [{ sourcePath: 'C:/images/current.jpg', targetPath: 'D:/Favorites/current.jpg' }],
+      failures: [],
+    });
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Selected image actions' });
+    fireEvent.click(within(bulkToolbar).getByText('Move To'));
+    fireEvent.click(within(bulkToolbar).getAllByRole('button', { name: 'Favorites' })[1]);
+
+    await waitFor(() => {
+      expect(transferImagesToDestinationMock).toHaveBeenCalledWith(
+        ['C:/images/current.jpg'],
+        { id: 'fav', label: 'Favorites', path: 'D:/Favorites' },
+        'move'
+      );
+      expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+        'C:/images/next.jpg',
+      ]);
+    });
   });
 });

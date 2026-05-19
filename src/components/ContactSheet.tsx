@@ -70,6 +70,8 @@ export function ContactSheet({
   } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
+  const setFavoriteForPaths = useCurationStore((state) => state.setFavoriteForPaths);
+  const setRatingForPaths = useCurationStore((state) => state.setRatingForPaths);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
@@ -112,6 +114,8 @@ export function ContactSheet({
   const canEnterCompareMode = images.length > 1;
   const canStartSlideshow = images.length > 1;
   const cropDisabledByRotation = rotation !== 0;
+  const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
+  const hasSelection = selectedPaths.length > 0;
 
   useEffect(() => {
     const content = contentRef.current;
@@ -267,12 +271,37 @@ export function ContactSheet({
 
     const result = await transferImagesToDestination(targetPaths, destination, mode);
     if (mode === 'move') {
-      removeMovedImages(result.successes.map((success) => success.sourcePath));
-      setSelectedPaths((current) =>
-        current.filter((path) => !result.successes.some((success) => success.sourcePath === path))
-      );
+      const movedPaths = new Set(result.successes.map((success) => success.sourcePath));
+      removeMovedImages([...movedPaths]);
+      setSelectedPaths((current) => current.filter((path) => !movedPaths.has(path)));
     }
     await showTransferResultMessage(result, destination, mode);
+  };
+
+  const handleSelectAll = () => {
+    setSelectedPaths(images.map((image) => image.path));
+    setLastSelectedIndex(Math.max(0, currentIndex));
+  };
+
+  const handleClearSelection = () => {
+    setSelectedPaths([]);
+    setLastSelectedIndex(null);
+  };
+
+  const handleBulkFavorite = async (favorite: boolean) => {
+    if (!hasSelection) {
+      return;
+    }
+
+    await setFavoriteForPaths(selectedPaths, favorite);
+  };
+
+  const handleBulkRating = async (rating: number) => {
+    if (!hasSelection) {
+      return;
+    }
+
+    await setRatingForPaths(selectedPaths, rating);
   };
 
   const handleCopyCurrent = async () => {
@@ -363,6 +392,18 @@ export function ContactSheet({
         ))
       )}
     </div>
+  );
+
+  const renderBulkQuickDestinationMenu = (mode: 'copy' | 'move') => (
+    <details className="top-bar-submenu contact-sheet-bulk-menu">
+      <summary
+        className="top-bar-menu-item"
+        aria-label={`${mode === 'copy' ? 'Copy' : 'Move'} selected images`}
+      >
+        {mode === 'copy' ? 'Copy To' : 'Move To'}
+      </summary>
+      {renderQuickDestinationMenu(mode)}
+    </details>
   );
 
   const handleCloseProjector = async () => {
@@ -642,6 +683,48 @@ export function ContactSheet({
           </div>
         </div>
       </div>
+      {hasSelection && (
+        <div className="contact-sheet-bulk-bar" role="toolbar" aria-label="Selected image actions">
+          <span className="contact-sheet-bulk-count">{selectedPaths.length} selected</span>
+          <button className="top-bar-menu-item" type="button" onClick={handleSelectAll}>
+            Select All
+          </button>
+          <button className="top-bar-menu-item" type="button" onClick={handleClearSelection}>
+            Clear
+          </button>
+          <span className="contact-sheet-bulk-divider" aria-hidden="true" />
+          <button
+            className="top-bar-menu-item"
+            type="button"
+            onClick={() => void handleBulkFavorite(true)}
+          >
+            Favorite
+          </button>
+          <button
+            className="top-bar-menu-item"
+            type="button"
+            onClick={() => void handleBulkFavorite(false)}
+          >
+            Unfavorite
+          </button>
+          <div className="contact-sheet-bulk-rating" role="group" aria-label="Rate selected images">
+            {[0, 1, 2, 3, 4, 5].map((rating) => (
+              <button
+                key={rating}
+                className="top-bar-menu-item contact-sheet-rating-btn"
+                type="button"
+                onClick={() => void handleBulkRating(rating)}
+                aria-label={rating === 0 ? 'Clear selected ratings' : `Rate selected ${rating}`}
+              >
+                {rating}
+              </button>
+            ))}
+          </div>
+          <span className="contact-sheet-bulk-divider" aria-hidden="true" />
+          {renderBulkQuickDestinationMenu('copy')}
+          {renderBulkQuickDestinationMenu('move')}
+        </div>
+      )}
       <div className="contact-sheet-content" ref={contentRef} onScroll={handleScroll}>
         <div
           className="contact-sheet-grid"
@@ -668,7 +751,7 @@ export function ContactSheet({
             return (
               <div
                 key={image.path}
-                className={`grid-item ${isActive ? 'active' : ''} ${selectedPaths.includes(image.path) ? 'selected' : ''}`}
+                className={`grid-item ${isActive ? 'active' : ''} ${selectedPathSet.has(image.path) ? 'selected' : ''}`}
                 onClick={(event) => handleGridItemClick(event, index, image.path)}
                 title={image.file_name}
               >
