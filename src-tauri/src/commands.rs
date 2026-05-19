@@ -34,6 +34,8 @@ pub struct ImageMetadata {
     pub format: String,
     pub codec_backend: String,
     pub native_decode_supported: bool,
+    pub detail_backend: String,
+    pub detail_supported: bool,
     pub browser_renderable: bool,
     pub rust_decode_supported: bool,
     pub metadata_supported: bool,
@@ -499,12 +501,37 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
         format,
         codec_backend: codec_backend.as_str().to_string(),
         native_decode_supported,
+        detail_backend: codec_capability.detail.as_str().to_string(),
+        detail_supported: detail_supported_for_capability(
+            codec_capability.detail,
+            native_decode_supported,
+            width,
+            height,
+        ),
         browser_renderable: format_support.browser_renderable,
         rust_decode_supported: format_support.rust_decode_supported,
         metadata_supported: format_support.metadata_supported,
         thumbnail_supported: format_support.thumbnail_supported,
         support_note,
     })
+}
+
+fn detail_supported_for_capability(
+    detail_backend: native_codecs::CodecBackend,
+    native_decode_supported: bool,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> bool {
+    if width.unwrap_or_default() == 0 || height.unwrap_or_default() == 0 {
+        return false;
+    }
+
+    match detail_backend {
+        native_codecs::CodecBackend::RustImage => true,
+        native_codecs::CodecBackend::WindowsNative => native_decode_supported,
+        native_codecs::CodecBackend::BrowserRenderable
+        | native_codecs::CodecBackend::Unsupported => false,
+    }
 }
 
 fn rust_or_fallback_dimensions(
@@ -715,8 +742,7 @@ fn get_image_tile_blocking(
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
-    let (actual_width, actual_height) = image::image_dimensions(path)
-        .map_err(|e| format!("Failed to read tile source dimensions: {}", e))?;
+    let (actual_width, actual_height) = tile_source_dimensions(path)?;
     if actual_width != source_width || actual_height != source_height {
         return Err(format!(
             "Tile source dimensions are stale: expected {}x{}, found {}x{}",
@@ -732,6 +758,17 @@ fn get_image_tile_blocking(
         &tile_cache_dir,
         thumbnails::TileRequest { source_width, source_height, tile_size, tile_x, tile_y },
     )
+}
+
+fn tile_source_dimensions(path: &Path) -> Result<(u32, u32), String> {
+    if native_codecs::should_prefer_native_detail(path) {
+        return native_codecs::metadata_from_path(path)
+            .map(|metadata| (metadata.width, metadata.height))
+            .map_err(|e| format!("Failed to read native tile source dimensions: {}", e));
+    }
+
+    image::image_dimensions(path)
+        .map_err(|e| format!("Failed to read tile source dimensions: {}", e))
 }
 
 #[tauri::command]
@@ -2373,6 +2410,8 @@ mod tests {
         assert_eq!(metadata.format, "PNG");
         assert_eq!(metadata.codec_backend, "rust_image");
         assert!(!metadata.native_decode_supported);
+        assert_eq!(metadata.detail_backend, "unsupported");
+        assert!(!metadata.detail_supported);
         assert_eq!(metadata.file_size_bytes, expected_size);
         assert!(metadata.browser_renderable);
         assert!(metadata.rust_decode_supported);
@@ -2396,6 +2435,11 @@ mod tests {
         assert_eq!(metadata.format, "HEIC");
         assert_eq!(metadata.codec_backend, "browser_renderable");
         assert!(!metadata.native_decode_supported);
+        #[cfg(windows)]
+        assert_eq!(metadata.detail_backend, "windows_native");
+        #[cfg(not(windows))]
+        assert_eq!(metadata.detail_backend, "unsupported");
+        assert!(!metadata.detail_supported);
         assert_eq!(metadata.file_size_bytes, expected_size);
         assert!(metadata.browser_renderable);
         assert!(!metadata.rust_decode_supported);
@@ -2429,6 +2473,7 @@ mod tests {
                 file_name
             );
             assert_eq!(metadata.format, expected_format, "unexpected format for {}", file_name);
+            assert!(!metadata.detail_supported, "unexpected detail support for {}", file_name);
         }
     }
 

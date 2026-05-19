@@ -24,6 +24,7 @@ pub struct CodecCapability {
     pub metadata: CodecBackend,
     pub metadata_fallback: Option<CodecBackend>,
     pub thumbnail: CodecBackend,
+    pub detail: CodecBackend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,29 +34,45 @@ pub struct NativeImageMetadata {
     pub format: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeImageRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 pub fn codec_capability_for_extension(extension: &str) -> CodecCapability {
     match extension.trim_start_matches('.').to_ascii_lowercase().as_str() {
-        "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tiff" | "tif" | "avif" => {
-            CodecCapability {
-                metadata: CodecBackend::RustImage,
-                metadata_fallback: None,
-                thumbnail: CodecBackend::RustImage,
-            }
-        }
+        "jpg" | "jpeg" => CodecCapability {
+            metadata: CodecBackend::RustImage,
+            metadata_fallback: None,
+            thumbnail: CodecBackend::RustImage,
+            detail: CodecBackend::RustImage,
+        },
+        "png" | "webp" | "gif" | "bmp" | "tiff" | "tif" | "avif" => CodecCapability {
+            metadata: CodecBackend::RustImage,
+            metadata_fallback: None,
+            thumbnail: CodecBackend::RustImage,
+            detail: CodecBackend::Unsupported,
+        },
         "heic" | "heif" => CodecCapability {
             metadata: native_backend_or_browser(),
             metadata_fallback: native_metadata_fallback(),
             thumbnail: native_backend_or_browser(),
+            detail: native_detail_backend(),
         },
         "svg" => CodecCapability {
             metadata: CodecBackend::BrowserRenderable,
             metadata_fallback: None,
             thumbnail: CodecBackend::BrowserRenderable,
+            detail: CodecBackend::Unsupported,
         },
         _ => CodecCapability {
             metadata: CodecBackend::Unsupported,
             metadata_fallback: None,
             thumbnail: CodecBackend::Unsupported,
+            detail: CodecBackend::Unsupported,
         },
     }
 }
@@ -68,6 +85,7 @@ pub fn codec_capability_for_path(path: &Path) -> CodecCapability {
             metadata: CodecBackend::Unsupported,
             metadata_fallback: None,
             thumbnail: CodecBackend::Unsupported,
+            detail: CodecBackend::Unsupported,
         })
 }
 
@@ -85,6 +103,10 @@ pub fn should_prefer_native_preview(path: &Path) -> bool {
     ) && codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
 }
 
+pub fn should_prefer_native_detail(path: &Path) -> bool {
+    codec_capability_for_path(path).detail == CodecBackend::WindowsNative
+}
+
 pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, String> {
     platform::metadata_from_path(path)
 }
@@ -97,8 +119,17 @@ pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>,
     platform::generate_scaled_jpeg(path, max_dimension)
 }
 
+pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Vec<u8>, String> {
+    platform::generate_region_jpeg(path, region)
+}
+
 #[cfg(windows)]
 fn native_backend_or_browser() -> CodecBackend {
+    CodecBackend::WindowsNative
+}
+
+#[cfg(windows)]
+fn native_detail_backend() -> CodecBackend {
     CodecBackend::WindowsNative
 }
 
@@ -113,13 +144,18 @@ fn native_backend_or_browser() -> CodecBackend {
 }
 
 #[cfg(not(windows))]
+fn native_detail_backend() -> CodecBackend {
+    CodecBackend::Unsupported
+}
+
+#[cfg(not(windows))]
 fn native_metadata_fallback() -> Option<CodecBackend> {
     None
 }
 
 #[cfg(windows)]
 mod platform {
-    use super::NativeImageMetadata;
+    use super::{NativeImageMetadata, NativeImageRegion};
     use image::{DynamicImage, RgbImage};
     use std::io::Cursor;
     use std::os::windows::ffi::OsStrExt;
@@ -132,6 +168,7 @@ mod platform {
         GUID_ContainerFormatTiff, GUID_ContainerFormatWebp, GUID_WICPixelFormat32bppBGRA,
         IWICBitmapSource, IWICImagingFactory, WICBitmapDitherTypeNone,
         WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
+        WICRect,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -179,15 +216,17 @@ mod platform {
         let frame = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
         let source = scaled_source(&factory, &frame, max_dimension)?;
         let bgra = source_to_bgra(&factory, &source)?;
-        let rgb = bgra_to_rgb(&bgra.pixels);
-        let image = RgbImage::from_raw(bgra.width, bgra.height, rgb)
-            .ok_or_else(|| "Windows native image buffer had invalid dimensions".to_string())?;
+        encode_bgra_as_jpeg(bgra)
+    }
 
-        let mut buffer = Cursor::new(Vec::new());
-        DynamicImage::ImageRgb8(image)
-            .write_to(&mut buffer, image::ImageFormat::Jpeg)
-            .map_err(|err| format!("Failed to encode Windows native image: {}", err))?;
-        Ok(buffer.into_inner())
+    pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Vec<u8>, String> {
+        let _com = initialize_com()?;
+        let factory = create_factory()?;
+        let decoder = create_decoder(&factory, path)?;
+        let frame = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
+        let region = clipped_region(&frame, region)?;
+        let bgra = source_region_to_bgra(&factory, &frame, region)?;
+        encode_bgra_as_jpeg(bgra)
     }
 
     fn initialize_com() -> Result<ComApartment, String> {
@@ -291,6 +330,81 @@ mod platform {
         Ok(BgraPixels { width, height, pixels })
     }
 
+    fn source_region_to_bgra(
+        factory: &IWICImagingFactory,
+        source: &IWICBitmapSource,
+        region: NativeImageRegion,
+    ) -> Result<BgraPixels, String> {
+        let converter = unsafe { factory.CreateFormatConverter() }.map_err(windows_error)?;
+        unsafe {
+            converter.Initialize(
+                source,
+                &GUID_WICPixelFormat32bppBGRA,
+                WICBitmapDitherTypeNone,
+                None::<&windows::Win32::Graphics::Imaging::IWICPalette>,
+                0.0,
+                WICBitmapPaletteTypeCustom,
+            )
+        }
+        .map_err(windows_error)?;
+
+        let rect = WICRect {
+            X: i32::try_from(region.x)
+                .map_err(|_| "Windows native tile x coordinate is too large".to_string())?,
+            Y: i32::try_from(region.y)
+                .map_err(|_| "Windows native tile y coordinate is too large".to_string())?,
+            Width: i32::try_from(region.width)
+                .map_err(|_| "Windows native tile width is too large".to_string())?,
+            Height: i32::try_from(region.height)
+                .map_err(|_| "Windows native tile height is too large".to_string())?,
+        };
+        let stride = region
+            .width
+            .checked_mul(4)
+            .ok_or_else(|| "Windows native tile stride overflowed".to_string())?;
+        let buffer_size = stride
+            .checked_mul(region.height)
+            .ok_or_else(|| "Windows native tile buffer size overflowed".to_string())?;
+        let mut pixels = vec![0_u8; buffer_size as usize];
+
+        unsafe { converter.CopyPixels(&rect, stride, &mut pixels) }.map_err(windows_error)?;
+
+        Ok(BgraPixels { width: region.width, height: region.height, pixels })
+    }
+
+    fn clipped_region(
+        source: &IWICBitmapSource,
+        region: NativeImageRegion,
+    ) -> Result<NativeImageRegion, String> {
+        if region.width == 0 || region.height == 0 {
+            return Err("Windows native tile region must be greater than zero".to_string());
+        }
+
+        let (source_width, source_height) = bitmap_source_size(source)?;
+        if region.x >= source_width || region.y >= source_height {
+            return Err("Windows native tile region is outside the source image".to_string());
+        }
+
+        Ok(NativeImageRegion {
+            x: region.x,
+            y: region.y,
+            width: region.width.min(source_width - region.x),
+            height: region.height.min(source_height - region.y),
+        })
+    }
+
+    fn encode_bgra_as_jpeg(bgra: BgraPixels) -> Result<Vec<u8>, String> {
+        let rgb = bgra_to_rgb(&bgra.pixels);
+        let image = RgbImage::from_raw(bgra.width, bgra.height, rgb)
+            .ok_or_else(|| "Windows native image buffer had invalid dimensions".to_string())?;
+
+        let mut buffer = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(image)
+            .write_to(&mut buffer, image::ImageFormat::Jpeg)
+            .map_err(|err| format!("Failed to encode Windows native image: {}", err))?;
+        Ok(buffer.into_inner())
+    }
+
     fn bgra_to_rgb(bgra: &[u8]) -> Vec<u8> {
         let mut rgb = Vec::with_capacity(bgra.len() / 4 * 3);
         for pixel in bgra.chunks_exact(4) {
@@ -332,7 +446,7 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use super::NativeImageMetadata;
+    use super::{NativeImageMetadata, NativeImageRegion};
     use std::path::Path;
 
     pub fn metadata_from_path(_path: &Path) -> Result<NativeImageMetadata, String> {
@@ -340,6 +454,13 @@ mod platform {
     }
 
     pub fn generate_scaled_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
+        Err("Windows native codec path is unavailable on this platform".to_string())
+    }
+
+    pub fn generate_region_jpeg(
+        _path: &Path,
+        _region: NativeImageRegion,
+    ) -> Result<Vec<u8>, String> {
         Err("Windows native codec path is unavailable on this platform".to_string())
     }
 }
@@ -355,6 +476,16 @@ mod tests {
         assert_eq!(capability.metadata, CodecBackend::RustImage);
         assert_eq!(capability.metadata_fallback, None);
         assert_eq!(capability.thumbnail, CodecBackend::RustImage);
+        assert_eq!(capability.detail, CodecBackend::RustImage);
+    }
+
+    #[test]
+    fn codec_capability_keeps_standard_non_jpeg_detail_unsupported() {
+        let capability = codec_capability_for_extension("png");
+
+        assert_eq!(capability.metadata, CodecBackend::RustImage);
+        assert_eq!(capability.thumbnail, CodecBackend::RustImage);
+        assert_eq!(capability.detail, CodecBackend::Unsupported);
     }
 
     #[cfg(windows)]
@@ -366,6 +497,7 @@ mod tests {
             assert_eq!(capability.metadata, CodecBackend::WindowsNative);
             assert_eq!(capability.metadata_fallback, Some(CodecBackend::BrowserRenderable));
             assert_eq!(capability.thumbnail, CodecBackend::WindowsNative);
+            assert_eq!(capability.detail, CodecBackend::WindowsNative);
         }
     }
 
@@ -377,6 +509,7 @@ mod tests {
         assert_eq!(capability.metadata, CodecBackend::BrowserRenderable);
         assert_eq!(capability.metadata_fallback, None);
         assert_eq!(capability.thumbnail, CodecBackend::BrowserRenderable);
+        assert_eq!(capability.detail, CodecBackend::Unsupported);
     }
 
     #[test]
@@ -386,6 +519,7 @@ mod tests {
         assert_eq!(capability.metadata, CodecBackend::BrowserRenderable);
         assert_eq!(capability.metadata_fallback, None);
         assert_eq!(capability.thumbnail, CodecBackend::BrowserRenderable);
+        assert_eq!(capability.detail, CodecBackend::Unsupported);
     }
 
     #[cfg(windows)]
@@ -409,6 +543,7 @@ mod tests {
         assert_eq!(capability.metadata, CodecBackend::Unsupported);
         assert_eq!(capability.metadata_fallback, None);
         assert_eq!(capability.thumbnail, CodecBackend::Unsupported);
+        assert_eq!(capability.detail, CodecBackend::Unsupported);
     }
 
     #[cfg(windows)]
@@ -457,5 +592,25 @@ mod tests {
 
         assert!(preview.width() <= 512);
         assert!(preview.height() <= 512);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_region_generates_original_scale_jpeg_tile() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("native-region.png");
+        image::RgbaImage::from_pixel(120, 90, image::Rgba([20, 40, 60, 255]))
+            .save(&image_path)
+            .unwrap();
+
+        let bytes = generate_region_jpeg(
+            &image_path,
+            NativeImageRegion { x: 10, y: 12, width: 35, height: 24 },
+        )
+        .unwrap();
+        let tile = image::load_from_memory(&bytes).unwrap();
+
+        assert_eq!(tile.width(), 35);
+        assert_eq!(tile.height(), 24);
     }
 }

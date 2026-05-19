@@ -45,12 +45,35 @@ function pathExtension(filePath: string): string {
   return dotIndex >= 0 ? fileName.substring(dotIndex + 1).toLowerCase() : '';
 }
 
-export function isTileDecodeSupportedForPath(filePath: string | null): boolean {
+function isJpegTileDecodeSupportedForPath(filePath: string | null): boolean {
   if (!filePath) {
     return false;
   }
 
   return pathExtension(filePath) === 'jpg' || pathExtension(filePath) === 'jpeg';
+}
+
+function isNativeTileDecodeSupportedForPath(
+  metadata: ImageMetadata | null,
+  filePath: string | null
+): boolean {
+  if (!filePath || !metadata?.detail_supported) {
+    return false;
+  }
+
+  const extension = pathExtension(filePath);
+  return (
+    (extension === 'heic' || extension === 'heif') &&
+    metadata.detail_backend === 'windows_native' &&
+    metadata.native_decode_supported === true
+  );
+}
+
+function isTileDecodeSupported(metadata: ImageMetadata | null, filePath: string | null): boolean {
+  return (
+    isJpegTileDecodeSupportedForPath(filePath) ||
+    isNativeTileDecodeSupportedForPath(metadata, filePath)
+  );
 }
 
 export function isTiledRendererCandidate(
@@ -59,7 +82,7 @@ export function isTiledRendererCandidate(
 ): boolean {
   const width = metadata?.width ?? 0;
   const height = metadata?.height ?? 0;
-  if (width <= 0 || height <= 0 || !isTileDecodeSupportedForPath(filePath)) {
+  if (width <= 0 || height <= 0 || !isTileDecodeSupported(metadata, filePath)) {
     return false;
   }
 

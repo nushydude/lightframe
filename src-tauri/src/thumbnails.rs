@@ -176,7 +176,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "HEIC metadata, previews, and thumbnails use Windows native codecs when available.",
+                "HEIC metadata, previews, thumbnails, and deep-zoom detail use Windows native codecs when available.",
             ),
         },
         Some("heif") => FormatSupport {
@@ -185,7 +185,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "HEIF metadata, previews, and thumbnails use Windows native codecs when available.",
+                "HEIF metadata, previews, thumbnails, and deep-zoom detail use Windows native codecs when available.",
             ),
         },
         Some("svg") => FormatSupport {
@@ -354,6 +354,7 @@ pub fn get_or_create_preview(
 
 pub fn tile_decode_supported_for_path(file_path: &Path) -> bool {
     matches!(normalized_extension(file_path).as_deref(), Some("jpg" | "jpeg"))
+        || native_codecs::should_prefer_native_detail(file_path)
 }
 
 pub fn validate_tile_request(request: TileRequest) -> Result<TileBounds, String> {
@@ -405,8 +406,21 @@ pub fn get_or_create_tile(
         }
     }
 
-    let source = get_cached_jpeg_tile_source(file_path, metadata)?;
-    let jpeg_bytes = generate_jpeg_tile(source.as_ref().as_slice(), bounds)?;
+    let jpeg_bytes = if native_codecs::should_prefer_native_detail(file_path) {
+        native_codecs::generate_region_jpeg(
+            file_path,
+            native_codecs::NativeImageRegion {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            },
+        )?
+    } else {
+        let source = get_cached_jpeg_tile_source(file_path, metadata)?;
+        generate_jpeg_tile(source.as_ref().as_slice(), bounds)?
+    };
+
     cache_asset_bytes(
         cache_root,
         cache_available,
@@ -981,9 +995,13 @@ mod tests {
     }
 
     #[test]
-    fn tile_decode_support_is_jpeg_only() {
+    fn tile_decode_support_includes_jpeg_and_native_detail_formats() {
         assert!(tile_decode_supported_for_path(Path::new("photo.jpg")));
         assert!(tile_decode_supported_for_path(Path::new("photo.jpeg")));
+        #[cfg(windows)]
+        assert!(tile_decode_supported_for_path(Path::new("photo.heic")));
+        #[cfg(not(windows))]
+        assert!(!tile_decode_supported_for_path(Path::new("photo.heic")));
         assert!(!tile_decode_supported_for_path(Path::new("photo.png")));
     }
 

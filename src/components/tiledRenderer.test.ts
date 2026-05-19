@@ -15,16 +15,37 @@ function metadata(width: number, height: number): ImageMetadata {
     height,
     file_size_bytes: 32_000_000,
     format: 'JPEG',
+    detail_backend: 'rust_image',
+    detail_supported: true,
     rust_decode_supported: true,
   };
 }
 
+function nativeMetadata(width: number, height: number): ImageMetadata {
+  return {
+    width,
+    height,
+    file_size_bytes: 32_000_000,
+    format: 'HEIC',
+    codec_backend: 'windows_native',
+    native_decode_supported: true,
+    detail_backend: 'windows_native',
+    detail_supported: true,
+    rust_decode_supported: false,
+  };
+}
+
 describe('tiled renderer helpers', () => {
-  it('chooses tiled rendering only for deep-zoom large JPEGs', () => {
+  it('chooses tiled rendering for deep-zoom large JPEGs and native HEICs', () => {
     const large = metadata(12_000, 8_000);
+    const nativeLarge = nativeMetadata(12_000, 8_000);
 
     expect(isTiledRendererCandidate(large, 'C:/photos/pano.jpg')).toBe(true);
     expect(isTiledRendererCandidate(large, 'C:/photos/pano.png')).toBe(false);
+    expect(isTiledRendererCandidate(nativeLarge, 'C:/photos/pano.heic')).toBe(true);
+    expect(
+      isTiledRendererCandidate({ ...nativeLarge, detail_supported: false }, 'C:/photos/pano.heic')
+    ).toBe(false);
     expect(isTiledRendererCandidate(metadata(4_000, 3_000), 'C:/photos/normal.jpg')).toBe(false);
 
     expect(
