@@ -2208,7 +2208,7 @@ mod tests {
         assert!(!metadata.rust_decode_supported);
         assert!(metadata.metadata_supported);
         assert!(metadata.thumbnail_supported);
-        assert!(metadata.support_note.as_deref().unwrap_or_default().contains("placeholder"));
+        assert!(metadata.support_note.as_deref().unwrap_or_default().contains("previews"));
     }
 
     #[test]

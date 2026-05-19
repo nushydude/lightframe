@@ -176,7 +176,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "HEIC thumbnails use Windows native codecs when available and otherwise fall back to a labeled placeholder.",
+                "HEIC metadata, previews, and thumbnails use Windows native codecs when available.",
             ),
         },
         Some("heif") => FormatSupport {
@@ -185,7 +185,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "HEIF thumbnails use Windows native codecs when available and otherwise fall back to a labeled placeholder.",
+                "HEIF metadata, previews, and thumbnails use Windows native codecs when available.",
             ),
         },
         Some("svg") => FormatSupport {
@@ -285,6 +285,32 @@ pub fn get_or_create_preview(
             &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png],
         ) {
             return Ok(asset);
+        }
+    }
+
+    if native_codecs::should_prefer_native_preview(file_path) {
+        match native_codecs::generate_preview_jpeg(file_path, max_dimension) {
+            Ok(jpeg_bytes) => {
+                return cache_asset_bytes(
+                    cache_root,
+                    cache_available,
+                    &cache_hash,
+                    GeneratedImageFormat::Jpeg,
+                    &jpeg_bytes,
+                    None,
+                )
+                .map(|mut asset| {
+                    asset.cache_key = cache_hash;
+                    asset
+                });
+            }
+            Err(error) => {
+                eprintln!(
+                    "Windows native preview decode failed for '{}': {}. Falling back to Rust preview path.",
+                    file_path.display(),
+                    error
+                );
+            }
         }
     }
 
