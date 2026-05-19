@@ -1,19 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCurationStore } from './curationStore';
 
-const { readCurationMetadataMock, writeImageCurationMock, clearImageCurationMock } = vi.hoisted(
-  () => ({
-    readCurationMetadataMock: vi.fn(),
-    writeImageCurationMock: vi.fn(),
-    clearImageCurationMock: vi.fn(),
-  })
-);
+const {
+  readCurationMetadataMock,
+  writeImageCurationMock,
+  writeImageCurationBatchMock,
+  clearImageCurationMock,
+} = vi.hoisted(() => ({
+  readCurationMetadataMock: vi.fn(),
+  writeImageCurationMock: vi.fn(),
+  writeImageCurationBatchMock: vi.fn((): Promise<void> => Promise.resolve()),
+  clearImageCurationMock: vi.fn(),
+}));
 
 vi.mock('../services/tauriCommands', () => ({
   readCurationMetadata: readCurationMetadataMock,
   writeImageCuration: writeImageCurationMock,
+  writeImageCurationBatch: writeImageCurationBatchMock,
   clearImageCuration: clearImageCurationMock,
 }));
+
+function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 describe('curationStore', () => {
   beforeEach(() => {
@@ -141,5 +154,88 @@ describe('curationStore', () => {
 
     expect(clearImageCurationMock).toHaveBeenCalledWith('C:/images/photo.jpg');
     expect(useCurationStore.getState().curationByPath['C:/images/photo.jpg']).toBeUndefined();
+  });
+
+  it('sets favorite state for multiple paths', async () => {
+    writeImageCurationBatchMock.mockResolvedValue(undefined);
+    useCurationStore.setState({
+      curationByPath: {
+        'C:/images/two.jpg': {
+          path: 'C:/images/two.jpg',
+          favorite: true,
+          rating: 4,
+          updated_at: 10,
+        },
+      },
+      isLoaded: true,
+    });
+
+    await useCurationStore
+      .getState()
+      .setFavoriteForPaths(['C:/images/one.jpg', 'C:/images/two.jpg', 'C:/images/one.jpg'], false);
+
+    expect(writeImageCurationBatchMock).toHaveBeenCalledTimes(1);
+    expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
+      { filePath: 'C:/images/one.jpg', favorite: false, rating: 0 },
+      { filePath: 'C:/images/two.jpg', favorite: false, rating: 4 },
+    ]);
+    expect(writeImageCurationMock).not.toHaveBeenCalled();
+    expect(useCurationStore.getState().curationByPath['C:/images/one.jpg']).toBeUndefined();
+    expect(useCurationStore.getState().curationByPath['C:/images/two.jpg']).toMatchObject({
+      favorite: false,
+      rating: 4,
+    });
+  });
+
+  it('sets ratings for multiple paths and promotes high ratings to favorites', async () => {
+    writeImageCurationBatchMock.mockResolvedValue(undefined);
+
+    await useCurationStore
+      .getState()
+      .setRatingForPaths(['C:/images/one.jpg', 'C:/images/two.jpg'], 5);
+
+    expect(writeImageCurationBatchMock).toHaveBeenCalledTimes(1);
+    expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
+      { filePath: 'C:/images/one.jpg', favorite: true, rating: 5 },
+      { filePath: 'C:/images/two.jpg', favorite: true, rating: 5 },
+    ]);
+    expect(writeImageCurationMock).not.toHaveBeenCalled();
+    expect(useCurationStore.getState().curationByPath['C:/images/one.jpg']).toMatchObject({
+      favorite: true,
+      rating: 5,
+    });
+    expect(useCurationStore.getState().curationByPath['C:/images/two.jpg']).toMatchObject({
+      favorite: true,
+      rating: 5,
+    });
+  });
+
+  it('queues overlapping bulk curation changes against the latest state', async () => {
+    const firstBatch = createDeferredVoid();
+    writeImageCurationBatchMock
+      .mockReturnValueOnce(firstBatch.promise)
+      .mockResolvedValueOnce(undefined);
+
+    const favoritePromise = useCurationStore
+      .getState()
+      .setFavoriteForPaths(['C:/images/one.jpg'], true);
+    const ratingPromise = useCurationStore.getState().setRatingForPaths(['C:/images/one.jpg'], 2);
+
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(writeImageCurationBatchMock).toHaveBeenCalledTimes(1);
+
+    firstBatch.resolve();
+    await Promise.all([favoritePromise, ratingPromise]);
+
+    expect(writeImageCurationBatchMock).toHaveBeenNthCalledWith(1, [
+      { filePath: 'C:/images/one.jpg', favorite: true, rating: 0 },
+    ]);
+    expect(writeImageCurationBatchMock).toHaveBeenNthCalledWith(2, [
+      { filePath: 'C:/images/one.jpg', favorite: true, rating: 2 },
+    ]);
+    expect(useCurationStore.getState().curationByPath['C:/images/one.jpg']).toMatchObject({
+      favorite: true,
+      rating: 2,
+    });
   });
 });

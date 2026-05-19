@@ -41,6 +41,27 @@ export interface GeneratedImageAsset {
   file_size_bytes?: number | null;
 }
 
+export interface ImageCurationUpdate {
+  filePath: string;
+  favorite: boolean;
+  rating: number;
+}
+
+interface ImageTransferSuccess {
+  sourcePath: string;
+  targetPath: string;
+}
+
+interface ImageTransferFailure {
+  sourcePath: string;
+  error: string;
+}
+
+interface ImageTransferResult {
+  successes: ImageTransferSuccess[];
+  failures: ImageTransferFailure[];
+}
+
 export type FolderWatcherChangeKind = 'added' | 'removed' | 'modified' | 'renamed';
 
 export interface FolderWatcherChange {
@@ -157,6 +178,15 @@ export async function writeImageCuration(
   return invoke('write_image_curation', { filePath, favorite, rating });
 }
 
+/** Write favorite/rating metadata for multiple image paths in one backend pass */
+export async function writeImageCurationBatch(updates: ImageCurationUpdate[]): Promise<void> {
+  if (updates.length === 0) {
+    return;
+  }
+
+  return invoke('write_image_curation_batch', { updates });
+}
+
 /** Remove curation metadata for a single image path */
 export async function clearImageCuration(filePath: string): Promise<void> {
   return invoke('clear_image_curation', { filePath });
@@ -167,20 +197,17 @@ export async function moveToTrash(filePath: string): Promise<void> {
   return invoke('move_to_trash', { filePath });
 }
 
-/** Copy an image file into a destination folder */
-export async function copyImageToFolder(
-  filePath: string,
-  destinationFolder: string
-): Promise<string> {
-  return invoke<string>('copy_image_to_folder', { filePath, destinationFolder });
-}
-
-/** Move an image file into a destination folder */
-export async function moveImageToFolder(
-  filePath: string,
-  destinationFolder: string
-): Promise<string> {
-  return invoke<string>('move_image_to_folder', { filePath, destinationFolder });
+/** Copy or move multiple image files into a destination folder in one backend task */
+export async function transferImagesToFolder(
+  filePaths: string[],
+  destinationFolder: string,
+  mode: 'copy' | 'move'
+): Promise<ImageTransferResult> {
+  return invoke<ImageTransferResult>('transfer_images_to_folder', {
+    filePaths,
+    destinationFolder,
+    mode,
+  });
 }
 
 /** Copy an image file to the OS clipboard */

@@ -288,6 +288,80 @@ body,
   color: var(--text-secondary);
 }
 
+.contact-sheet-bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 24px;
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  border-bottom: 1px solid var(--border);
+  z-index: 9;
+}
+
+.contact-sheet-bulk-bar .top-bar-menu-item {
+  width: auto;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-control);
+  white-space: nowrap;
+}
+
+.contact-sheet-bulk-bar .top-bar-menu-item:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+}
+
+.contact-sheet-bulk-count {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.contact-sheet-bulk-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+}
+
+.contact-sheet-bulk-rating {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.contact-sheet-rating-btn {
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
+.contact-sheet-bulk-menu > summary {
+  list-style: none;
+}
+
+.contact-sheet-bulk-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.contact-sheet-bulk-menu .top-bar-submenu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 190px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+}
+
 .close-btn {
   background: transparent;
   border: none;

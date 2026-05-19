@@ -235,6 +235,7 @@ interface ViewerState {
   navigateFirst: () => void;
   navigateLast: () => void;
   removeImage: (index: number) => void;
+  removeImagesByPaths: (paths: string[]) => void;
 
   setFullscreen: (fs: boolean) => void;
   setDefaultZoomMode: (mode: ZoomMode) => void;
@@ -696,46 +697,49 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     },
 
     removeImage: (index) => {
-      const { images, allImages, currentIndex } = get();
+      const { images } = get();
       if (index < 0 || index >= images.length) return;
 
       const removedPath = images[index]?.path;
-      const sourceImages = allImages.length > 0 ? allImages : images;
-      const newAllImages = removedPath
-        ? sourceImages.filter((image) => image.path !== removedPath)
-        : sourceImages;
+      if (removedPath) {
+        get().removeImagesByPaths([removedPath]);
+      }
+    },
+
+    removeImagesByPaths: (paths) => {
+      const removedPaths = new Set(paths.map((path) => path.trim()).filter(Boolean));
+      if (removedPaths.size === 0) {
+        return;
+      }
+
+      const state = get();
+      const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
+      const newAllImages = sourceImages.filter((image) => !removedPaths.has(image.path));
+      if (newAllImages.length === sourceImages.length) {
+        return;
+      }
+
+      for (const path of removedPaths) {
+        invalidateImageAsset(path);
+        invalidateThumbnail(path);
+      }
 
       if (newAllImages.length === 0) {
         get().reset();
-      } else {
-        set((state) => {
-          const nextPendingEdits = { ...state.pendingEditsByPath };
-          if (removedPath) {
-            delete nextPendingEdits[removedPath];
-          }
-
-          return {
-            ...getFavoriteSafeImagesState(state, newAllImages, state.showOnlyFavorites),
-            pendingEditsByPath: nextPendingEdits,
-          };
-        });
-
-        const newImages = get().images;
-        if (newImages.length === 0) {
-          return;
-        }
-
-        // If we deleted the current or a previous image, update the current index
-        if (currentIndex >= newImages.length) {
-          get().setCurrentIndex(newImages.length - 1);
-        } else if (index === currentIndex) {
-          // Just trigger the same index to refresh currentImagePath
-          get().setCurrentIndex(currentIndex);
-        } else if (index < currentIndex) {
-          // Adjust index down since a previous item was removed
-          get().setCurrentIndex(currentIndex - 1);
-        }
+        return;
       }
+
+      set((currentState) => {
+        const nextPendingEdits = { ...currentState.pendingEditsByPath };
+        for (const path of removedPaths) {
+          delete nextPendingEdits[path];
+        }
+
+        return {
+          ...getFavoriteSafeImagesState(currentState, newAllImages, currentState.showOnlyFavorites),
+          pendingEditsByPath: nextPendingEdits,
+        };
+      });
     },
 
     setFullscreen: (fs) => set({ isFullscreen: fs }),

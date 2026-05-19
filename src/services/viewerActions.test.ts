@@ -13,20 +13,18 @@ const {
   confirmMock,
   messageMock,
   copyImageToClipboardMock,
-  copyImageToFolderMock,
-  moveImageToFolderMock,
   moveToTrashMock,
   openInExternalApplicationMock,
   revealInExplorerMock,
+  transferImagesToFolderMock,
 } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
   messageMock: vi.fn(),
   copyImageToClipboardMock: vi.fn(),
-  copyImageToFolderMock: vi.fn(),
-  moveImageToFolderMock: vi.fn(),
   moveToTrashMock: vi.fn(),
   openInExternalApplicationMock: vi.fn(),
   revealInExplorerMock: vi.fn(),
+  transferImagesToFolderMock: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -36,11 +34,10 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('./tauriCommands', () => ({
   copyImageToClipboard: copyImageToClipboardMock,
-  copyImageToFolder: copyImageToFolderMock,
-  moveImageToFolder: moveImageToFolderMock,
   moveToTrash: moveToTrashMock,
   openInExternalApplication: openInExternalApplicationMock,
   revealInExplorer: revealInExplorerMock,
+  transferImagesToFolder: transferImagesToFolderMock,
 }));
 
 describe('viewerActions', () => {
@@ -134,8 +131,10 @@ describe('viewerActions', () => {
   });
 
   it('transfers images to a quick destination and reports partial failures', async () => {
-    copyImageToFolderMock.mockResolvedValueOnce('d:/favorites/test-1.jpg');
-    copyImageToFolderMock.mockRejectedValueOnce(new Error('disk full'));
+    transferImagesToFolderMock.mockResolvedValue({
+      successes: [{ sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/test-1.jpg' }],
+      failures: [{ sourcePath: 'c:/images/two.jpg', error: 'disk full' }],
+    });
 
     const result = await transferImagesToDestination(
       ['c:/images/one.jpg', 'c:/images/two.jpg'],
@@ -143,6 +142,11 @@ describe('viewerActions', () => {
       'copy'
     );
 
+    expect(transferImagesToFolderMock).toHaveBeenCalledWith(
+      ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      'd:/favorites',
+      'copy'
+    );
     expect(result.successes).toEqual([
       { sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/test-1.jpg' },
     ]);
