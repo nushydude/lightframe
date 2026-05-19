@@ -17,17 +17,18 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 
 - **Preview-first loading**: Large images render a generated preview before full-resolution pixels are requested.
 - **JPEG tiled detail**: Very large JPEGs use cached viewport tiles for actual-size and deep-zoom inspection.
+- **Large non-JPEG safety**: Huge PNG, TIFF, AVIF, HEIC, and SVG paths stay preview-first and avoid unsafe direct full-image decodes.
 - **Shared caches and workers**: Preview, thumbnail, and image work queues are budgeted, prioritized, and shared across viewer surfaces.
 - **Incremental folders**: Folder contents refresh from filesystem watcher events with persistent index support.
 - **Curation workflow**: Favorites, star ratings, favorites-only review, compare mode, and copy/move actions are available from the viewer and grid.
 - **Editing workflow**: Crop, crop overwrite, high-quality scaled export, lossless JPEG rotation, pending edits, and external-editor launch are in place.
 - **Viewer polish**: Projector mode, slideshow controls, persistent window bounds, command palette, mouse wheel navigation, and default fit modes are implemented.
 - **Format fallbacks**: HEIC/HEIF thumbnail generation uses Windows native codecs when available and falls back to clear placeholders when it is not.
+- **Windows-native HEIC/HEIF previews**: When the OS codec is installed, HEIC/HEIF viewer previews are generated through Windows Imaging Component instead of the unsupported Rust decode path.
 
 ### Next Focus
 
-- **Large non-JPEG safety**: Keep huge PNG, TIFF, AVIF, HEIC, and SVG paths preview-first, avoid unsafe direct full-image decodes, and make limited-detail fallbacks explicit.
-- **Format-specific detail paths**: Add native or regional decode paths beyond JPEG where libraries make that reliable.
+- **Format-specific detail paths**: Expand native or regional decode paths beyond JPEG and HEIC/HEIF previews where libraries make that reliable.
 - **Release hardening**: Continue using focused performance telemetry and CI quality gates before each release.
 
 ### Later Ideas

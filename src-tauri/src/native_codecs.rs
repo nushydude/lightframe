@@ -75,12 +75,26 @@ pub fn should_prefer_native_thumbnail(path: &Path) -> bool {
     codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
 }
 
+pub fn should_prefer_native_preview(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("heic" | "heif")
+    ) && codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
+}
+
 pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, String> {
     platform::metadata_from_path(path)
 }
 
 pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
-    platform::generate_thumbnail_jpeg(path, max_dimension)
+    platform::generate_scaled_jpeg(path, max_dimension)
+}
+
+pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+    platform::generate_scaled_jpeg(path, max_dimension)
 }
 
 #[cfg(windows)]
@@ -154,7 +168,7 @@ mod platform {
         })
     }
 
-    pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+    pub fn generate_scaled_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
         if max_dimension == 0 {
             return Err("max_dimension must be greater than zero".to_string());
         }
@@ -167,12 +181,12 @@ mod platform {
         let bgra = source_to_bgra(&factory, &source)?;
         let rgb = bgra_to_rgb(&bgra.pixels);
         let image = RgbImage::from_raw(bgra.width, bgra.height, rgb)
-            .ok_or_else(|| "Windows native thumbnail buffer had invalid dimensions".to_string())?;
+            .ok_or_else(|| "Windows native image buffer had invalid dimensions".to_string())?;
 
         let mut buffer = Cursor::new(Vec::new());
         DynamicImage::ImageRgb8(image)
             .write_to(&mut buffer, image::ImageFormat::Jpeg)
-            .map_err(|err| format!("Failed to encode Windows native thumbnail: {}", err))?;
+            .map_err(|err| format!("Failed to encode Windows native image: {}", err))?;
         Ok(buffer.into_inner())
     }
 
@@ -265,10 +279,10 @@ mod platform {
         let (width, height) = bitmap_source_size(&converter)?;
         let stride = width
             .checked_mul(4)
-            .ok_or_else(|| "Windows native thumbnail stride overflowed".to_string())?;
+            .ok_or_else(|| "Windows native image stride overflowed".to_string())?;
         let buffer_size = stride
             .checked_mul(height)
-            .ok_or_else(|| "Windows native thumbnail buffer size overflowed".to_string())?;
+            .ok_or_else(|| "Windows native image buffer size overflowed".to_string())?;
         let mut pixels = vec![0_u8; buffer_size as usize];
 
         unsafe { converter.CopyPixels(std::ptr::null(), stride, &mut pixels) }
@@ -325,7 +339,7 @@ mod platform {
         Err("Windows native codec path is unavailable on this platform".to_string())
     }
 
-    pub fn generate_thumbnail_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
+    pub fn generate_scaled_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
         Err("Windows native codec path is unavailable on this platform".to_string())
     }
 }
@@ -374,6 +388,20 @@ mod tests {
         assert_eq!(capability.thumbnail, CodecBackend::BrowserRenderable);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn native_preview_is_preferred_for_heif_formats_on_windows() {
+        assert!(should_prefer_native_preview(Path::new("sample.heic")));
+        assert!(should_prefer_native_preview(Path::new("sample.HEIF")));
+        assert!(!should_prefer_native_preview(Path::new("sample.jpg")));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn native_preview_is_not_preferred_without_windows_native_codecs() {
+        assert!(!should_prefer_native_preview(Path::new("sample.heic")));
+    }
+
     #[test]
     fn codec_capability_rejects_unknown_extensions() {
         let capability = codec_capability_for_extension("txt");
@@ -413,5 +441,21 @@ mod tests {
 
         assert!(thumbnail.width() <= 160);
         assert!(thumbnail.height() <= 160);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_preview_generates_bounded_jpeg_for_decodable_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("native-preview.png");
+        image::RgbaImage::from_pixel(1200, 600, image::Rgba([20, 40, 60, 255]))
+            .save(&image_path)
+            .unwrap();
+
+        let bytes = generate_preview_jpeg(&image_path, 512).unwrap();
+        let preview = image::load_from_memory(&bytes).unwrap();
+
+        assert!(preview.width() <= 512);
+        assert!(preview.height() <= 512);
     }
 }
