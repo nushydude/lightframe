@@ -754,6 +754,7 @@ function App() {
                 onOpenFolder={openFolderPicker}
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
+                onFirst={goFirst}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}
@@ -769,6 +770,7 @@ function App() {
                 onOpenFolder={openFolderPicker}
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
+                onFirst={goFirst}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}

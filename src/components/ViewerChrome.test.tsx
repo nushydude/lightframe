@@ -26,6 +26,7 @@ describe('ViewerChrome', () => {
     onOpenFolder: vi.fn(),
     onRefreshFolder: vi.fn(),
     onGoHome: vi.fn(),
+    onFirst: vi.fn(),
     onNext: vi.fn(),
     onPrev: vi.fn(),
     onStartSlideshow: vi.fn(),
@@ -143,6 +144,35 @@ describe('ViewerChrome', () => {
     fireEvent.click(nextBtn);
 
     expect(defaultProps.onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call onFirst when first-image button is clicked', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo2.jpg',
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 1,
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('First image'));
+
+    expect(defaultProps.onFirst).toHaveBeenCalledTimes(1);
   });
 
   it('should call onGoHome when the home button is clicked', () => {

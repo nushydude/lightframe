@@ -35,6 +35,7 @@ interface ViewerChromeProps {
   onOpenFolder: () => void;
   onRefreshFolder: () => void;
   onGoHome: () => void;
+  onFirst: () => void;
   onNext: () => void;
   onPrev: () => void;
   onStartSlideshow: () => void;
@@ -355,6 +356,7 @@ export function ViewerChrome({
   onOpenFolder,
   onRefreshFolder,
   onGoHome,
+  onFirst,
   onNext,
   onPrev,
   onStartSlideshow,
@@ -1347,13 +1349,24 @@ export function ViewerChrome({
       <div className="bottom-controls" role="toolbar" aria-label="Image controls">
         <button
           className="control-btn has-tooltip"
+          onClick={onFirst}
+          data-tooltip="First image (Home)"
+          title="First image (Home)"
+          aria-label="First image"
+          id="btn-ctrl-first"
+        >
+          <ToolbarIcon name="first" />
+        </button>
+
+        <button
+          className="control-btn has-tooltip"
           onClick={onPrev}
           data-tooltip="Previous (Left Arrow)"
           title="Previous (←)"
           aria-label="Previous image"
           id="btn-ctrl-prev"
         >
-          <ToolbarIcon name="skipBack" />
+          <ToolbarIcon name="previous" />
         </button>
 
         {!isSlideshowActive ? (
@@ -1388,7 +1401,7 @@ export function ViewerChrome({
           aria-label="Next image"
           id="btn-ctrl-next"
         >
-          <ToolbarIcon name="skipForward" />
+          <ToolbarIcon name="next" />
         </button>
 
         <div className="control-divider" />
