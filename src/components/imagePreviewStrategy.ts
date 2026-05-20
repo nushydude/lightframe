@@ -21,6 +21,10 @@ export function shouldRequestFullResolution(zoomMode: ZoomMode, zoomLevel: numbe
 }
 
 export function canRequestFullResolutionSafely(metadata: ImageMetadata | null): boolean {
+  if (metadata?.browser_renderable === false) {
+    return false;
+  }
+
   if (metadata == null || metadata.width == null || metadata.height == null) {
     return true;
   }

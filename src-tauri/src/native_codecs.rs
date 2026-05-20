@@ -68,6 +68,13 @@ pub fn codec_capability_for_extension(extension: &str) -> CodecCapability {
             thumbnail: CodecBackend::BrowserRenderable,
             detail: CodecBackend::Unsupported,
         },
+        "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "raf" | "orf" | "rw2"
+        | "pef" | "srw" => CodecCapability {
+            metadata: CodecBackend::Unsupported,
+            metadata_fallback: None,
+            thumbnail: CodecBackend::Unsupported,
+            detail: CodecBackend::Unsupported,
+        },
         _ => CodecCapability {
             metadata: CodecBackend::Unsupported,
             metadata_fallback: None,
@@ -520,6 +527,18 @@ mod tests {
         assert_eq!(capability.metadata_fallback, None);
         assert_eq!(capability.thumbnail, CodecBackend::BrowserRenderable);
         assert_eq!(capability.detail, CodecBackend::Unsupported);
+    }
+
+    #[test]
+    fn codec_capability_keeps_raw_formats_on_placeholder_paths() {
+        for extension in ["dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "srw"] {
+            let capability = codec_capability_for_extension(extension);
+
+            assert_eq!(capability.metadata, CodecBackend::Unsupported);
+            assert_eq!(capability.metadata_fallback, None);
+            assert_eq!(capability.thumbnail, CodecBackend::Unsupported);
+            assert_eq!(capability.detail, CodecBackend::Unsupported);
+        }
     }
 
     #[cfg(windows)]
