@@ -4,6 +4,7 @@ mod folder_watcher;
 mod native_codecs;
 mod path_normalization;
 mod thumbnails;
+mod windows_shortcuts;
 
 use tauri::Manager;
 
@@ -22,6 +23,10 @@ pub fn run() {
     }
 
     builder
+        .setup(|_| {
+            windows_shortcuts::repair_lightframe_shortcuts_async();
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
