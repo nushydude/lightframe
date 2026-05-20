@@ -13,6 +13,8 @@ export interface ImageMetadata {
   format: string;
   codec_backend?: 'rust_image' | 'windows_native' | 'browser_renderable' | 'unsupported' | string;
   native_decode_supported?: boolean;
+  detail_backend?: 'rust_image' | 'windows_native' | 'browser_renderable' | 'unsupported' | string;
+  detail_supported?: boolean;
   browser_renderable?: boolean;
   rust_decode_supported?: boolean;
   metadata_supported?: boolean;

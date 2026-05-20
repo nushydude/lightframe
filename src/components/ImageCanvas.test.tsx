@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageCanvas } from './ImageCanvas';
 import { useViewerStore } from '../state/viewerStore';
+import type { ImageMetadata } from '../types/image';
 
 const {
   getPreviewAssetMock,
@@ -38,11 +39,15 @@ const {
       `asset://localhost/${asset.file_path}?v=${asset.cache_key}`
   ),
   recordImageCodecTelemetryMock: vi.fn(),
-  getImageMetadataMock: vi.fn(async () => ({
+  getImageMetadataMock: vi.fn<() => Promise<ImageMetadata>>(async () => ({
     width: 1200,
     height: 900,
     file_size_bytes: 1024,
     format: 'JPEG',
+    codec_backend: 'rust_image',
+    native_decode_supported: false,
+    detail_backend: 'rust_image',
+    detail_supported: true,
     rust_decode_supported: true,
   })),
   recordFullResolutionReadyTelemetryMock: vi.fn(),
@@ -769,6 +774,64 @@ describe('ImageCanvas', () => {
           path: 'C:/images/huge.jpg',
           file_name: 'huge.jpg',
           extension: 'jpg',
+          size_bytes: 48_000_000,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestFullAssetMock).not.toHaveBeenCalled();
+    expect(container.querySelector('.tiled-image-renderer')).not.toBeNull();
+    expect(getImageTileMock).toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('uses native tiled detail for large HEIC images with Windows codec support', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          width: 1000,
+          height: 800,
+          left: 0,
+          top: 0,
+          right: 1000,
+          bottom: 800,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect
+    );
+    zoomPanState.zoomLevel = 1.5;
+    getImageMetadataMock.mockResolvedValueOnce({
+      width: 12_000,
+      height: 8_000,
+      file_size_bytes: 48_000_000,
+      format: 'HEIC',
+      codec_backend: 'windows_native',
+      native_decode_supported: true,
+      detail_backend: 'windows_native',
+      detail_supported: true,
+      rust_decode_supported: false,
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/huge.heic',
+      currentIndex: 0,
+      zoomMode: 'custom',
+      images: [
+        {
+          path: 'C:/images/huge.heic',
+          file_name: 'huge.heic',
+          extension: 'heic',
           size_bytes: 48_000_000,
           modified_at: '1',
         },
