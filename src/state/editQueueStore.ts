@@ -140,6 +140,21 @@ function updateJobAtIndex(
   return true;
 }
 
+function updateJobById(
+  jobs: EditQueueJob[],
+  jobId: string,
+  expectedStatus: EditQueueJobStatus,
+  updates: Partial<EditQueueJob>
+): boolean {
+  const index = jobs.findIndex((job) => job.id === jobId);
+  if (index < 0 || jobs[index].status !== expectedStatus) {
+    return false;
+  }
+
+  Object.assign(jobs[index], updates);
+  return true;
+}
+
 function updateSummaryForStatusChange(
   summary: EditQueueSummary,
   fromStatus: EditQueueJobStatus,
@@ -243,30 +258,40 @@ export const useEditQueueStore = create<EditQueueState>((set, get) => {
           if (generation !== drainGeneration) {
             return;
           }
-          set((state) => ({
-            ...(updateJobAtIndex(state.jobs, nextJobIndex, {
+          set((state) => {
+            const didUpdate = updateJobById(state.jobs, nextJob.id, 'running', {
               status: 'completed',
               finishedAt: Date.now(),
               error: undefined,
-            })
-              ? { jobsVersion: state.jobsVersion + 1 }
-              : {}),
-            summary: updateSummaryForStatusChange(state.summary, 'running', 'completed', null),
-          }));
+            });
+            if (!didUpdate) {
+              return {};
+            }
+
+            return {
+              jobsVersion: state.jobsVersion + 1,
+              summary: updateSummaryForStatusChange(state.summary, 'running', 'completed', null),
+            };
+          });
         } catch (error) {
           if (generation !== drainGeneration) {
             return;
           }
-          set((state) => ({
-            ...(updateJobAtIndex(state.jobs, nextJobIndex, {
+          set((state) => {
+            const didUpdate = updateJobById(state.jobs, nextJob.id, 'running', {
               status: 'failed',
               finishedAt: Date.now(),
               error: getJobErrorMessage(error),
-            })
-              ? { jobsVersion: state.jobsVersion + 1 }
-              : {}),
-            summary: updateSummaryForStatusChange(state.summary, 'running', 'failed', null),
-          }));
+            });
+            if (!didUpdate) {
+              return {};
+            }
+
+            return {
+              jobsVersion: state.jobsVersion + 1,
+              summary: updateSummaryForStatusChange(state.summary, 'running', 'failed', null),
+            };
+          });
         }
       }
 

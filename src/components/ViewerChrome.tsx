@@ -424,7 +424,8 @@ export function ViewerChrome({
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
   const enqueueEditJob = useEditQueueStore((state) => state.enqueueJob);
-  const editQueueSummary = useEditQueueStore((state) => state.summary);
+  const editQueueActiveCount = useEditQueueStore((state) => state.summary.activeCount);
+  const editQueueFailedCount = useEditQueueStore((state) => state.summary.failedCount);
   const editQueueIsRunning = useEditQueueStore((state) => state.isRunning);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
@@ -528,9 +529,6 @@ export function ViewerChrome({
   const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
   const scaleValidationMessage = getScaleValidationMessage(parsedScaleWidth, parsedScaleHeight);
   const scaleBlockingMessage = scaleExportSourceMessage ?? scaleValidationMessage;
-  const editQueueActiveCount = editQueueSummary.activeCount;
-  const editQueueFailedCount = editQueueSummary.failedCount;
-
   const toggleFullscreen = async () => {
     try {
       const appWindow = getCurrentWindow();

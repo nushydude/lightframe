@@ -170,4 +170,60 @@ describe('editQueueStore', () => {
     });
     expect(saveScaledCopyMock).toHaveBeenCalledTimes(2);
   });
+
+  it('finishes the running job correctly after clearing earlier finished jobs', async () => {
+    let resolveSecondJob: (() => void) | undefined;
+    saveScaledCopyMock.mockResolvedValueOnce(undefined).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSecondJob = resolve;
+        })
+    );
+
+    useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/photo-1.jpg',
+      outputPath: 'C:/Images/photo-1-scaled.jpg',
+      width: 640,
+      height: 480,
+      smoothing: 0,
+      sharpening: 0,
+    });
+    useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/photo-2.jpg',
+      outputPath: 'C:/Images/photo-2-scaled.jpg',
+      width: 640,
+      height: 480,
+      smoothing: 0,
+      sharpening: 0,
+    });
+
+    useEditQueueStore.getState().runQueue();
+
+    await waitFor(() => {
+      expect(useEditQueueStore.getState().jobs.map((job) => job.status)).toEqual([
+        'completed',
+        'running',
+      ]);
+    });
+
+    useEditQueueStore.getState().clearFinished();
+    expect(useEditQueueStore.getState().jobs).toMatchObject([
+      { id: 'edit-job-2', status: 'running' },
+    ]);
+
+    resolveSecondJob?.();
+
+    await waitFor(() => {
+      expect(useEditQueueStore.getState().jobs).toMatchObject([
+        { id: 'edit-job-2', status: 'completed' },
+      ]);
+    });
+    expect(useEditQueueStore.getState().summary).toMatchObject({
+      runningCount: 0,
+      completedCount: 1,
+      activeCount: 0,
+    });
+  });
 });
