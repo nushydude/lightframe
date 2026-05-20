@@ -28,6 +28,8 @@ function getStatusLabel(status: EditQueueJob['status']): string {
 
 export function EditQueuePanel() {
   const jobs = useEditQueueStore((state) => state.jobs);
+  const jobsVersion = useEditQueueStore((state) => state.jobsVersion);
+  const summary = useEditQueueStore((state) => state.summary);
   const isRunning = useEditQueueStore((state) => state.isRunning);
   const runQueue = useEditQueueStore((state) => state.runQueue);
   const pauseQueue = useEditQueueStore((state) => state.pauseQueue);
@@ -35,11 +37,10 @@ export function EditQueuePanel() {
   const cancelJob = useEditQueueStore((state) => state.cancelJob);
   const clearFinished = useEditQueueStore((state) => state.clearFinished);
 
-  const queuedCount = jobs.filter((job) => job.status === 'queued').length;
-  const runningCount = jobs.filter((job) => job.status === 'running').length;
-  const finishedCount = jobs.filter(
-    (job) => job.status === 'completed' || job.status === 'failed' || job.status === 'canceled'
-  ).length;
+  const queuedCount = summary.queuedCount;
+  const runningCount = summary.runningCount;
+  const finishedCount = summary.finishedCount;
+  void jobsVersion;
   const hasJobs = jobs.length > 0;
   const canClearFinished = finishedCount > 0;
 

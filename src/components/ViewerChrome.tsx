@@ -424,7 +424,7 @@ export function ViewerChrome({
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
   const enqueueEditJob = useEditQueueStore((state) => state.enqueueJob);
-  const editQueueJobs = useEditQueueStore((state) => state.jobs);
+  const editQueueSummary = useEditQueueStore((state) => state.summary);
   const editQueueIsRunning = useEditQueueStore((state) => state.isRunning);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
@@ -528,10 +528,8 @@ export function ViewerChrome({
   const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
   const scaleValidationMessage = getScaleValidationMessage(parsedScaleWidth, parsedScaleHeight);
   const scaleBlockingMessage = scaleExportSourceMessage ?? scaleValidationMessage;
-  const editQueueActiveCount = editQueueJobs.filter(
-    (job) => job.status === 'queued' || job.status === 'running'
-  ).length;
-  const editQueueFailedCount = editQueueJobs.filter((job) => job.status === 'failed').length;
+  const editQueueActiveCount = editQueueSummary.activeCount;
+  const editQueueFailedCount = editQueueSummary.failedCount;
 
   const toggleFullscreen = async () => {
     try {
@@ -708,7 +706,7 @@ export function ViewerChrome({
       return;
     }
 
-    enqueueEditJob({
+    const result = enqueueEditJob({
       kind: 'scaled-copy',
       sourcePath: currentImagePath,
       outputPath: preparedCopy.outputPath,
@@ -717,6 +715,14 @@ export function ViewerChrome({
       smoothing: imageSmoothing,
       sharpening: imageSharpening,
     });
+    if (!result.ok) {
+      await message(result.error, {
+        title: 'Editing Queue',
+        kind: 'error',
+      });
+      return;
+    }
+
     setIsEditQueuePanelOpen(true);
   };
 
@@ -862,13 +868,21 @@ export function ViewerChrome({
       return;
     }
 
-    enqueueEditJob({
+    const result = enqueueEditJob({
       kind: 'cropped-copy',
       sourcePath: currentImagePath,
       outputPath: preparedCopy.outputPath,
       cropRect: preparedCopy.cropRect,
       rotationDegrees: rotation,
     });
+    if (!result.ok) {
+      await message(result.error, {
+        title: 'Editing Queue',
+        kind: 'error',
+      });
+      return;
+    }
+
     setIsEditQueuePanelOpen(true);
   };
 
@@ -1740,7 +1754,7 @@ export function ViewerChrome({
                 ? ` !${editQueueFailedCount}`
                 : ''}
           </summary>
-          <EditQueuePanel />
+          {isEditQueuePanelOpen && <EditQueuePanel />}
         </details>
 
         {(isCropMode || pendingCropPreview) && (

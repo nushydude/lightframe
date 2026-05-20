@@ -512,6 +512,54 @@ describe('ViewerChrome', () => {
     expect(screen.getByRole('region', { name: 'Editing queue' })).toBeInTheDocument();
   });
 
+  it('rejects queued exports that reuse an active output path', async () => {
+    useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/other.jpg',
+      outputPath: 'C:/Images/photo-scaled.jpg',
+      width: 600,
+      height: 400,
+      smoothing: 0,
+      sharpening: 0,
+    });
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-scaled.jpg');
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+    });
+
+    expect(useEditQueueStore.getState().jobs).toHaveLength(1);
+    expect(message).toHaveBeenCalledWith(
+      expect.stringContaining('active queued export'),
+      expect.objectContaining({ title: 'Editing Queue', kind: 'error' })
+    );
+  });
+
   it('shows a small debounced quality preview sample without filtering the main canvas', async () => {
     vi.useFakeTimers();
     try {
