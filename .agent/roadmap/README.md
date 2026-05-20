@@ -40,6 +40,7 @@ Use this order unless the user explicitly reprioritizes work:
 30. `tasks/30-large-image-tiled-renderer.md`
 31. `tasks/31-windows-native-codec-path.md`
 32. `tasks/32-format-specific-detail-paths.md`
+33. `tasks/33-raw-photo-sidecars.md`
 
 ## Shared Ground Rules
 

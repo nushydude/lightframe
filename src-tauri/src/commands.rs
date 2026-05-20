@@ -14,8 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 /// Supported image extensions for the viewer
-pub(crate) const SUPPORTED_EXTENSIONS: &[&str] =
-    &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif", "svg"];
+pub(crate) const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif", "svg",
+    "dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef", "srw",
+];
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ImageFile {
@@ -566,6 +568,15 @@ fn format_label_for_extension(extension: &str) -> String {
         "heic" | "heif" => "HEIC".to_string(),
         "avif" => "AVIF".to_string(),
         "svg" => "SVG".to_string(),
+        "dng" => "DNG".to_string(),
+        "cr2" | "cr3" => "Canon RAW".to_string(),
+        "nef" | "nrw" => "Nikon RAW".to_string(),
+        "arw" | "srf" | "sr2" => "Sony RAW".to_string(),
+        "raf" => "Fujifilm RAW".to_string(),
+        "orf" => "Olympus RAW".to_string(),
+        "rw2" => "Panasonic RAW".to_string(),
+        "pef" => "Pentax RAW".to_string(),
+        "srw" => "Samsung RAW".to_string(),
         other => other.to_uppercase(),
     }
 }
@@ -2002,19 +2013,10 @@ pub struct ExifData {
     pub raw: std::collections::HashMap<String, String>,
 }
 
-/// Extract EXIF metadata from an image
-fn get_exif_metadata_blocking(file_path: String) -> Result<ExifData, String> {
-    let file =
-        std::fs::File::open(&file_path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut reader = std::io::BufReader::new(file);
-    let exifreader = exif::Reader::new();
-    let exif = match exifreader.read_from_container(&mut reader) {
-        Ok(e) => e,
-        Err(_) => return Err("No EXIF data found".to_string()),
-    };
+const MAX_XMP_SIDECAR_BYTES: u64 = 2 * 1024 * 1024;
 
-    let mut raw = std::collections::HashMap::new();
-    let mut data = ExifData {
+fn empty_exif_data() -> ExifData {
+    ExifData {
         make: None,
         model: None,
         software: None,
@@ -2024,7 +2026,20 @@ fn get_exif_metadata_blocking(file_path: String) -> Result<ExifData, String> {
         iso: None,
         focal_length: None,
         raw: std::collections::HashMap::new(),
+    }
+}
+
+fn read_embedded_exif_metadata(path: &Path) -> Result<ExifData, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut reader = std::io::BufReader::new(file);
+    let exifreader = exif::Reader::new();
+    let exif = match exifreader.read_from_container(&mut reader) {
+        Ok(e) => e,
+        Err(_) => return Err("No EXIF data found".to_string()),
     };
+
+    let mut raw = std::collections::HashMap::new();
+    let mut data = empty_exif_data();
 
     for f in exif.fields() {
         let tag = format!("{}", f.tag);
@@ -2060,6 +2075,218 @@ fn get_exif_metadata_blocking(file_path: String) -> Result<ExifData, String> {
 
     data.raw = raw;
     Ok(data)
+}
+
+/// Extract EXIF metadata from an image or a nearby XMP sidecar
+fn get_exif_metadata_blocking(file_path: String) -> Result<ExifData, String> {
+    let path = Path::new(&file_path);
+    let embedded = read_embedded_exif_metadata(path);
+    let sidecar = read_xmp_sidecar_metadata(path);
+
+    match (embedded, sidecar) {
+        (Ok(mut data), Ok(Some(sidecar_data))) => {
+            merge_sidecar_metadata(&mut data, sidecar_data);
+            Ok(data)
+        }
+        (Ok(data), Ok(None)) | (Ok(data), Err(_)) => Ok(data),
+        (Err(_), Ok(Some(sidecar_data))) => Ok(sidecar_data),
+        (Err(embedded_error), Ok(None)) => Err(embedded_error),
+        (Err(_), Err(sidecar_error)) => Err(sidecar_error),
+    }
+}
+
+fn read_xmp_sidecar_metadata(image_path: &Path) -> Result<Option<ExifData>, String> {
+    let sidecar_path = match find_xmp_sidecar_path(image_path) {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+
+    let sidecar_metadata = fs::metadata(&sidecar_path)
+        .map_err(|e| format!("Failed to read XMP sidecar metadata: {}", e))?;
+    if sidecar_metadata.len() > MAX_XMP_SIDECAR_BYTES {
+        return Err("XMP sidecar is too large to read safely".to_string());
+    }
+
+    let xmp = fs::read_to_string(&sidecar_path)
+        .map_err(|e| format!("Failed to read XMP sidecar: {}", e))?;
+    let mut data = empty_exif_data();
+    if let Some(file_name) = sidecar_path.file_name().and_then(|value| value.to_str()) {
+        data.raw.insert("XMP Sidecar".to_string(), file_name.to_string());
+    }
+
+    apply_xmp_text_field(&xmp, "tiff:Make", "XMP Make", &mut data.raw, &mut data.make);
+    apply_xmp_text_field(&xmp, "tiff:Model", "XMP Model", &mut data.raw, &mut data.model);
+    apply_xmp_text_field(
+        &xmp,
+        "xmp:CreatorTool",
+        "XMP Creator Tool",
+        &mut data.raw,
+        &mut data.software,
+    );
+    apply_xmp_text_field(
+        &xmp,
+        "xmp:CreateDate",
+        "XMP Create Date",
+        &mut data.raw,
+        &mut data.date_time,
+    );
+    if data.date_time.is_none() {
+        apply_xmp_text_field(
+            &xmp,
+            "photoshop:DateCreated",
+            "XMP Date Created",
+            &mut data.raw,
+            &mut data.date_time,
+        );
+    }
+
+    if let Some(value) = extract_xmp_value(&xmp, "exif:FNumber") {
+        data.raw.insert("XMP FNumber".to_string(), value.clone());
+        data.f_number = parse_xmp_f64(&value);
+    }
+    if let Some(value) = extract_xmp_value(&xmp, "exif:ExposureTime") {
+        data.raw.insert("XMP ExposureTime".to_string(), value.clone());
+        data.exposure_time = Some(value);
+    }
+    if let Some(value) = extract_xmp_value(&xmp, "exif:ISOSpeedRatings")
+        .or_else(|| extract_xmp_value(&xmp, "exif:PhotographicSensitivity"))
+    {
+        data.raw.insert("XMP ISO".to_string(), value.clone());
+        data.iso = parse_xmp_u32(&value);
+    }
+    if let Some(value) = extract_xmp_value(&xmp, "exif:FocalLength") {
+        data.raw.insert("XMP FocalLength".to_string(), value.clone());
+        data.focal_length = Some(value);
+    }
+
+    Ok(Some(data))
+}
+
+fn find_xmp_sidecar_path(image_path: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![image_path.with_extension("xmp"), image_path.with_extension("XMP")];
+    if let Some(file_name) = image_path.file_name().and_then(|value| value.to_str()) {
+        candidates.push(image_path.with_file_name(format!("{}.xmp", file_name)));
+        candidates.push(image_path.with_file_name(format!("{}.XMP", file_name)));
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn merge_sidecar_metadata(data: &mut ExifData, sidecar_data: ExifData) {
+    if data.make.is_none() {
+        data.make = sidecar_data.make;
+    }
+    if data.model.is_none() {
+        data.model = sidecar_data.model;
+    }
+    if data.software.is_none() {
+        data.software = sidecar_data.software;
+    }
+    if data.date_time.is_none() {
+        data.date_time = sidecar_data.date_time;
+    }
+    if data.f_number.is_none() {
+        data.f_number = sidecar_data.f_number;
+    }
+    if data.exposure_time.is_none() {
+        data.exposure_time = sidecar_data.exposure_time;
+    }
+    if data.iso.is_none() {
+        data.iso = sidecar_data.iso;
+    }
+    if data.focal_length.is_none() {
+        data.focal_length = sidecar_data.focal_length;
+    }
+
+    for (key, value) in sidecar_data.raw {
+        data.raw.entry(key).or_insert(value);
+    }
+}
+
+fn apply_xmp_text_field(
+    xmp: &str,
+    tag: &str,
+    raw_label: &str,
+    raw: &mut std::collections::HashMap<String, String>,
+    target: &mut Option<String>,
+) {
+    if let Some(value) = extract_xmp_value(xmp, tag) {
+        raw.insert(raw_label.to_string(), value.clone());
+        if target.is_none() {
+            *target = Some(value);
+        }
+    }
+}
+
+fn extract_xmp_value(xmp: &str, tag: &str) -> Option<String> {
+    extract_xmp_attribute_value(xmp, tag)
+        .or_else(|| extract_xmp_element_value(xmp, tag))
+        .map(|value| clean_xmp_value(&value))
+        .filter(|value| !value.is_empty())
+}
+
+fn extract_xmp_attribute_value(xmp: &str, tag: &str) -> Option<String> {
+    extract_xmp_attribute_value_with_quote(xmp, tag, '"')
+        .or_else(|| extract_xmp_attribute_value_with_quote(xmp, tag, '\''))
+}
+
+fn extract_xmp_attribute_value_with_quote(xmp: &str, tag: &str, quote: char) -> Option<String> {
+    let start_pattern = format!("{}={}", tag, quote);
+    let value_start = xmp.find(&start_pattern)? + start_pattern.len();
+    let value_end = xmp[value_start..].find(quote)? + value_start;
+    Some(xmp[value_start..value_end].to_string())
+}
+
+fn extract_xmp_element_value(xmp: &str, tag: &str) -> Option<String> {
+    let open_start = xmp.find(&format!("<{}", tag))?;
+    let content_start = xmp[open_start..].find('>')? + open_start + 1;
+    let close_start = xmp[content_start..].find(&format!("</{}>", tag))? + content_start;
+    Some(strip_xml_tags(&xmp[content_start..close_start]))
+}
+
+fn strip_xml_tags(value: &str) -> String {
+    let mut output = String::new();
+    let mut inside_tag = false;
+    for character in value.chars() {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => output.push(character),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn clean_xmp_value(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn parse_xmp_f64(value: &str) -> Option<f64> {
+    if let Some((numerator, denominator)) = value.split_once('/') {
+        let numerator = numerator.trim().parse::<f64>().ok()?;
+        let denominator = denominator.trim().parse::<f64>().ok()?;
+        if denominator == 0.0 {
+            return None;
+        }
+        return Some(numerator / denominator);
+    }
+
+    value.trim().parse::<f64>().ok()
+}
+
+fn parse_xmp_u32(value: &str) -> Option<u32> {
+    let digits: String =
+        value.trim().chars().take_while(|character| character.is_ascii_digit()).collect();
+    digits.parse::<u32>().ok()
 }
 
 /// Extract EXIF metadata from an image
@@ -2349,6 +2576,7 @@ mod tests {
         File::create(path.join("image10.jpg")).unwrap();
         File::create(path.join("image2.png")).unwrap();
         File::create(path.join("image1.webp")).unwrap();
+        File::create(path.join("image3.cr2")).unwrap();
         File::create(path.join("no_extension")).unwrap();
         File::create(path.join("not_an_image.txt")).unwrap();
         fs::create_dir(path.join("subdir")).unwrap();
@@ -2356,7 +2584,7 @@ mod tests {
         let results = scan_folder_blocking(path.to_string_lossy().to_string()).unwrap();
 
         let sorted_names: Vec<&str> = results.iter().map(|img| img.file_name.as_str()).collect();
-        assert_eq!(sorted_names, vec!["image1.webp", "image2.png", "image10.jpg"]);
+        assert_eq!(sorted_names, vec!["image1.webp", "image2.png", "image3.cr2", "image10.jpg"]);
         assert!(!results.iter().any(|img| img.file_name == "no_extension"));
     }
 
@@ -2421,6 +2649,31 @@ mod tests {
     }
 
     #[test]
+    fn test_get_image_metadata_blocking_reports_raw_placeholder_support() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.cr2");
+        fs::write(&image_path, b"not-a-decodable-raw").unwrap();
+        let expected_size = fs::metadata(&image_path).unwrap().len();
+
+        let metadata =
+            get_image_metadata_blocking(image_path.to_string_lossy().to_string()).unwrap();
+
+        assert_eq!(metadata.width, None);
+        assert_eq!(metadata.height, None);
+        assert_eq!(metadata.format, "Canon RAW");
+        assert_eq!(metadata.codec_backend, "unsupported");
+        assert!(!metadata.native_decode_supported);
+        assert_eq!(metadata.detail_backend, "unsupported");
+        assert!(!metadata.detail_supported);
+        assert_eq!(metadata.file_size_bytes, expected_size);
+        assert!(!metadata.browser_renderable);
+        assert!(!metadata.rust_decode_supported);
+        assert!(metadata.metadata_supported);
+        assert!(metadata.thumbnail_supported);
+        assert!(metadata.support_note.as_deref().unwrap_or_default().contains("RAW"));
+    }
+
+    #[test]
     fn test_get_image_metadata_blocking_falls_back_for_heic_files() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("sample.heic");
@@ -2475,6 +2728,52 @@ mod tests {
             assert_eq!(metadata.format, expected_format, "unexpected format for {}", file_name);
             assert!(!metadata.detail_supported, "unexpected detail support for {}", file_name);
         }
+    }
+
+    #[test]
+    fn test_get_exif_metadata_blocking_reads_xmp_sidecar_for_raw() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.cr2");
+        let sidecar_path = dir.path().join("sample.xmp");
+        fs::write(&image_path, b"not-a-decodable-raw").unwrap();
+        fs::write(
+            &sidecar_path,
+            r#"
+            <x:xmpmeta xmlns:x="adobe:ns:meta/">
+              <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description
+                  xmlns:tiff="http://ns.adobe.com/tiff/1.0/"
+                  xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+                  xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                  tiff:Make="Canon"
+                  tiff:Model="EOS R5"
+                  xmp:CreatorTool="Lightroom"
+                  xmp:CreateDate="2026-05-20T10:20:30+10:00"
+                  exif:FNumber="28/10"
+                  exif:ExposureTime="1/250"
+                  exif:FocalLength="85/1">
+                  <exif:ISOSpeedRatings>
+                    <rdf:Seq><rdf:li>400</rdf:li></rdf:Seq>
+                  </exif:ISOSpeedRatings>
+                </rdf:Description>
+              </rdf:RDF>
+            </x:xmpmeta>
+            "#,
+        )
+        .unwrap();
+
+        let metadata =
+            get_exif_metadata_blocking(image_path.to_string_lossy().to_string()).unwrap();
+
+        assert_eq!(metadata.make.as_deref(), Some("Canon"));
+        assert_eq!(metadata.model.as_deref(), Some("EOS R5"));
+        assert_eq!(metadata.software.as_deref(), Some("Lightroom"));
+        assert_eq!(metadata.date_time.as_deref(), Some("2026-05-20T10:20:30+10:00"));
+        assert_eq!(metadata.f_number, Some(2.8));
+        assert_eq!(metadata.exposure_time.as_deref(), Some("1/250"));
+        assert_eq!(metadata.iso, Some(400));
+        assert_eq!(metadata.focal_length.as_deref(), Some("85/1"));
+        assert_eq!(metadata.raw.get("XMP Sidecar").map(String::as_str), Some("sample.xmp"));
     }
 
     #[test]

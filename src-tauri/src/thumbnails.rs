@@ -206,6 +206,15 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
                 "AVIF thumbnails fall back to a labeled placeholder when decoding fails.",
             ),
         },
+        Some(extension) if is_raw_extension(extension) => FormatSupport {
+            browser_renderable: false,
+            rust_decode_supported: false,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: Some(
+                "RAW files are shown read-only with XMP sidecar metadata and placeholder previews until native RAW decode support is available.",
+            ),
+        },
         _ => FormatSupport {
             browser_renderable: true,
             rust_decode_supported: true,
@@ -226,9 +235,12 @@ pub fn get_or_create_thumbnail(
     let cache_available = ensure_cache_root(cache_root);
 
     if cache_available {
-        if let Some(asset) =
-            cached_asset_from_disk(cache_root, &cache_hash, cached_thumbnail_formats(file_path))
-        {
+        if let Some(asset) = cached_asset_from_disk(
+            cache_root,
+            &cache_hash,
+            cached_thumbnail_formats(file_path),
+            Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
+        ) {
             return Ok(asset);
         }
     }
@@ -282,7 +294,8 @@ pub fn get_or_create_preview(
         if let Some(asset) = cached_asset_from_disk(
             cache_root,
             &cache_hash,
-            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png],
+            cached_preview_formats(file_path),
+            Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
         ) {
             return Ok(asset);
         }
@@ -314,8 +327,27 @@ pub fn get_or_create_preview(
         }
     }
 
-    let img =
-        image::open(file_path).map_err(|e| format!("Failed to open image for preview: {}", e))?;
+    let img = match image::open(file_path) {
+        Ok(img) => img,
+        Err(error) => {
+            if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
+                return cache_asset_text(
+                    cache_root,
+                    cache_available,
+                    &cache_hash,
+                    GeneratedImageFormat::Svg,
+                    &placeholder_svg,
+                    Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
+                )
+                .map(|mut asset| {
+                    asset.cache_key = cache_hash;
+                    asset
+                });
+            }
+
+            return Err(format!("Failed to open image for preview: {}", error));
+        }
+    };
     let (width, height) = img.dimensions();
     let preview = if width > max_dimension || height > max_dimension {
         img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
@@ -400,7 +432,7 @@ pub fn get_or_create_tile(
 
     if cache_available {
         if let Some(asset) =
-            cached_asset_from_disk(cache_root, &cache_hash, &[GeneratedImageFormat::Jpeg])
+            cached_asset_from_disk(cache_root, &cache_hash, &[GeneratedImageFormat::Jpeg], None)
         {
             return Ok(asset);
         }
@@ -556,17 +588,40 @@ fn cached_thumbnail_formats(file_path: &Path) -> &'static [GeneratedImageFormat]
     }
 }
 
+fn cached_preview_formats(file_path: &Path) -> &'static [GeneratedImageFormat] {
+    if normalized_extension(file_path).as_deref().is_some_and(is_raw_extension) {
+        &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg]
+    } else {
+        &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png]
+    }
+}
+
 fn known_fallback_thumbnail_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
     if matches!(error, image::ImageError::IoError(_)) {
         return None;
     }
 
     let extension = normalized_extension(file_path)?;
-    if !matches!(extension.as_str(), "heic" | "heif" | "avif" | "svg") {
+    if !matches!(extension.as_str(), "heic" | "heif" | "avif" | "svg")
+        && !is_raw_extension(&extension)
+    {
         return None;
     }
 
     Some(placeholder_thumbnail_svg(&extension))
+}
+
+fn known_fallback_preview_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
+    if matches!(error, image::ImageError::IoError(_)) {
+        return None;
+    }
+
+    let extension = normalized_extension(file_path)?;
+    if !is_raw_extension(&extension) {
+        return None;
+    }
+
+    Some(placeholder_preview_svg(&extension))
 }
 
 fn normalized_extension(path: &Path) -> Option<String> {
@@ -575,13 +630,33 @@ fn normalized_extension(path: &Path) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
+fn is_raw_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "dng"
+            | "cr2"
+            | "cr3"
+            | "nef"
+            | "nrw"
+            | "arw"
+            | "srf"
+            | "sr2"
+            | "raf"
+            | "orf"
+            | "rw2"
+            | "pef"
+            | "srw"
+    )
+}
+
 fn placeholder_thumbnail_svg(extension: &str) -> String {
     let format_label = match extension {
-        "heic" => "HEIC",
-        "heif" => "HEIF",
-        "avif" => "AVIF",
-        "svg" => "SVG",
-        _ => "IMAGE",
+        "heic" => "HEIC".to_string(),
+        "heif" => "HEIF".to_string(),
+        "avif" => "AVIF".to_string(),
+        "svg" => "SVG".to_string(),
+        extension if is_raw_extension(extension) => extension.to_ascii_uppercase(),
+        _ => "IMAGE".to_string(),
     };
 
     let canvas_size = THUMBNAIL_SIZE;
@@ -600,6 +675,29 @@ fn placeholder_thumbnail_svg(extension: &str) -> String {
         ),
         canvas = canvas_size,
         inner = inner_size,
+        label = format_label
+    )
+}
+
+const PREVIEW_PLACEHOLDER_SIZE: u32 = 1024;
+
+fn placeholder_preview_svg(extension: &str) -> String {
+    let format_label = extension.to_ascii_uppercase();
+    format!(
+        concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{size}\" height=\"{size}\" ",
+            "viewBox=\"0 0 {size} {size}\">",
+            "<rect width=\"{size}\" height=\"{size}\" fill=\"#111827\"/>",
+            "<rect x=\"96\" y=\"96\" width=\"832\" height=\"832\" rx=\"36\" fill=\"#1f2937\"/>",
+            "<text x=\"50%\" y=\"45%\" fill=\"#f8fafc\" text-anchor=\"middle\" ",
+            "font-family=\"Arial, sans-serif\" font-size=\"104\">{label}</text>",
+            "<text x=\"50%\" y=\"58%\" fill=\"#cbd5e1\" text-anchor=\"middle\" ",
+            "font-family=\"Arial, sans-serif\" font-size=\"32\">RAW preview unavailable</text>",
+            "<text x=\"50%\" y=\"66%\" fill=\"#94a3b8\" text-anchor=\"middle\" ",
+            "font-family=\"Arial, sans-serif\" font-size=\"24\">Showing sidecar metadata when present</text>",
+            "</svg>"
+        ),
+        size = PREVIEW_PLACEHOLDER_SIZE,
         label = format_label
     )
 }
@@ -641,11 +739,14 @@ fn cached_asset_from_disk(
     cache_root: &Path,
     cache_hash: &str,
     formats: &[GeneratedImageFormat],
+    svg_dimensions: Option<(u32, u32)>,
 ) -> Option<GeneratedImageAsset> {
     for format in formats {
         let path = cache_root.join(format!("{}.{}", cache_hash, format.extension()));
         if path.is_file() {
-            return Some(build_generated_image_asset(&path, cache_hash, *format, None));
+            let dimensions =
+                if *format == GeneratedImageFormat::Svg { svg_dimensions } else { None };
+            return Some(build_generated_image_asset(&path, cache_hash, *format, dimensions));
         }
     }
 
@@ -1052,6 +1153,27 @@ mod tests {
     }
 
     #[test]
+    fn raw_preview_requests_return_stable_placeholder_asset() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.cr2");
+        let cache_dir = dir.path().join("previews");
+        fs::write(&image_path, b"not-a-decodable-raw").unwrap();
+
+        let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+        let first = get_or_create_preview(&image_path, &metadata, &cache_dir, 2048, None).unwrap();
+        let second = get_or_create_preview(&image_path, &metadata, &cache_dir, 2048, None).unwrap();
+
+        assert!(first.file_path.ends_with(".svg"));
+        assert_eq!(first, second);
+        assert_eq!(first.width, Some(PREVIEW_PLACEHOLDER_SIZE));
+        assert_eq!(first.height, Some(PREVIEW_PLACEHOLDER_SIZE));
+
+        let decoded = fs::read_to_string(&first.file_path).unwrap();
+        assert!(decoded.contains(">CR2<"));
+        assert!(decoded.contains("RAW preview unavailable"));
+    }
+
+    #[test]
     fn provided_metadata_is_used_when_filesystem_metadata_is_unavailable() {
         let metadata =
             resolve_source_metadata(Path::new("missing-file.jpg"), Some(42), Some("123")).unwrap();
@@ -1124,7 +1246,7 @@ mod tests {
         let cache_dir = dir.path().join("thumbs");
 
         for (extension, expected_label) in
-            [("heic", "HEIC"), ("heif", "HEIF"), ("avif", "AVIF"), ("svg", "SVG")]
+            [("heic", "HEIC"), ("heif", "HEIF"), ("avif", "AVIF"), ("svg", "SVG"), ("cr2", "CR2")]
         {
             let image_path = dir.path().join(format!("sample.{}", extension));
             fs::write(&image_path, b"not-a-decodable-image").unwrap();
@@ -1161,6 +1283,16 @@ mod tests {
         let formats = cached_thumbnail_formats(Path::new("sample.svg"));
 
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]);
+    }
+
+    #[test]
+    fn cached_preview_lookup_allows_svg_fallbacks_for_raw_formats() {
+        let formats = cached_preview_formats(Path::new("sample.cr2"));
+
+        assert_eq!(
+            formats,
+            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg]
+        );
     }
 
     #[test]

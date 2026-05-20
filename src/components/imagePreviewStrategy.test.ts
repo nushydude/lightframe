@@ -82,6 +82,20 @@ describe('imagePreviewStrategy', () => {
     expect(getFullResolutionSafetyMessage(oversizedImage)).toContain('TIFF');
   });
 
+  it('keeps non-browser-renderable RAW files on the preview path', () => {
+    const rawImage = {
+      width: null,
+      height: null,
+      file_size_bytes: 64_000_000,
+      format: 'Canon RAW',
+      browser_renderable: false,
+    };
+
+    expect(canRequestFullResolutionSafely(rawImage)).toBe(false);
+    expect(shouldLoadFullResolutionImmediately(rawImage, 'actual', 1)).toBe(false);
+    expect(getFullResolutionSafetyMessage(rawImage)).toContain('Canon RAW');
+  });
+
   it('preloads adjacent full resolution only when metadata confirms a small image', () => {
     const smallImage = {
       width: 1024,
