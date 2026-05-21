@@ -2,6 +2,7 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { ViewerChrome } from './ViewerChrome';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
+import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -36,6 +37,7 @@ describe('ViewerChrome', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
     useCurationStore.setState({ curationByPath: {}, isLoaded: false });
+    useEditQueueStore.getState().reset();
     useSettingsStore.setState((state) => ({
       ...state,
       settings: {
@@ -456,6 +458,108 @@ describe('ViewerChrome', () => {
     );
   });
 
+  it('queues a high-quality scaled copy without running it immediately', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+      imageSmoothing: 20,
+      imageSharpening: 30,
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-scaled.jpg');
+    const scaleSpy = vi.spyOn(tauriCommands, 'saveScaledCopy').mockResolvedValue(undefined);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+    fireEvent.change(screen.getByLabelText('Scaled copy width'), {
+      target: { value: '600' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+    });
+
+    expect(scaleSpy).not.toHaveBeenCalled();
+    expect(useEditQueueStore.getState().jobs).toMatchObject([
+      {
+        kind: 'scaled-copy',
+        sourcePath: 'C:/Images/photo.jpg',
+        outputPath: 'C:/Images/photo-scaled.jpg',
+        width: 600,
+        height: 400,
+        smoothing: 20,
+        sharpening: 30,
+        status: 'queued',
+      },
+    ]);
+    expect(screen.getByRole('region', { name: 'Editing queue' })).toBeInTheDocument();
+  });
+
+  it('rejects queued exports that reuse an active output path', async () => {
+    useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/other.jpg',
+      outputPath: 'C:/Images/photo-scaled.jpg',
+      width: 600,
+      height: 400,
+      smoothing: 0,
+      sharpening: 0,
+    });
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-scaled.jpg');
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Scaled export quality'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+    });
+
+    expect(useEditQueueStore.getState().jobs).toHaveLength(1);
+    expect(message).toHaveBeenCalledWith(
+      expect.stringContaining('active queued export'),
+      expect.objectContaining({ title: 'Editing Queue', kind: 'error' })
+    );
+  });
+
   it('shows a small debounced quality preview sample without filtering the main canvas', async () => {
     vi.useFakeTimers();
     try {
@@ -703,6 +807,43 @@ describe('ViewerChrome', () => {
     );
     expect(vi.mocked(confirm).mock.calls[0]?.[0]).toContain('This modifies the source file.');
     expect(overwriteSpy).not.toHaveBeenCalled();
+  });
+
+  it('queues a cropped copy with the current crop rectangle', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      isCropMode: true,
+      cropRect: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+      rotation: 90,
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-cropped.jpg');
+    const cropSpy = vi.spyOn(tauriCommands, 'saveCroppedCopy').mockResolvedValue(undefined);
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const container = document.createElement('div');
+    container.className = 'image-canvas';
+    container.appendChild(image);
+    document.body.appendChild(container);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Queue cropped copy'));
+    });
+
+    expect(cropSpy).not.toHaveBeenCalled();
+    expect(useEditQueueStore.getState().jobs).toMatchObject([
+      {
+        kind: 'cropped-copy',
+        sourcePath: 'C:/Images/photo.jpg',
+        outputPath: 'C:/Images/photo-cropped.jpg',
+        cropRect: { x: 120, y: 160, width: 480, height: 240 },
+        rotationDegrees: 90,
+        status: 'queued',
+      },
+    ]);
   });
 
   it('refreshes the metadata panel after a successful crop overwrite', async () => {

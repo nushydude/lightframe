@@ -4,6 +4,7 @@ import { confirm, message, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
 import {
   closeSecondaryWindow,
+  type CropRect,
   getImageMetadata,
   getFileName,
   openSecondaryWindow,
@@ -26,8 +27,10 @@ import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { useProjectorState } from '../hooks/useProjectorState';
 import { useCurationStore } from '../state/curationStore';
+import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
 import type { QuickDestination } from '../types/settings';
+import { EditQueuePanel } from './EditQueuePanel';
 import { ToolbarIcon } from './ToolbarIcon';
 
 interface ViewerChromeProps {
@@ -96,6 +99,17 @@ const SCALE_EXPORT_SAVE_FILTERS = [
   { name: 'BMP image', extensions: ['bmp'] },
   { name: 'GIF image', extensions: ['gif'] },
 ];
+
+interface PreparedScaledCopy {
+  outputPath: string;
+  width: number;
+  height: number;
+}
+
+interface PreparedCroppedCopy {
+  outputPath: string;
+  cropRect: CropRect;
+}
 
 function readToolbarUsage(): Partial<Record<SecondaryToolbarActionId, number>> {
   if (typeof window === 'undefined') {
@@ -409,6 +423,10 @@ export function ViewerChrome({
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
+  const enqueueEditJob = useEditQueueStore((state) => state.enqueueJob);
+  const editQueueActiveCount = useEditQueueStore((state) => state.summary.activeCount);
+  const editQueueFailedCount = useEditQueueStore((state) => state.summary.failedCount);
+  const editQueueIsRunning = useEditQueueStore((state) => state.isRunning);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
@@ -432,6 +450,7 @@ export function ViewerChrome({
   const [scaleHeight, setScaleHeight] = useState('');
   const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
   const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
+  const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
   const copyToMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -510,7 +529,6 @@ export function ViewerChrome({
   const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
   const scaleValidationMessage = getScaleValidationMessage(parsedScaleWidth, parsedScaleHeight);
   const scaleBlockingMessage = scaleExportSourceMessage ?? scaleValidationMessage;
-
   const toggleFullscreen = async () => {
     try {
       const appWindow = getCurrentWindow();
@@ -624,9 +642,9 @@ export function ViewerChrome({
     }
   };
 
-  const handleSaveScaledCopy = async () => {
+  const prepareScaledCopy = async (): Promise<PreparedScaledCopy | null> => {
     if (!currentImagePath) {
-      return;
+      return null;
     }
 
     const sourceMessage = getScaleExportSourceMessage(currentImagePath);
@@ -635,7 +653,7 @@ export function ViewerChrome({
         title: 'Scale Copy',
         kind: 'error',
       });
-      return;
+      return null;
     }
 
     const fallbackDimensions = await getSourceImageDimensions(currentImagePath);
@@ -648,7 +666,7 @@ export function ViewerChrome({
         title: 'Scale Copy',
         kind: 'error',
       });
-      return;
+      return null;
     }
 
     if (!width || !height) {
@@ -656,7 +674,7 @@ export function ViewerChrome({
         title: 'Scale Copy',
         kind: 'error',
       });
-      return;
+      return null;
     }
 
     const outputPath = await save({
@@ -665,7 +683,7 @@ export function ViewerChrome({
     });
 
     if (!outputPath) {
-      return;
+      return null;
     }
 
     const outputMessage = getScaleExportOutputMessage(outputPath);
@@ -674,19 +692,54 @@ export function ViewerChrome({
         title: 'Scale Copy',
         kind: 'error',
       });
+      return null;
+    }
+
+    return { outputPath, width, height };
+  };
+
+  const handleQueueScaledCopy = async () => {
+    const preparedCopy = await prepareScaledCopy();
+    if (!preparedCopy || !currentImagePath) {
+      return;
+    }
+
+    const result = enqueueEditJob({
+      kind: 'scaled-copy',
+      sourcePath: currentImagePath,
+      outputPath: preparedCopy.outputPath,
+      width: preparedCopy.width,
+      height: preparedCopy.height,
+      smoothing: imageSmoothing,
+      sharpening: imageSharpening,
+    });
+    if (!result.ok) {
+      await message(result.error, {
+        title: 'Editing Queue',
+        kind: 'error',
+      });
+      return;
+    }
+
+    setIsEditQueuePanelOpen(true);
+  };
+
+  const handleSaveScaledCopy = async () => {
+    const preparedCopy = await prepareScaledCopy();
+    if (!preparedCopy || !currentImagePath) {
       return;
     }
 
     try {
       await saveScaledCopy(
         currentImagePath,
-        outputPath,
-        width,
-        height,
+        preparedCopy.outputPath,
+        preparedCopy.width,
+        preparedCopy.height,
         imageSmoothing,
         imageSharpening
       );
-      await message(`Saved scaled copy to:\n${outputPath}`, {
+      await message(`Saved scaled copy to:\n${preparedCopy.outputPath}`, {
         title: 'Scaled Copy Saved',
         kind: 'info',
       });
@@ -774,12 +827,12 @@ export function ViewerChrome({
     closeOverflowMenus();
   };
 
-  const handleSaveCroppedCopy = async () => {
+  const prepareCroppedCopy = async (): Promise<PreparedCroppedCopy | null> => {
     if (!currentImagePath || !cropRect) {
-      return;
+      return null;
     }
 
-    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
+    const activeImage = getActiveCanvasImageElement();
     const imageWidth = activeImage?.naturalWidth ?? 0;
     const imageHeight = activeImage?.naturalHeight ?? 0;
 
@@ -788,7 +841,7 @@ export function ViewerChrome({
         title: 'Error',
         kind: 'error',
       });
-      return;
+      return null;
     }
 
     const pixelCropRect = normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight);
@@ -801,12 +854,50 @@ export function ViewerChrome({
     });
 
     if (!outputPath) {
+      return null;
+    }
+
+    return { outputPath, cropRect: pixelCropRect };
+  };
+
+  const handleQueueCroppedCopy = async () => {
+    const preparedCopy = await prepareCroppedCopy();
+    if (!preparedCopy || !currentImagePath) {
+      return;
+    }
+
+    const result = enqueueEditJob({
+      kind: 'cropped-copy',
+      sourcePath: currentImagePath,
+      outputPath: preparedCopy.outputPath,
+      cropRect: preparedCopy.cropRect,
+      rotationDegrees: rotation,
+    });
+    if (!result.ok) {
+      await message(result.error, {
+        title: 'Editing Queue',
+        kind: 'error',
+      });
+      return;
+    }
+
+    setIsEditQueuePanelOpen(true);
+  };
+
+  const handleSaveCroppedCopy = async () => {
+    const preparedCopy = await prepareCroppedCopy();
+    if (!preparedCopy || !currentImagePath) {
       return;
     }
 
     try {
-      await saveCroppedCopy(currentImagePath, pixelCropRect, outputPath, rotation);
-      await message(`Saved cropped copy to:\n${outputPath}`, {
+      await saveCroppedCopy(
+        currentImagePath,
+        preparedCopy.cropRect,
+        preparedCopy.outputPath,
+        rotation
+      );
+      await message(`Saved cropped copy to:\n${preparedCopy.outputPath}`, {
         title: 'Cropped Copy Saved',
         kind: 'info',
       });
@@ -1619,6 +1710,14 @@ export function ViewerChrome({
                 Reset
               </button>
               <button
+                className="setting-button-secondary"
+                type="button"
+                onClick={() => void handleQueueScaledCopy()}
+                disabled={Boolean(scaleBlockingMessage)}
+              >
+                Queue
+              </button>
+              <button
                 className="setting-button-primary"
                 type="button"
                 onClick={() => void handleSaveScaledCopy()}
@@ -1628,6 +1727,32 @@ export function ViewerChrome({
               </button>
             </div>
           </div>
+        </details>
+
+        <details
+          className="edit-queue-menu"
+          open={isEditQueuePanelOpen}
+          onToggle={(event) => setIsEditQueuePanelOpen(event.currentTarget.open)}
+        >
+          <summary
+            className={`control-btn control-btn--text has-tooltip ${
+              editQueueIsRunning || editQueueActiveCount > 0 || editQueueFailedCount > 0
+                ? 'active'
+                : ''
+            }`}
+            data-tooltip="Editing queue"
+            title="Editing queue"
+            aria-label="Editing queue"
+            id="btn-edit-queue"
+          >
+            Queue
+            {editQueueActiveCount > 0
+              ? ` ${editQueueActiveCount}`
+              : editQueueFailedCount > 0
+                ? ` !${editQueueFailedCount}`
+                : ''}
+          </summary>
+          {isEditQueuePanelOpen && <EditQueuePanel />}
         </details>
 
         {(isCropMode || pendingCropPreview) && (
@@ -1680,6 +1805,19 @@ export function ViewerChrome({
                 id="btn-crop-clear-preview"
               >
                 Clear
+              </button>
+            )}
+            {isCropMode && (
+              <button
+                className="control-btn control-btn--text active has-tooltip"
+                onClick={() => void handleQueueCroppedCopy()}
+                data-tooltip="Queue cropped copy"
+                title="Queue cropped copy"
+                aria-label="Queue cropped copy"
+                id="btn-crop-queue-copy"
+                disabled={!cropRect}
+              >
+                Queue Copy
               </button>
             )}
             {isCropMode && (
