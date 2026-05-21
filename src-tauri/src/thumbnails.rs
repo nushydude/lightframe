@@ -4,6 +4,7 @@ use image::GenericImageView;
 use libjpeg_turbo_rs::{CropRegion, Subsampling};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,9 +22,11 @@ const MIN_TILE_SIZE: u32 = 128;
 const MAX_TILE_SIZE: u32 = 2_048;
 const TILE_SOURCE_CACHE_VERSION: &str = "tile-source-v1";
 const MAX_TILE_SOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_RAW_NATIVE_DECODE_FAILURES: usize = 4_096;
 static CACHE_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CACHE_TMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static JPEG_TILE_SOURCE_CACHE: OnceLock<Mutex<Option<CachedJpegSource>>> = OnceLock::new();
+static RAW_NATIVE_DECODE_FAILURE_CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct CachedJpegSource {
@@ -238,7 +241,7 @@ pub fn get_or_create_thumbnail(
         if let Some(asset) = cached_asset_from_disk(
             cache_root,
             &cache_hash,
-            cached_thumbnail_formats(file_path),
+            cached_thumbnail_formats(file_path, &cache_hash),
             Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
         ) {
             return Ok(asset);
@@ -256,6 +259,7 @@ pub fn get_or_create_thumbnail(
         ),
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_thumbnail_svg(file_path, &error) {
+                remember_raw_native_decode_failure(file_path, &cache_hash);
                 return cache_asset_text(
                     cache_root,
                     cache_available,
@@ -294,7 +298,7 @@ pub fn get_or_create_preview(
         if let Some(asset) = cached_asset_from_disk(
             cache_root,
             &cache_hash,
-            cached_preview_formats(file_path),
+            cached_preview_formats(file_path, &cache_hash),
             Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
         ) {
             return Ok(asset);
@@ -331,6 +335,7 @@ pub fn get_or_create_preview(
         Ok(img) => img,
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
+                remember_raw_native_decode_failure(file_path, &cache_hash);
                 return cache_asset_text(
                     cache_root,
                     cache_available,
@@ -580,7 +585,11 @@ fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, Stri
     .map_err(|error| format!("Failed to encode JPEG tile: {}", error))
 }
 
-fn cached_thumbnail_formats(file_path: &Path) -> &'static [GeneratedImageFormat] {
+fn cached_thumbnail_formats(file_path: &Path, cache_hash: &str) -> &'static [GeneratedImageFormat] {
+    if should_reuse_raw_native_placeholder(file_path, cache_hash) {
+        return &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg];
+    }
+
     if native_codecs::should_prefer_native_thumbnail(file_path) {
         &[GeneratedImageFormat::Jpeg]
     } else {
@@ -588,13 +597,59 @@ fn cached_thumbnail_formats(file_path: &Path) -> &'static [GeneratedImageFormat]
     }
 }
 
-fn cached_preview_formats(file_path: &Path) -> &'static [GeneratedImageFormat] {
+fn cached_preview_formats(file_path: &Path, cache_hash: &str) -> &'static [GeneratedImageFormat] {
+    if should_reuse_raw_native_placeholder(file_path, cache_hash) {
+        return &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg];
+    }
+
     if native_codecs::should_prefer_native_preview(file_path) {
         &[GeneratedImageFormat::Jpeg]
     } else if normalized_extension(file_path).as_deref().is_some_and(is_raw_extension) {
         &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg]
     } else {
         &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png]
+    }
+}
+
+fn should_reuse_raw_native_placeholder(file_path: &Path, cache_hash: &str) -> bool {
+    is_raw_native_preferred(file_path) && raw_native_decode_failure_is_known(cache_hash)
+}
+
+fn remember_raw_native_decode_failure(file_path: &Path, cache_hash: &str) {
+    if !is_raw_native_preferred(file_path) {
+        return;
+    }
+
+    let cache = RAW_NATIVE_DECODE_FAILURE_CACHE.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut guard) = cache.lock() else {
+        return;
+    };
+
+    if guard.len() >= MAX_RAW_NATIVE_DECODE_FAILURES {
+        guard.clear();
+    }
+    guard.insert(cache_hash.to_string());
+}
+
+fn raw_native_decode_failure_is_known(cache_hash: &str) -> bool {
+    RAW_NATIVE_DECODE_FAILURE_CACHE
+        .get()
+        .and_then(|cache| cache.lock().ok().map(|guard| guard.contains(cache_hash)))
+        .unwrap_or(false)
+}
+
+fn is_raw_native_preferred(file_path: &Path) -> bool {
+    normalized_extension(file_path).as_deref().is_some_and(is_raw_extension)
+        && (native_codecs::should_prefer_native_thumbnail(file_path)
+            || native_codecs::should_prefer_native_preview(file_path))
+}
+
+#[cfg(test)]
+fn clear_raw_native_decode_failure_cache() {
+    if let Some(cache) = RAW_NATIVE_DECODE_FAILURE_CACHE.get() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.clear();
+        }
     }
 }
 
@@ -1275,14 +1330,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cached_thumbnail_lookup_skips_svg_fallbacks_for_native_preferred_formats() {
-        let formats = cached_thumbnail_formats(Path::new("sample.heic"));
+        let formats = cached_thumbnail_formats(Path::new("sample.heic"), "cache-key");
 
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg]);
     }
 
     #[test]
     fn cached_thumbnail_lookup_allows_svg_fallbacks_for_non_native_formats() {
-        let formats = cached_thumbnail_formats(Path::new("sample.svg"));
+        let formats = cached_thumbnail_formats(Path::new("sample.svg"), "cache-key");
 
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]);
     }
@@ -1290,15 +1345,35 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cached_preview_lookup_skips_svg_fallbacks_for_native_raw_formats() {
-        let formats = cached_preview_formats(Path::new("sample.cr2"));
+        clear_raw_native_decode_failure_cache();
+        let formats = cached_preview_formats(Path::new("sample.cr2"), "cache-key");
 
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cached_raw_fallbacks_are_reused_after_native_failure() {
+        clear_raw_native_decode_failure_cache();
+
+        let path = Path::new("sample.cr2");
+        remember_raw_native_decode_failure(path, "failed-cache-key");
+
+        assert_eq!(
+            cached_thumbnail_formats(path, "failed-cache-key"),
+            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]
+        );
+        assert_eq!(
+            cached_preview_formats(path, "failed-cache-key"),
+            &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg]
+        );
+        assert_eq!(cached_preview_formats(path, "other-cache-key"), &[GeneratedImageFormat::Jpeg]);
     }
 
     #[cfg(not(windows))]
     #[test]
     fn cached_preview_lookup_allows_svg_fallbacks_for_raw_formats_without_native_codecs() {
-        let formats = cached_preview_formats(Path::new("sample.cr2"));
+        let formats = cached_preview_formats(Path::new("sample.cr2"), "cache-key");
 
         assert_eq!(
             formats,
