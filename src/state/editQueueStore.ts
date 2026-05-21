@@ -368,7 +368,12 @@ export const useEditQueueStore = create<EditQueueState>((set, get) => {
         )
           ? { jobsVersion: state.jobsVersion + 1 }
           : {}),
-        summary: updateSummaryForStatusChange(state.summary, previousStatus, 'queued', null),
+        summary: updateSummaryForStatusChange(
+          state.summary,
+          previousStatus,
+          'queued',
+          state.summary.currentJobId
+        ),
       }));
 
       if (get().isRunning) {
@@ -389,7 +394,12 @@ export const useEditQueueStore = create<EditQueueState>((set, get) => {
         )
           ? { jobsVersion: state.jobsVersion + 1 }
           : {}),
-        summary: updateSummaryForStatusChange(state.summary, 'queued', 'canceled', null),
+        summary: updateSummaryForStatusChange(
+          state.summary,
+          'queued',
+          'canceled',
+          state.summary.currentJobId
+        ),
       }));
     },
     clearFinished: () => {

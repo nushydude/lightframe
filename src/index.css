@@ -1551,10 +1551,22 @@ body,
 }
 
 .edit-queue-list {
-  display: grid;
-  gap: 8px;
+  position: relative;
+  display: block;
   max-height: min(320px, 45vh);
   overflow: auto;
+}
+
+.edit-queue-virtual-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.edit-queue-virtual-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 70px;
 }
 
 .edit-queue-empty {
@@ -1569,10 +1581,12 @@ body,
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-height: 70px;
   padding: 9px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.18);
+  box-sizing: border-box;
 }
 
 .edit-queue-row-main {

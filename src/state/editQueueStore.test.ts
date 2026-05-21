@@ -226,4 +226,69 @@ describe('editQueueStore', () => {
       activeCount: 0,
     });
   });
+
+  it('preserves the current job id when changing other queued or failed jobs', async () => {
+    let resolveRunningJob: (() => void) | undefined;
+    saveScaledCopyMock.mockRejectedValueOnce(new Error('bad source')).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRunningJob = resolve;
+        })
+    );
+
+    const failedResult = useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/photo-1.jpg',
+      outputPath: 'C:/Images/photo-1-scaled.jpg',
+      width: 640,
+      height: 480,
+      smoothing: 0,
+      sharpening: 0,
+    });
+    const runningResult = useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/photo-2.jpg',
+      outputPath: 'C:/Images/photo-2-scaled.jpg',
+      width: 640,
+      height: 480,
+      smoothing: 0,
+      sharpening: 0,
+    });
+    const queuedResult = useEditQueueStore.getState().enqueueJob({
+      kind: 'scaled-copy',
+      sourcePath: 'C:/Images/photo-3.jpg',
+      outputPath: 'C:/Images/photo-3-scaled.jpg',
+      width: 640,
+      height: 480,
+      smoothing: 0,
+      sharpening: 0,
+    });
+
+    if (!failedResult.ok) throw new Error(failedResult.error);
+    if (!runningResult.ok) throw new Error(runningResult.error);
+    if (!queuedResult.ok) throw new Error(queuedResult.error);
+
+    useEditQueueStore.getState().runQueue();
+
+    await waitFor(() => {
+      expect(useEditQueueStore.getState().jobs.map((job) => job.status)).toEqual([
+        'failed',
+        'running',
+        'queued',
+      ]);
+    });
+    expect(useEditQueueStore.getState().summary.currentJobId).toBe(runningResult.jobId);
+
+    useEditQueueStore.getState().cancelJob(queuedResult.jobId);
+    expect(useEditQueueStore.getState().summary.currentJobId).toBe(runningResult.jobId);
+
+    useEditQueueStore.getState().retryJob(failedResult.jobId);
+    expect(useEditQueueStore.getState().summary.currentJobId).toBe(runningResult.jobId);
+
+    resolveRunningJob?.();
+
+    await waitFor(() => {
+      expect(useEditQueueStore.getState().summary.currentJobId).toBe(null);
+    });
+  });
 });
