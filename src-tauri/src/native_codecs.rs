@@ -70,9 +70,9 @@ pub fn codec_capability_for_extension(extension: &str) -> CodecCapability {
         },
         "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "raf" | "orf" | "rw2"
         | "pef" | "srw" => CodecCapability {
-            metadata: CodecBackend::Unsupported,
+            metadata: raw_native_backend(),
             metadata_fallback: None,
-            thumbnail: CodecBackend::Unsupported,
+            thumbnail: raw_native_backend(),
             detail: CodecBackend::Unsupported,
         },
         _ => CodecCapability {
@@ -101,13 +101,7 @@ pub fn should_prefer_native_thumbnail(path: &Path) -> bool {
 }
 
 pub fn should_prefer_native_preview(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some("heic" | "heif")
-    ) && codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
+    codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
 }
 
 pub fn should_prefer_native_detail(path: &Path) -> bool {
@@ -119,11 +113,11 @@ pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, String> {
 }
 
 pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
-    platform::generate_scaled_jpeg(path, max_dimension)
+    platform::generate_thumbnail_jpeg(path, max_dimension)
 }
 
 pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
-    platform::generate_scaled_jpeg(path, max_dimension)
+    platform::generate_preview_jpeg(path, max_dimension)
 }
 
 pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Vec<u8>, String> {
@@ -145,6 +139,11 @@ fn native_metadata_fallback() -> Option<CodecBackend> {
     Some(CodecBackend::BrowserRenderable)
 }
 
+#[cfg(windows)]
+fn raw_native_backend() -> CodecBackend {
+    CodecBackend::WindowsNative
+}
+
 #[cfg(not(windows))]
 fn native_backend_or_browser() -> CodecBackend {
     CodecBackend::BrowserRenderable
@@ -160,6 +159,11 @@ fn native_metadata_fallback() -> Option<CodecBackend> {
     None
 }
 
+#[cfg(not(windows))]
+fn raw_native_backend() -> CodecBackend {
+    CodecBackend::Unsupported
+}
+
 #[cfg(windows)]
 mod platform {
     use super::{NativeImageMetadata, NativeImageRegion};
@@ -173,9 +177,9 @@ mod platform {
         CLSID_WICImagingFactory, GUID_ContainerFormatBmp, GUID_ContainerFormatGif,
         GUID_ContainerFormatHeif, GUID_ContainerFormatJpeg, GUID_ContainerFormatPng,
         GUID_ContainerFormatTiff, GUID_ContainerFormatWebp, GUID_WICPixelFormat32bppBGRA,
-        IWICBitmapSource, IWICImagingFactory, WICBitmapDitherTypeNone,
-        WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
-        WICRect,
+        IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource, IWICImagingFactory,
+        WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
+        WICDecodeMetadataCacheOnDemand, WICRect,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -212,7 +216,25 @@ mod platform {
         })
     }
 
-    pub fn generate_scaled_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+    pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+        generate_scaled_jpeg(path, max_dimension, NativeScaledSourceKind::Thumbnail)
+    }
+
+    pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+        generate_scaled_jpeg(path, max_dimension, NativeScaledSourceKind::Preview)
+    }
+
+    #[derive(Clone, Copy)]
+    enum NativeScaledSourceKind {
+        Thumbnail,
+        Preview,
+    }
+
+    fn generate_scaled_jpeg(
+        path: &Path,
+        max_dimension: u32,
+        source_kind: NativeScaledSourceKind,
+    ) -> Result<Vec<u8>, String> {
         if max_dimension == 0 {
             return Err("max_dimension must be greater than zero".to_string());
         }
@@ -220,10 +242,32 @@ mod platform {
         let _com = initialize_com()?;
         let factory = create_factory()?;
         let decoder = create_decoder(&factory, path)?;
+        // Try decoder-owned sources before frame 0 so RAW codecs can use embedded previews.
+        if let Some(jpeg_bytes) = match source_kind {
+            NativeScaledSourceKind::Thumbnail => {
+                try_decoder_thumbnail(&factory, &decoder, max_dimension)
+                    .or_else(|| try_decoder_preview(&factory, &decoder, max_dimension))
+            }
+            NativeScaledSourceKind::Preview => {
+                try_decoder_preview(&factory, &decoder, max_dimension).or_else(|| {
+                    try_decoder_thumbnail_for_preview(&factory, &decoder, max_dimension)
+                })
+            }
+        } {
+            return Ok(jpeg_bytes);
+        }
+
         let frame = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
-        let source = scaled_source(&factory, &frame, max_dimension)?;
-        let bgra = source_to_bgra(&factory, &source)?;
-        encode_bgra_as_jpeg(bgra)
+        match source_kind {
+            NativeScaledSourceKind::Thumbnail => {
+                try_frame_thumbnail(&factory, &frame, max_dimension)
+            }
+            NativeScaledSourceKind::Preview => {
+                try_frame_thumbnail_for_preview(&factory, &frame, max_dimension)
+            }
+        }
+        .map(Ok)
+        .unwrap_or_else(|| encode_scaled_source_as_jpeg(&factory, &frame, max_dimension))
     }
 
     pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Vec<u8>, String> {
@@ -297,6 +341,80 @@ mod platform {
         }
         .map_err(windows_error)?;
         scaler.cast::<IWICBitmapSource>().map_err(windows_error)
+    }
+
+    fn try_decoder_preview(
+        factory: &IWICImagingFactory,
+        decoder: &IWICBitmapDecoder,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { decoder.GetPreview() }
+            .ok()
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn try_decoder_thumbnail(
+        factory: &IWICImagingFactory,
+        decoder: &IWICBitmapDecoder,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { decoder.GetThumbnail() }
+            .ok()
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn try_decoder_thumbnail_for_preview(
+        factory: &IWICImagingFactory,
+        decoder: &IWICBitmapDecoder,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { decoder.GetThumbnail() }
+            .ok()
+            .filter(|source| source_is_large_enough_for_preview(source, max_dimension))
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn try_frame_thumbnail(
+        factory: &IWICImagingFactory,
+        frame: &IWICBitmapFrameDecode,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { frame.GetThumbnail() }
+            .ok()
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn try_frame_thumbnail_for_preview(
+        factory: &IWICImagingFactory,
+        frame: &IWICBitmapFrameDecode,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { frame.GetThumbnail() }
+            .ok()
+            .filter(|source| source_is_large_enough_for_preview(source, max_dimension))
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn source_is_large_enough_for_preview(source: &IWICBitmapSource, max_dimension: u32) -> bool {
+        bitmap_source_size(source)
+            .map(|(width, height)| {
+                width.max(height) >= preview_thumbnail_min_dimension(max_dimension)
+            })
+            .unwrap_or(false)
+    }
+
+    fn preview_thumbnail_min_dimension(max_dimension: u32) -> u32 {
+        ((max_dimension / 2).max(1)).max(512).min(max_dimension)
+    }
+
+    fn encode_scaled_source_as_jpeg(
+        factory: &IWICImagingFactory,
+        source: &IWICBitmapSource,
+        max_dimension: u32,
+    ) -> Result<Vec<u8>, String> {
+        let source = scaled_source(factory, source, max_dimension)?;
+        let bgra = source_to_bgra(factory, &source)?;
+        encode_bgra_as_jpeg(bgra)
     }
 
     struct BgraPixels {
@@ -460,7 +578,11 @@ mod platform {
         Err("Windows native codec path is unavailable on this platform".to_string())
     }
 
-    pub fn generate_scaled_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
+    pub fn generate_thumbnail_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
+        Err("Windows native codec path is unavailable on this platform".to_string())
+    }
+
+    pub fn generate_preview_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
         Err("Windows native codec path is unavailable on this platform".to_string())
     }
 
@@ -529,8 +651,22 @@ mod tests {
         assert_eq!(capability.detail, CodecBackend::Unsupported);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn codec_capability_keeps_raw_formats_on_placeholder_paths() {
+    fn codec_capability_uses_windows_native_for_raw_previews_on_windows() {
+        for extension in ["dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "srw"] {
+            let capability = codec_capability_for_extension(extension);
+
+            assert_eq!(capability.metadata, CodecBackend::WindowsNative);
+            assert_eq!(capability.metadata_fallback, None);
+            assert_eq!(capability.thumbnail, CodecBackend::WindowsNative);
+            assert_eq!(capability.detail, CodecBackend::Unsupported);
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn codec_capability_keeps_raw_formats_on_placeholder_paths_without_windows_native() {
         for extension in ["dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "srw"] {
             let capability = codec_capability_for_extension(extension);
 
@@ -546,6 +682,8 @@ mod tests {
     fn native_preview_is_preferred_for_heif_formats_on_windows() {
         assert!(should_prefer_native_preview(Path::new("sample.heic")));
         assert!(should_prefer_native_preview(Path::new("sample.HEIF")));
+        assert!(should_prefer_native_preview(Path::new("sample.cr2")));
+        assert!(should_prefer_native_preview(Path::new("sample.DNG")));
         assert!(!should_prefer_native_preview(Path::new("sample.jpg")));
     }
 
@@ -553,6 +691,7 @@ mod tests {
     #[test]
     fn native_preview_is_not_preferred_without_windows_native_codecs() {
         assert!(!should_prefer_native_preview(Path::new("sample.heic")));
+        assert!(!should_prefer_native_preview(Path::new("sample.cr2")));
     }
 
     #[test]
