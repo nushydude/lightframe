@@ -3,7 +3,15 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
-import { openSettings, openUrlExternal } from '../services/tauriCommands';
+import {
+  clearGeneratedImageCache,
+  getCodecHealth,
+  openSettings,
+  openUrlExternal,
+  retryNativeCodecs,
+  type CodecHealthReport,
+  type GeneratedCacheCommandScope,
+} from '../services/tauriCommands';
 import { PERFORMANCE_MODE_LABELS } from '../services/performanceMode';
 
 /** Settings panel overlay */
@@ -423,30 +431,302 @@ export function SettingsPanel() {
             </p>
           </div>
 
-          {/* Format Support */}
-          <div className="settings-group">
-            <div className="settings-group-title">Format Support</div>
-            <p className="setting-help" style={{ marginBottom: '12px' }}>
-              LightFrame uses your system's codecs to render HEIC and HEIF images. If these images
-              don't load, you may need to install the free extensions from the Microsoft Store:
-            </p>
-            <div className="setting-row">
-              <button
-                className="setting-button-secondary"
-                onClick={() => openUrlExternal('ms-windows-store://pdp/?ProductId=9PMMSR1CGPWG')}
-              >
-                Get HEIF Extensions
-              </button>
-              <button
-                className="setting-button-secondary"
-                onClick={() => openUrlExternal('ms-windows-store://pdp/?ProductId=9NMZLZ57R3T7')}
-              >
-                Get HEVC Extensions
-              </button>
-            </div>
-          </div>
+          <CodecHealthSettings />
         </div>
       </div>
     </div>
+  );
+}
+
+function CodecHealthSettings() {
+  const [codecHealth, setCodecHealth] = React.useState<CodecHealthReport | null>(null);
+  const [codecHealthStatus, setCodecHealthStatus] = React.useState<string | null>(null);
+  const [isCodecHealthBusy, setIsCodecHealthBusy] = React.useState(false);
+
+  const refreshCodecHealth = React.useCallback(async () => {
+    setIsCodecHealthBusy(true);
+    setCodecHealthStatus(null);
+    try {
+      setCodecHealth(await getCodecHealth());
+    } catch (error) {
+      setCodecHealthStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsCodecHealthBusy(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshCodecHealth();
+  }, [refreshCodecHealth]);
+
+  const handleRetryNativeCodecs = async () => {
+    setIsCodecHealthBusy(true);
+    setCodecHealthStatus(null);
+    try {
+      const cleared = await retryNativeCodecs();
+      setCodecHealthStatus(cleared > 0 ? `Retry queue reset (${cleared})` : 'Retry queue clear');
+      setCodecHealth(await getCodecHealth());
+    } catch (error) {
+      setCodecHealthStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsCodecHealthBusy(false);
+    }
+  };
+
+  const handleClearGeneratedCache = async (scope: GeneratedCacheCommandScope) => {
+    setIsCodecHealthBusy(true);
+    setCodecHealthStatus(null);
+    try {
+      await clearGeneratedImageCache(scope);
+      setCodecHealth(await getCodecHealth());
+      setCodecHealthStatus(`${formatCacheScope(scope)} cache cleared`);
+    } catch (error) {
+      setCodecHealthStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsCodecHealthBusy(false);
+    }
+  };
+
+  return (
+    <div className="settings-group">
+      <div className="settings-group-title">Format Support</div>
+      <CodecHealthToolbar
+        report={codecHealth}
+        isBusy={isCodecHealthBusy}
+        onRefresh={refreshCodecHealth}
+        onRetryNative={handleRetryNativeCodecs}
+      />
+      {codecHealthStatus && <p className="setting-help">{codecHealthStatus}</p>}
+      <CodecHealthList report={codecHealth} />
+      <CodecCacheSummary report={codecHealth} />
+      <CodecStoreLinks />
+      <div className="setting-row">
+        <button
+          className="setting-button-secondary"
+          onClick={() => void handleClearGeneratedCache('previews')}
+          disabled={isCodecHealthBusy}
+        >
+          Clear Previews
+        </button>
+        <button
+          className="setting-button-secondary"
+          onClick={() => void handleClearGeneratedCache('all')}
+          disabled={isCodecHealthBusy}
+        >
+          Clear All Generated
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CodecHealthToolbar({
+  report,
+  isBusy,
+  onRefresh,
+  onRetryNative,
+}: {
+  report: CodecHealthReport | null;
+  isBusy: boolean;
+  onRefresh: () => Promise<void>;
+  onRetryNative: () => Promise<void>;
+}) {
+  return (
+    <div className="codec-health-toolbar">
+      <div className="codec-health-cache">
+        Cache {formatBytes(report?.generatedCache.totalSizeBytes ?? 0)}
+        {' / '}
+        {report?.generatedCache.totalFileCount ?? 0} files
+      </div>
+      <div className="setting-button-row">
+        <button
+          className="setting-button-secondary"
+          onClick={() => void onRefresh()}
+          disabled={isBusy}
+        >
+          Refresh
+        </button>
+        <button
+          className="setting-button-secondary"
+          onClick={() => void onRetryNative()}
+          disabled={isBusy}
+        >
+          Retry Native
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CodecHealthList({ report }: { report: CodecHealthReport | null }) {
+  return (
+    <div className="codec-health-list">
+      {(report?.entries ?? []).map((entry) => (
+        <div className="codec-health-item" key={entry.label}>
+          <div className="codec-health-main">
+            <div className="codec-health-title-row">
+              <span className="codec-health-title">{entry.label}</span>
+              <span className={`codec-health-status codec-health-status--${entry.status}`}>
+                {formatCodecStatus(entry.status)}
+              </span>
+            </div>
+            <div className="codec-health-meta">
+              {entry.extensions.map((extension) => `.${extension}`).join(' ')}
+            </div>
+            {entry.nativeDecoderNames.length > 0 && (
+              <div className="codec-health-meta">{entry.nativeDecoderNames.join(', ')}</div>
+            )}
+            {entry.nativeSupportedExtensions.length > 0 && (
+              <div className="codec-health-meta">
+                Native .{entry.nativeSupportedExtensions.join(' .')}
+              </div>
+            )}
+            {entry.nativeMissingExtensions.length > 0 && (
+              <div className="codec-health-meta">
+                Missing .{entry.nativeMissingExtensions.join(' .')}
+              </div>
+            )}
+            <div className="codec-health-note">{entry.note}</div>
+          </div>
+          <div className="codec-health-backends">
+            <span>M {formatBackend(entry.metadataBackend)}</span>
+            <span>T {formatBackend(entry.thumbnailBackend)}</span>
+            <span>D {formatBackend(entry.detailBackend)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CodecCacheSummary({ report }: { report: CodecHealthReport | null }) {
+  if (!report) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="codec-cache-grid">
+        {report.generatedCache.buckets.map((bucket) => (
+          <div className="codec-cache-bucket" key={bucket.scope}>
+            <span>{formatCacheScope(bucket.scope)}</span>
+            <strong>{formatBytes(bucket.sizeBytes)}</strong>
+            <small>{bucket.fileCount} files</small>
+          </div>
+        ))}
+        <div className="codec-cache-bucket">
+          <span>Native retries</span>
+          <strong>{report.generatedCache.rawNativeFailureCount}</strong>
+          <small>deferred</small>
+        </div>
+      </div>
+      <div className="codec-health-runtime">
+        Runtime {runtimeCacheHits(report)} hits / {runtimeNativeGenerations(report)} native /{' '}
+        {runtimePlaceholderGenerations(report)} placeholders
+      </div>
+    </>
+  );
+}
+
+function CodecStoreLinks() {
+  return (
+    <div className="setting-row">
+      <button
+        className="setting-button-secondary"
+        onClick={() => openUrlExternal('ms-windows-store://pdp/?ProductId=9PMMSR1CGPWG')}
+      >
+        Get HEIF Extensions
+      </button>
+      <button
+        className="setting-button-secondary"
+        onClick={() => openUrlExternal('ms-windows-store://pdp/?ProductId=9NMZLZ57R3T7')}
+      >
+        Get HEVC Extensions
+      </button>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatBackend(backend: string): string {
+  switch (backend) {
+    case 'rust_image':
+      return 'Rust';
+    case 'windows_native':
+      return 'WIC';
+    case 'browser_renderable':
+      return 'Browser';
+    case 'unsupported':
+      return 'No';
+    default:
+      return backend;
+  }
+}
+
+function formatCodecStatus(status: string): string {
+  switch (status) {
+    case 'native-ready':
+      return 'Native';
+    case 'preview-first':
+      return 'Preview';
+    case 'fallback':
+      return 'Fallback';
+    case 'partial':
+      return 'Partial';
+    case 'ready':
+      return 'Ready';
+    default:
+      return status;
+  }
+}
+
+function formatCacheScope(scope: string): string {
+  switch (scope) {
+    case 'all':
+      return 'Generated';
+    case 'thumbnails':
+      return 'Thumbnails';
+    case 'previews':
+      return 'Previews';
+    case 'tiles':
+      return 'Tiles';
+    default:
+      return scope;
+  }
+}
+
+function runtimeCacheHits(report: CodecHealthReport): number {
+  return (
+    report.runtimeStats.thumbnailCacheHits +
+    report.runtimeStats.previewCacheHits +
+    report.runtimeStats.tileCacheHits
+  );
+}
+
+function runtimeNativeGenerations(report: CodecHealthReport): number {
+  return (
+    report.runtimeStats.nativeThumbnailGenerations + report.runtimeStats.nativePreviewGenerations
+  );
+}
+
+function runtimePlaceholderGenerations(report: CodecHealthReport): number {
+  return (
+    report.runtimeStats.placeholderThumbnailGenerations +
+    report.runtimeStats.placeholderPreviewGenerations
   );
 }

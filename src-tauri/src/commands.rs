@@ -46,6 +46,52 @@ pub struct ImageMetadata {
     pub support_note: Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodecHealthEntry {
+    pub label: String,
+    pub extensions: Vec<String>,
+    pub metadata_backend: String,
+    pub thumbnail_backend: String,
+    pub detail_backend: String,
+    pub native_decoder_available: Option<bool>,
+    pub native_decoder_names: Vec<String>,
+    pub native_supported_extensions: Vec<String>,
+    pub native_missing_extensions: Vec<String>,
+    pub native_error: Option<String>,
+    pub status: String,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodecHealthReport {
+    pub platform: String,
+    pub entries: Vec<CodecHealthEntry>,
+    pub generated_cache: thumbnails::GeneratedCacheSummary,
+    pub runtime_stats: thumbnails::GeneratedAssetRuntimeStats,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GeneratedCacheCommandScope {
+    All,
+    Thumbnails,
+    Previews,
+    Tiles,
+}
+
+impl From<GeneratedCacheCommandScope> for thumbnails::GeneratedCacheClearScope {
+    fn from(value: GeneratedCacheCommandScope) -> Self {
+        match value {
+            GeneratedCacheCommandScope::All => Self::All,
+            GeneratedCacheCommandScope::Thumbnails => Self::Thumbnails,
+            GeneratedCacheCommandScope::Previews => Self::Previews,
+            GeneratedCacheCommandScope::Tiles => Self::Tiles,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct CropRect {
     pub x: u32,
@@ -579,6 +625,132 @@ fn format_label_for_extension(extension: &str) -> String {
         "srw" => "Samsung RAW".to_string(),
         other => other.to_uppercase(),
     }
+}
+
+fn codec_health_report_blocking(app_cache_dir: PathBuf) -> CodecHealthReport {
+    CodecHealthReport {
+        platform: std::env::consts::OS.to_string(),
+        entries: codec_health_entries(),
+        generated_cache: thumbnails::generated_cache_summary(&app_cache_dir),
+        runtime_stats: thumbnails::generated_asset_runtime_stats(),
+    }
+}
+
+fn codec_health_entries() -> Vec<CodecHealthEntry> {
+    vec![
+        codec_health_entry(
+            "JPEG detail",
+            &["jpg", "jpeg"],
+            "Rust decoder with libjpeg-turbo regional tiles.",
+        ),
+        codec_health_entry(
+            "Standard stills",
+            &["png", "webp", "gif", "bmp", "tiff", "tif", "avif"],
+            "Rust decoder path; very large non-JPEG files stay preview-first.",
+        ),
+        codec_health_entry(
+            "HEIC / HEIF",
+            &["heic", "heif"],
+            "Windows native codec enables previews, thumbnails, metadata, and detail tiles.",
+        ),
+        codec_health_entry(
+            "Camera RAW",
+            &["dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef", "srw"],
+            "Windows native codec is tried for thumbnails and previews; placeholders and XMP stay available.",
+        ),
+        codec_health_entry(
+            "SVG",
+            &["svg"],
+            "Browser-renderable image with generated placeholder thumbnails.",
+        ),
+    ]
+}
+
+fn codec_health_entry(label: &str, extensions: &[&str], note: &str) -> CodecHealthEntry {
+    let capability = native_codecs::codec_capability_for_extension(extensions[0]);
+    let uses_native = [
+        capability.metadata,
+        capability.metadata_fallback.unwrap_or(native_codecs::CodecBackend::Unsupported),
+        capability.thumbnail,
+        capability.detail,
+    ]
+    .contains(&native_codecs::CodecBackend::WindowsNative);
+    let native_health =
+        uses_native.then(|| native_codecs::native_decoder_health_for_extensions(extensions));
+    let status = codec_health_status(capability, native_health.as_ref());
+
+    CodecHealthEntry {
+        label: label.to_string(),
+        extensions: extensions.iter().map(|extension| (*extension).to_string()).collect(),
+        metadata_backend: capability.metadata.as_str().to_string(),
+        thumbnail_backend: capability.thumbnail.as_str().to_string(),
+        detail_backend: capability.detail.as_str().to_string(),
+        native_decoder_available: native_health.as_ref().map(|health| health.available),
+        native_decoder_names: native_health
+            .as_ref()
+            .map(|health| health.decoder_names.clone())
+            .unwrap_or_default(),
+        native_supported_extensions: native_health
+            .as_ref()
+            .map(|health| health.supported_extensions.clone())
+            .unwrap_or_default(),
+        native_missing_extensions: native_health
+            .as_ref()
+            .map(|health| health.missing_extensions.clone())
+            .unwrap_or_default(),
+        native_error: native_health.and_then(|health| health.error),
+        status,
+        note: note.to_string(),
+    }
+}
+
+fn codec_health_status(
+    capability: native_codecs::CodecCapability,
+    native_health: Option<&native_codecs::NativeDecoderHealth>,
+) -> String {
+    if let Some(health) = native_health {
+        if health.available {
+            return "native-ready".to_string();
+        }
+        if !health.supported_extensions.is_empty() {
+            return "partial".to_string();
+        }
+        return "fallback".to_string();
+    }
+
+    if capability.detail == native_codecs::CodecBackend::Unsupported {
+        "preview-first".to_string()
+    } else {
+        "ready".to_string()
+    }
+}
+
+#[tauri::command]
+pub async fn get_codec_health(app: AppHandle) -> Result<CodecHealthReport, String> {
+    let app_cache_dir =
+        app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || codec_health_report_blocking(app_cache_dir))
+        .await
+        .map_err(|err| format!("Codec health worker failed: {}", err))
+}
+
+#[tauri::command]
+pub async fn clear_generated_image_cache(
+    app: AppHandle,
+    scope: GeneratedCacheCommandScope,
+) -> Result<thumbnails::GeneratedCacheSummary, String> {
+    let app_cache_dir =
+        app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        thumbnails::clear_generated_cache(&app_cache_dir, scope.into())
+    })
+    .await
+    .map_err(|err| format!("Generated cache cleanup worker failed: {}", err))?
+}
+
+#[tauri::command]
+pub async fn retry_native_codecs() -> Result<usize, String> {
+    Ok(thumbnails::clear_raw_native_decode_failure_cache())
 }
 
 fn rotation_save_strategy(extension: &str, rotation_degrees: i32) -> Option<RotationSaveStrategy> {
@@ -2728,6 +2900,53 @@ mod tests {
             assert_eq!(metadata.format, expected_format, "unexpected format for {}", file_name);
             assert!(!metadata.detail_supported, "unexpected detail support for {}", file_name);
         }
+    }
+
+    #[test]
+    fn test_codec_health_report_includes_cache_and_core_formats() {
+        let dir = tempdir().unwrap();
+        let report = codec_health_report_blocking(dir.path().to_path_buf());
+
+        assert_eq!(report.platform, std::env::consts::OS);
+        assert!(report.entries.iter().any(|entry| entry.label == "JPEG detail"));
+        assert!(report.entries.iter().any(|entry| entry.label == "HEIC / HEIF"));
+        assert!(report.entries.iter().any(|entry| entry.label == "Camera RAW"));
+        assert_eq!(report.generated_cache.total_file_count, 0);
+    }
+
+    #[test]
+    fn test_codec_health_entry_reports_native_status_for_heif() {
+        let entry = codec_health_entry(
+            "HEIC / HEIF",
+            &["heic", "heif"],
+            "Windows native codec enables previews.",
+        );
+
+        #[cfg(windows)]
+        {
+            assert!(entry.native_decoder_available.is_some());
+            assert!(matches!(entry.status.as_str(), "native-ready" | "fallback"));
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(entry.native_decoder_available, None);
+            assert_eq!(entry.status, "preview-first");
+        }
+    }
+
+    #[test]
+    fn test_codec_health_status_distinguishes_partial_native_coverage() {
+        let capability = native_codecs::codec_capability_for_extension("cr2");
+        let health = native_codecs::NativeDecoderHealth {
+            available: false,
+            decoder_names: vec!["Sample RAW decoder".to_string()],
+            supported_extensions: vec!["cr2".to_string()],
+            missing_extensions: vec!["nef".to_string()],
+            error: None,
+        };
+
+        assert_eq!(codec_health_status(capability, Some(&health)), "partial");
     }
 
     #[test]

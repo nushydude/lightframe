@@ -41,6 +41,57 @@ export interface GeneratedImageAsset {
   file_size_bytes?: number | null;
 }
 
+interface GeneratedCacheBucket {
+  scope: string;
+  path: string;
+  fileCount: number;
+  sizeBytes: number;
+}
+
+interface GeneratedCacheSummary {
+  buckets: GeneratedCacheBucket[];
+  totalFileCount: number;
+  totalSizeBytes: number;
+  rawNativeFailureCount: number;
+}
+
+interface GeneratedAssetRuntimeStats {
+  thumbnailCacheHits: number;
+  previewCacheHits: number;
+  tileCacheHits: number;
+  nativeThumbnailGenerations: number;
+  nativePreviewGenerations: number;
+  rustThumbnailGenerations: number;
+  rustPreviewGenerations: number;
+  placeholderThumbnailGenerations: number;
+  placeholderPreviewGenerations: number;
+  tileGenerations: number;
+}
+
+interface CodecHealthEntry {
+  label: string;
+  extensions: string[];
+  metadataBackend: string;
+  thumbnailBackend: string;
+  detailBackend: string;
+  nativeDecoderAvailable: boolean | null;
+  nativeDecoderNames: string[];
+  nativeSupportedExtensions: string[];
+  nativeMissingExtensions: string[];
+  nativeError?: string | null;
+  status: string;
+  note: string;
+}
+
+export interface CodecHealthReport {
+  platform: string;
+  entries: CodecHealthEntry[];
+  generatedCache: GeneratedCacheSummary;
+  runtimeStats: GeneratedAssetRuntimeStats;
+}
+
+export type GeneratedCacheCommandScope = 'all' | 'thumbnails' | 'previews' | 'tiles';
+
 export interface ImageCurationUpdate {
   filePath: string;
   favorite: boolean;
@@ -119,6 +170,23 @@ export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[
 /** Get metadata (dimensions, format, file size) for an image */
 export async function getImageMetadata(filePath: string): Promise<ImageMetadata> {
   return invoke<ImageMetadata>('get_image_metadata', { filePath });
+}
+
+/** Read codec and generated-cache diagnostics */
+export async function getCodecHealth(): Promise<CodecHealthReport> {
+  return invoke<CodecHealthReport>('get_codec_health');
+}
+
+/** Clear generated preview/thumbnail/tile cache files */
+export async function clearGeneratedImageCache(
+  scope: GeneratedCacheCommandScope
+): Promise<GeneratedCacheSummary> {
+  return invoke<GeneratedCacheSummary>('clear_generated_image_cache', { scope });
+}
+
+/** Clear native decode negative cache so codecs are retried */
+export async function retryNativeCodecs(): Promise<number> {
+  return invoke<number>('retry_native_codecs');
 }
 
 /** Generate a downscaled preview image and return a cached file-backed asset */
