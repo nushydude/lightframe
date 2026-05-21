@@ -249,8 +249,9 @@ mod platform {
                     .or_else(|| try_decoder_preview(&factory, &decoder, max_dimension))
             }
             NativeScaledSourceKind::Preview => {
-                try_decoder_preview(&factory, &decoder, max_dimension)
-                    .or_else(|| try_decoder_thumbnail(&factory, &decoder, max_dimension))
+                try_decoder_preview(&factory, &decoder, max_dimension).or_else(|| {
+                    try_decoder_thumbnail_for_preview(&factory, &decoder, max_dimension)
+                })
             }
         } {
             return Ok(jpeg_bytes);
@@ -258,8 +259,11 @@ mod platform {
 
         let frame = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
         match source_kind {
-            NativeScaledSourceKind::Thumbnail | NativeScaledSourceKind::Preview => {
+            NativeScaledSourceKind::Thumbnail => {
                 try_frame_thumbnail(&factory, &frame, max_dimension)
+            }
+            NativeScaledSourceKind::Preview => {
+                try_frame_thumbnail_for_preview(&factory, &frame, max_dimension)
             }
         }
         .map(Ok)
@@ -359,6 +363,17 @@ mod platform {
             .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
     }
 
+    fn try_decoder_thumbnail_for_preview(
+        factory: &IWICImagingFactory,
+        decoder: &IWICBitmapDecoder,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { decoder.GetThumbnail() }
+            .ok()
+            .filter(|source| source_is_large_enough_for_preview(source, max_dimension))
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
     fn try_frame_thumbnail(
         factory: &IWICImagingFactory,
         frame: &IWICBitmapFrameDecode,
@@ -367,6 +382,29 @@ mod platform {
         unsafe { frame.GetThumbnail() }
             .ok()
             .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn try_frame_thumbnail_for_preview(
+        factory: &IWICImagingFactory,
+        frame: &IWICBitmapFrameDecode,
+        max_dimension: u32,
+    ) -> Option<Vec<u8>> {
+        unsafe { frame.GetThumbnail() }
+            .ok()
+            .filter(|source| source_is_large_enough_for_preview(source, max_dimension))
+            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+    }
+
+    fn source_is_large_enough_for_preview(source: &IWICBitmapSource, max_dimension: u32) -> bool {
+        bitmap_source_size(source)
+            .map(|(width, height)| {
+                width.max(height) >= preview_thumbnail_min_dimension(max_dimension)
+            })
+            .unwrap_or(false)
+    }
+
+    fn preview_thumbnail_min_dimension(max_dimension: u32) -> u32 {
+        ((max_dimension / 2).max(1)).max(512).min(max_dimension)
     }
 
     fn encode_scaled_source_as_jpeg(
