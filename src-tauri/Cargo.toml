@@ -1,6 +1,6 @@
 [package]
 name = "lightframe"
-version = "7.8.1"
+version = "7.9.0"
 description = "A fast, minimal Windows-first image viewer"
 authors = ["you"]
 edition = "2021"
