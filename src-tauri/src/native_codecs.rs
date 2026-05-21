@@ -70,9 +70,9 @@ pub fn codec_capability_for_extension(extension: &str) -> CodecCapability {
         },
         "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "raf" | "orf" | "rw2"
         | "pef" | "srw" => CodecCapability {
-            metadata: CodecBackend::Unsupported,
+            metadata: raw_native_backend(),
             metadata_fallback: None,
-            thumbnail: CodecBackend::Unsupported,
+            thumbnail: raw_native_backend(),
             detail: CodecBackend::Unsupported,
         },
         _ => CodecCapability {
@@ -101,13 +101,7 @@ pub fn should_prefer_native_thumbnail(path: &Path) -> bool {
 }
 
 pub fn should_prefer_native_preview(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some("heic" | "heif")
-    ) && codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
+    codec_capability_for_path(path).thumbnail == CodecBackend::WindowsNative
 }
 
 pub fn should_prefer_native_detail(path: &Path) -> bool {
@@ -145,6 +139,11 @@ fn native_metadata_fallback() -> Option<CodecBackend> {
     Some(CodecBackend::BrowserRenderable)
 }
 
+#[cfg(windows)]
+fn raw_native_backend() -> CodecBackend {
+    CodecBackend::WindowsNative
+}
+
 #[cfg(not(windows))]
 fn native_backend_or_browser() -> CodecBackend {
     CodecBackend::BrowserRenderable
@@ -158,6 +157,11 @@ fn native_detail_backend() -> CodecBackend {
 #[cfg(not(windows))]
 fn native_metadata_fallback() -> Option<CodecBackend> {
     None
+}
+
+#[cfg(not(windows))]
+fn raw_native_backend() -> CodecBackend {
+    CodecBackend::Unsupported
 }
 
 #[cfg(windows)]
@@ -529,8 +533,22 @@ mod tests {
         assert_eq!(capability.detail, CodecBackend::Unsupported);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn codec_capability_keeps_raw_formats_on_placeholder_paths() {
+    fn codec_capability_uses_windows_native_for_raw_previews_on_windows() {
+        for extension in ["dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "srw"] {
+            let capability = codec_capability_for_extension(extension);
+
+            assert_eq!(capability.metadata, CodecBackend::WindowsNative);
+            assert_eq!(capability.metadata_fallback, None);
+            assert_eq!(capability.thumbnail, CodecBackend::WindowsNative);
+            assert_eq!(capability.detail, CodecBackend::Unsupported);
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn codec_capability_keeps_raw_formats_on_placeholder_paths_without_windows_native() {
         for extension in ["dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "srw"] {
             let capability = codec_capability_for_extension(extension);
 
@@ -546,6 +564,8 @@ mod tests {
     fn native_preview_is_preferred_for_heif_formats_on_windows() {
         assert!(should_prefer_native_preview(Path::new("sample.heic")));
         assert!(should_prefer_native_preview(Path::new("sample.HEIF")));
+        assert!(should_prefer_native_preview(Path::new("sample.cr2")));
+        assert!(should_prefer_native_preview(Path::new("sample.DNG")));
         assert!(!should_prefer_native_preview(Path::new("sample.jpg")));
     }
 
@@ -553,6 +573,7 @@ mod tests {
     #[test]
     fn native_preview_is_not_preferred_without_windows_native_codecs() {
         assert!(!should_prefer_native_preview(Path::new("sample.heic")));
+        assert!(!should_prefer_native_preview(Path::new("sample.cr2")));
     }
 
     #[test]

@@ -26,16 +26,12 @@ LightFrame is a blazingly fast, minimal, and highly responsive image viewer buil
 - **Format fallbacks**: HEIC/HEIF thumbnail generation uses Windows native codecs when available and falls back to clear placeholders when it is not.
 - **Windows-native HEIC/HEIF previews**: When the OS codec is installed, HEIC/HEIF viewer previews are generated through Windows Imaging Component instead of the unsupported Rust decode path.
 - **Windows-native HEIC/HEIF detail**: Large HEIC/HEIF files can use WIC-backed regional tiles for actual-size and deep-zoom viewing when the OS codec is available.
-- **RAW sidecar workflow**: Common RAW files appear in review folders with placeholder previews and XMP sidecar metadata in the Info panel.
+- **RAW sidecar workflow**: Common RAW files appear in review folders with XMP sidecar metadata in the Info panel, plus Windows-native preview and thumbnail attempts when a RAW codec is available.
 - **Advanced editing queue**: Scaled and cropped copy jobs can be queued, reviewed, retried, and run as a background batch.
 
 ### Next Focus
 
 - **Release hardening**: Continue using focused performance telemetry and CI quality gates before each release.
-
-### Later Ideas
-
-- **RAW native previews**: Explore lightweight native or embedded-preview decode paths for common camera RAW formats.
 
 ## Installation
 

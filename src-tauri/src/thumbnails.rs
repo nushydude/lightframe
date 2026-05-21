@@ -212,7 +212,7 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
             metadata_supported: true,
             thumbnail_supported: true,
             support_note: Some(
-                "RAW files are shown read-only with XMP sidecar metadata and placeholder previews until native RAW decode support is available.",
+                "On Windows, RAW thumbnails and previews use native codecs when available, then fall back to XMP sidecar metadata and placeholders.",
             ),
         },
         _ => FormatSupport {
@@ -589,7 +589,9 @@ fn cached_thumbnail_formats(file_path: &Path) -> &'static [GeneratedImageFormat]
 }
 
 fn cached_preview_formats(file_path: &Path) -> &'static [GeneratedImageFormat] {
-    if normalized_extension(file_path).as_deref().is_some_and(is_raw_extension) {
+    if native_codecs::should_prefer_native_preview(file_path) {
+        &[GeneratedImageFormat::Jpeg]
+    } else if normalized_extension(file_path).as_deref().is_some_and(is_raw_extension) {
         &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg]
     } else {
         &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png]
@@ -1285,8 +1287,17 @@ mod tests {
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn cached_preview_lookup_allows_svg_fallbacks_for_raw_formats() {
+    fn cached_preview_lookup_skips_svg_fallbacks_for_native_raw_formats() {
+        let formats = cached_preview_formats(Path::new("sample.cr2"));
+
+        assert_eq!(formats, &[GeneratedImageFormat::Jpeg]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn cached_preview_lookup_allows_svg_fallbacks_for_raw_formats_without_native_codecs() {
         let formats = cached_preview_formats(Path::new("sample.cr2"));
 
         assert_eq!(
