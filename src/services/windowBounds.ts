@@ -25,9 +25,7 @@ export function hasCompleteWindowBounds(
   );
 }
 
-export function windowBoundsFromLegacySettings(
-  settings: PersistedWindowBounds
-): WindowBounds | null {
+function windowBoundsFromLegacySettings(settings: PersistedWindowBounds): WindowBounds | null {
   if (!hasCompleteWindowBounds(settings)) {
     return null;
   }
@@ -111,63 +109,121 @@ export async function persistWindowBoundsSafely({
 }: PersistWindowBoundsSafelyParams): Promise<void> {
   if (isUnmounted() || !isSettingsLoaded) return;
 
-  const { isFullscreen, isMinimized } = await readWindowFlags();
-  if (isUnmounted()) return;
-
-  if (
-    !shouldPersistWindowBounds({
-      settings,
-      isMainWindow,
-      isFullscreen,
-      isMinimized,
-    })
-  ) {
+  const canPersist = await canPersistWindowBounds({
+    isUnmounted,
+    isMainWindow,
+    settings,
+    readWindowFlags,
+  });
+  if (!canPersist) {
     return;
   }
 
-  const { position, size } = await readWindowBounds();
-  if (isUnmounted()) return;
-
-  if (size.width <= 0 || size.height <= 0) return;
-
-  const displayKey = readDisplayKey ? await readDisplayKey() : null;
-  if (isUnmounted()) return;
-
-  const nextBounds = {
-    x: position.x,
-    y: position.y,
-    width: size.width,
-    height: size.height,
-  };
-  const existingDisplayBounds = displayKey ? settings.windowBoundsByDisplay[displayKey] : undefined;
-  const displayBoundsChanged =
-    displayKey !== null && !windowBoundsEqual(existingDisplayBounds, nextBounds);
-  const nextBoundsByDisplay =
-    displayBoundsChanged && displayKey !== null
-      ? {
-          ...settings.windowBoundsByDisplay,
-          [displayKey]: nextBounds,
-        }
-      : settings.windowBoundsByDisplay;
-
-  if (
-    settings.windowX === position.x &&
-    settings.windowY === position.y &&
-    settings.windowWidth === size.width &&
-    settings.windowHeight === size.height &&
-    !displayBoundsChanged
-  ) {
+  const nextState = await readNextWindowBoundsState({
+    isUnmounted,
+    settings,
+    readWindowBounds,
+    readDisplayKey,
+  });
+  if (!nextState || shouldSkipWindowBoundsUpdate(settings, nextState)) {
     return;
   }
 
   if (isUnmounted()) return;
   await updateSettings({
-    windowX: position.x,
-    windowY: position.y,
-    windowWidth: size.width,
-    windowHeight: size.height,
-    windowBoundsByDisplay: nextBoundsByDisplay,
+    windowX: nextState.bounds.x,
+    windowY: nextState.bounds.y,
+    windowWidth: nextState.bounds.width,
+    windowHeight: nextState.bounds.height,
+    windowBoundsByDisplay: nextState.boundsByDisplay,
   });
+}
+
+async function canPersistWindowBounds({
+  isUnmounted,
+  isMainWindow,
+  settings,
+  readWindowFlags,
+}: Pick<
+  PersistWindowBoundsSafelyParams,
+  'isUnmounted' | 'isMainWindow' | 'settings' | 'readWindowFlags'
+>): Promise<boolean> {
+  const { isFullscreen, isMinimized } = await readWindowFlags();
+  if (isUnmounted()) {
+    return false;
+  }
+
+  return shouldPersistWindowBounds({
+    settings,
+    isMainWindow,
+    isFullscreen,
+    isMinimized,
+  });
+}
+
+interface NextWindowBoundsState {
+  bounds: WindowBounds;
+  boundsByDisplay: Record<string, WindowBounds>;
+}
+
+async function readNextWindowBoundsState({
+  isUnmounted,
+  settings,
+  readWindowBounds,
+  readDisplayKey,
+}: Pick<
+  PersistWindowBoundsSafelyParams,
+  'isUnmounted' | 'settings' | 'readWindowBounds' | 'readDisplayKey'
+>): Promise<NextWindowBoundsState | null> {
+  const { position, size } = await readWindowBounds();
+  if (isUnmounted() || size.width <= 0 || size.height <= 0) {
+    return null;
+  }
+
+  const displayKey = readDisplayKey ? await readDisplayKey() : null;
+  if (isUnmounted()) {
+    return null;
+  }
+
+  const bounds = {
+    x: position.x,
+    y: position.y,
+    width: size.width,
+    height: size.height,
+  };
+
+  return {
+    bounds,
+    boundsByDisplay: nextWindowBoundsByDisplay(settings.windowBoundsByDisplay, displayKey, bounds),
+  };
+}
+
+function nextWindowBoundsByDisplay(
+  currentBoundsByDisplay: Record<string, WindowBounds>,
+  displayKey: string | null,
+  nextBounds: WindowBounds
+): Record<string, WindowBounds> {
+  if (displayKey === null || windowBoundsEqual(currentBoundsByDisplay[displayKey], nextBounds)) {
+    return currentBoundsByDisplay;
+  }
+
+  return {
+    ...currentBoundsByDisplay,
+    [displayKey]: nextBounds,
+  };
+}
+
+function shouldSkipWindowBoundsUpdate(
+  settings: PersistedWindowBounds & Pick<AppSettings, 'windowBoundsByDisplay'>,
+  nextState: NextWindowBoundsState
+): boolean {
+  return (
+    settings.windowX === nextState.bounds.x &&
+    settings.windowY === nextState.bounds.y &&
+    settings.windowWidth === nextState.bounds.width &&
+    settings.windowHeight === nextState.bounds.height &&
+    settings.windowBoundsByDisplay === nextState.boundsByDisplay
+  );
 }
 
 function windowBoundsEqual(left: WindowBounds | undefined, right: WindowBounds): boolean {
