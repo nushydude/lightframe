@@ -238,5 +238,6 @@ describe('windowBoundsForDisplay', () => {
       height: 900,
     });
     expect(windowBoundsForDisplay(settings, 'secondary')).toBeNull();
+    expect(windowBoundsForDisplay(settings, null)).toBeNull();
   });
 });

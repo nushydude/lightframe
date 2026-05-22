@@ -62,7 +62,7 @@ export function windowBoundsForDisplay(
     return settings.windowBoundsByDisplay[displayKey];
   }
 
-  if (displayKey && Object.keys(settings.windowBoundsByDisplay).length > 0) {
+  if (Object.keys(settings.windowBoundsByDisplay).length > 0) {
     return null;
   }
 
