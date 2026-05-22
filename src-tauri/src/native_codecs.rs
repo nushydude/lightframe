@@ -42,6 +42,15 @@ pub struct NativeImageRegion {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeDecoderHealth {
+    pub available: bool,
+    pub decoder_names: Vec<String>,
+    pub supported_extensions: Vec<String>,
+    pub missing_extensions: Vec<String>,
+    pub error: Option<String>,
+}
+
 pub fn codec_capability_for_extension(extension: &str) -> CodecCapability {
     match extension.trim_start_matches('.').to_ascii_lowercase().as_str() {
         "jpg" | "jpeg" => CodecCapability {
@@ -124,6 +133,10 @@ pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Ve
     platform::generate_region_jpeg(path, region)
 }
 
+pub fn native_decoder_health_for_extensions(extensions: &[&str]) -> NativeDecoderHealth {
+    platform::native_decoder_health_for_extensions(extensions)
+}
+
 #[cfg(windows)]
 fn native_backend_or_browser() -> CodecBackend {
     CodecBackend::WindowsNative
@@ -166,7 +179,7 @@ fn raw_native_backend() -> CodecBackend {
 
 #[cfg(windows)]
 mod platform {
-    use super::{NativeImageMetadata, NativeImageRegion};
+    use super::{NativeDecoderHealth, NativeImageMetadata, NativeImageRegion};
     use image::{DynamicImage, RgbImage};
     use std::io::Cursor;
     use std::os::windows::ffi::OsStrExt;
@@ -177,9 +190,9 @@ mod platform {
         CLSID_WICImagingFactory, GUID_ContainerFormatBmp, GUID_ContainerFormatGif,
         GUID_ContainerFormatHeif, GUID_ContainerFormatJpeg, GUID_ContainerFormatPng,
         GUID_ContainerFormatTiff, GUID_ContainerFormatWebp, GUID_WICPixelFormat32bppBGRA,
-        IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource, IWICImagingFactory,
-        WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
-        WICDecodeMetadataCacheOnDemand, WICRect,
+        IWICBitmapDecoder, IWICBitmapDecoderInfo, IWICBitmapFrameDecode, IWICBitmapSource,
+        IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
+        WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand, WICDecoder, WICRect,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -280,6 +293,22 @@ mod platform {
         encode_bgra_as_jpeg(bgra)
     }
 
+    pub fn native_decoder_health_for_extensions(extensions: &[&str]) -> NativeDecoderHealth {
+        match native_decoder_health(extensions) {
+            Ok(health) => health,
+            Err(error) => NativeDecoderHealth {
+                available: false,
+                decoder_names: Vec::new(),
+                supported_extensions: Vec::new(),
+                missing_extensions: extensions
+                    .iter()
+                    .map(|extension| normalize_extension_label(extension))
+                    .collect(),
+                error: Some(error),
+            },
+        }
+    }
+
     fn initialize_com() -> Result<ComApartment, String> {
         let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         if result == S_OK || result == S_FALSE {
@@ -312,6 +341,113 @@ mod platform {
             )
         }
         .map_err(windows_error)
+    }
+
+    fn native_decoder_health(extensions: &[&str]) -> Result<NativeDecoderHealth, String> {
+        let normalized_extensions: Vec<String> =
+            extensions.iter().map(|extension| normalize_extension_label(extension)).collect();
+
+        let _com = initialize_com()?;
+        let factory = create_factory()?;
+        let enumerator = unsafe { factory.CreateComponentEnumerator(WICDecoder.0 as u32, 0) }
+            .map_err(windows_error)?;
+        let mut decoder_names = Vec::new();
+        let mut supported_extensions = Vec::new();
+
+        loop {
+            let mut fetched = 0_u32;
+            let mut items = [None];
+            let result = unsafe { enumerator.Next(&mut items, Some(&mut fetched)) };
+            if result == S_FALSE || fetched == 0 {
+                break;
+            }
+            if result != S_OK {
+                return Err(windows_hresult_error(result));
+            }
+
+            let Some(component) = items[0].take() else {
+                continue;
+            };
+            let Ok(decoder_info) = component.cast::<IWICBitmapDecoderInfo>() else {
+                continue;
+            };
+            let decoder_extensions = decoder_file_extensions(&decoder_info);
+            let decoder_supported_extensions: Vec<String> = normalized_extensions
+                .iter()
+                .filter(|extension| decoder_extensions.contains(extension))
+                .cloned()
+                .collect();
+            if decoder_supported_extensions.is_empty() {
+                continue;
+            }
+
+            let decoder_name = wic_string(|buffer, actual| unsafe {
+                decoder_info.GetFriendlyName(buffer, actual)
+            })
+            .unwrap_or_else(|| "Windows Imaging Component decoder".to_string());
+            if !decoder_names.contains(&decoder_name) {
+                decoder_names.push(decoder_name);
+            }
+            for extension in decoder_supported_extensions {
+                if !supported_extensions.contains(&extension) {
+                    supported_extensions.push(extension);
+                }
+            }
+        }
+
+        decoder_names.sort();
+        supported_extensions.sort();
+        let missing_extensions: Vec<String> = normalized_extensions
+            .into_iter()
+            .filter(|extension| !supported_extensions.contains(extension))
+            .collect();
+
+        Ok(NativeDecoderHealth {
+            available: !supported_extensions.is_empty() && missing_extensions.is_empty(),
+            decoder_names,
+            supported_extensions,
+            missing_extensions,
+            error: None,
+        })
+    }
+
+    fn decoder_file_extensions(decoder_info: &IWICBitmapDecoderInfo) -> Vec<String> {
+        wic_string(|buffer, actual| unsafe { decoder_info.GetFileExtensions(buffer, actual) })
+            .map(|extensions| {
+                extensions
+                    .split([',', ';', ' '])
+                    .map(normalize_extension_label)
+                    .filter(|extension| !extension.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn normalize_extension_label(extension: &str) -> String {
+        extension.trim().trim_start_matches('.').to_ascii_lowercase()
+    }
+
+    fn wic_string<F>(mut read: F) -> Option<String>
+    where
+        F: FnMut(&mut [u16], *mut u32) -> windows::core::Result<()>,
+    {
+        let mut actual = 0_u32;
+        let mut empty_buffer: [u16; 0] = [];
+        let probe_result = read(&mut empty_buffer, &mut actual);
+        if actual == 0 {
+            probe_result.ok()?;
+            return None;
+        }
+
+        let mut buffer = vec![0_u16; usize::try_from(actual).ok()?];
+        actual = 0;
+        read(&mut buffer, &mut actual).ok()?;
+        let length = usize::try_from(actual).ok()?.saturating_sub(1).min(buffer.len());
+        if length == 0 {
+            return None;
+        }
+
+        Some(String::from_utf16_lossy(&buffer[..length]))
     }
 
     fn path_to_wide(path: &Path) -> Vec<u16> {
@@ -571,7 +707,7 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use super::{NativeImageMetadata, NativeImageRegion};
+    use super::{NativeDecoderHealth, NativeImageMetadata, NativeImageRegion};
     use std::path::Path;
 
     pub fn metadata_from_path(_path: &Path) -> Result<NativeImageMetadata, String> {
@@ -591,6 +727,16 @@ mod platform {
         _region: NativeImageRegion,
     ) -> Result<Vec<u8>, String> {
         Err("Windows native codec path is unavailable on this platform".to_string())
+    }
+
+    pub fn native_decoder_health_for_extensions(_extensions: &[&str]) -> NativeDecoderHealth {
+        NativeDecoderHealth {
+            available: false,
+            decoder_names: Vec::new(),
+            supported_extensions: Vec::new(),
+            missing_extensions: Vec::new(),
+            error: Some("Windows native codec path is unavailable on this platform".to_string()),
+        }
     }
 }
 
@@ -702,6 +848,30 @@ mod tests {
         assert_eq!(capability.metadata_fallback, None);
         assert_eq!(capability.thumbnail, CodecBackend::Unsupported);
         assert_eq!(capability.detail, CodecBackend::Unsupported);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_decoder_health_finds_builtin_jpeg_decoder_on_windows() {
+        let health = native_decoder_health_for_extensions(&["jpg", "jpeg"]);
+
+        assert!(health.available);
+        assert!(health.error.is_none());
+        assert!(!health.decoder_names.is_empty());
+        assert!(health.supported_extensions.contains(&"jpg".to_string()));
+        assert!(health.supported_extensions.contains(&"jpeg".to_string()));
+        assert!(health.missing_extensions.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn native_decoder_health_reports_unavailable_without_windows_native() {
+        let health = native_decoder_health_for_extensions(&["heic"]);
+
+        assert!(!health.available);
+        assert!(health.decoder_names.is_empty());
+        assert!(health.supported_extensions.is_empty());
+        assert!(health.error.as_deref().unwrap_or_default().contains("unavailable"));
     }
 
     #[cfg(windows)]

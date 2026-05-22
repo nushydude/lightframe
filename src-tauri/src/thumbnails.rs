@@ -25,6 +25,16 @@ const MAX_TILE_SOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RAW_NATIVE_DECODE_FAILURES: usize = 4_096;
 static CACHE_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CACHE_TMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static THUMBNAIL_CACHE_HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PREVIEW_CACHE_HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static TILE_CACHE_HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NATIVE_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NATIVE_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RUST_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RUST_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PLACEHOLDER_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PLACEHOLDER_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+static TILE_GENERATED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static JPEG_TILE_SOURCE_CACHE: OnceLock<Mutex<Option<CachedJpegSource>>> = OnceLock::new();
 static RAW_NATIVE_DECODE_FAILURE_CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -78,6 +88,47 @@ pub struct GeneratedImageAsset {
     pub file_size_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedCacheBucket {
+    pub scope: String,
+    pub path: String,
+    pub file_count: usize,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedCacheSummary {
+    pub buckets: Vec<GeneratedCacheBucket>,
+    pub total_file_count: usize,
+    pub total_size_bytes: u64,
+    pub raw_native_failure_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedAssetRuntimeStats {
+    pub thumbnail_cache_hits: usize,
+    pub preview_cache_hits: usize,
+    pub tile_cache_hits: usize,
+    pub native_thumbnail_generations: usize,
+    pub native_preview_generations: usize,
+    pub rust_thumbnail_generations: usize,
+    pub rust_preview_generations: usize,
+    pub placeholder_thumbnail_generations: usize,
+    pub placeholder_preview_generations: usize,
+    pub tile_generations: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedCacheClearScope {
+    All,
+    Thumbnails,
+    Previews,
+    Tiles,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneratedImageFormat {
     Jpeg,
@@ -93,6 +144,12 @@ impl GeneratedImageFormat {
             Self::Svg => "svg",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThumbnailGenerationBackend {
+    Native,
+    Rust,
 }
 
 pub fn resolve_source_metadata(
@@ -244,22 +301,34 @@ pub fn get_or_create_thumbnail(
             cached_thumbnail_formats(file_path, &cache_hash),
             Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
         ) {
+            THUMBNAIL_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
     }
 
     match generate_best_thumbnail_jpeg(file_path) {
-        Ok(jpeg_bytes) => cache_asset_bytes(
-            cache_root,
-            cache_available,
-            &cache_hash,
-            GeneratedImageFormat::Jpeg,
-            &jpeg_bytes,
-            None,
-        ),
+        Ok((jpeg_bytes, backend)) => {
+            match backend {
+                ThumbnailGenerationBackend::Native => {
+                    NATIVE_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                }
+                ThumbnailGenerationBackend::Rust => {
+                    RUST_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            cache_asset_bytes(
+                cache_root,
+                cache_available,
+                &cache_hash,
+                GeneratedImageFormat::Jpeg,
+                &jpeg_bytes,
+                None,
+            )
+        }
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_thumbnail_svg(file_path, &error) {
                 remember_raw_native_decode_failure(file_path, &cache_hash);
+                PLACEHOLDER_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
                 return cache_asset_text(
                     cache_root,
                     cache_available,
@@ -301,6 +370,7 @@ pub fn get_or_create_preview(
             cached_preview_formats(file_path, &cache_hash),
             Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
         ) {
+            PREVIEW_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
     }
@@ -308,6 +378,7 @@ pub fn get_or_create_preview(
     if native_codecs::should_prefer_native_preview(file_path) {
         match native_codecs::generate_preview_jpeg(file_path, max_dimension) {
             Ok(jpeg_bytes) => {
+                NATIVE_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
                 return cache_asset_bytes(
                     cache_root,
                     cache_available,
@@ -336,6 +407,7 @@ pub fn get_or_create_preview(
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
                 remember_raw_native_decode_failure(file_path, &cache_hash);
+                PLACEHOLDER_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
                 return cache_asset_text(
                     cache_root,
                     cache_available,
@@ -375,6 +447,7 @@ pub fn get_or_create_preview(
         GeneratedImageFormat::Jpeg
     };
 
+    RUST_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
     cache_asset_bytes(
         cache_root,
         cache_available,
@@ -439,6 +512,7 @@ pub fn get_or_create_tile(
         if let Some(asset) =
             cached_asset_from_disk(cache_root, &cache_hash, &[GeneratedImageFormat::Jpeg], None)
         {
+            TILE_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
     }
@@ -458,6 +532,7 @@ pub fn get_or_create_tile(
         generate_jpeg_tile(source.as_ref().as_slice(), bounds)?
     };
 
+    TILE_GENERATED_COUNT.fetch_add(1, Ordering::Relaxed);
     cache_asset_bytes(
         cache_root,
         cache_available,
@@ -507,10 +582,12 @@ fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageErro
     Ok(buffer.into_inner())
 }
 
-fn generate_best_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
+fn generate_best_thumbnail_jpeg(
+    file_path: &Path,
+) -> Result<(Vec<u8>, ThumbnailGenerationBackend), image::ImageError> {
     if native_codecs::should_prefer_native_thumbnail(file_path) {
         match native_codecs::generate_thumbnail_jpeg(file_path, THUMBNAIL_SIZE) {
-            Ok(bytes) => return Ok(bytes),
+            Ok(bytes) => return Ok((bytes, ThumbnailGenerationBackend::Native)),
             Err(error) => {
                 eprintln!(
                     "Windows native thumbnail decode failed for '{}': {}. Falling back to Rust thumbnail path.",
@@ -521,7 +598,7 @@ fn generate_best_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::Imag
         }
     }
 
-    generate_thumbnail_jpeg(file_path)
+    generate_thumbnail_jpeg(file_path).map(|bytes| (bytes, ThumbnailGenerationBackend::Rust))
 }
 
 fn get_cached_jpeg_tile_source(
@@ -638,6 +715,25 @@ fn raw_native_decode_failure_is_known(cache_hash: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub fn raw_native_decode_failure_count() -> usize {
+    RAW_NATIVE_DECODE_FAILURE_CACHE
+        .get()
+        .and_then(|cache| cache.lock().ok().map(|guard| guard.len()))
+        .unwrap_or(0)
+}
+
+pub fn clear_raw_native_decode_failure_cache() -> usize {
+    let Some(cache) = RAW_NATIVE_DECODE_FAILURE_CACHE.get() else {
+        return 0;
+    };
+    let Ok(mut guard) = cache.lock() else {
+        return 0;
+    };
+    let count = guard.len();
+    guard.clear();
+    count
+}
+
 fn is_raw_native_preferred(file_path: &Path) -> bool {
     normalized_extension(file_path).as_deref().is_some_and(is_raw_extension)
         && (native_codecs::should_prefer_native_thumbnail(file_path)
@@ -645,12 +741,8 @@ fn is_raw_native_preferred(file_path: &Path) -> bool {
 }
 
 #[cfg(test)]
-fn clear_raw_native_decode_failure_cache() {
-    if let Some(cache) = RAW_NATIVE_DECODE_FAILURE_CACHE.get() {
-        if let Ok(mut guard) = cache.lock() {
-            guard.clear();
-        }
-    }
+fn reset_raw_native_decode_failure_cache_for_test() {
+    clear_raw_native_decode_failure_cache();
 }
 
 fn known_fallback_thumbnail_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
@@ -912,6 +1004,51 @@ fn cache_asset_text(
     )
 }
 
+pub fn generated_asset_runtime_stats() -> GeneratedAssetRuntimeStats {
+    GeneratedAssetRuntimeStats {
+        thumbnail_cache_hits: THUMBNAIL_CACHE_HIT_COUNT.load(Ordering::Relaxed),
+        preview_cache_hits: PREVIEW_CACHE_HIT_COUNT.load(Ordering::Relaxed),
+        tile_cache_hits: TILE_CACHE_HIT_COUNT.load(Ordering::Relaxed),
+        native_thumbnail_generations: NATIVE_THUMBNAIL_COUNT.load(Ordering::Relaxed),
+        native_preview_generations: NATIVE_PREVIEW_COUNT.load(Ordering::Relaxed),
+        rust_thumbnail_generations: RUST_THUMBNAIL_COUNT.load(Ordering::Relaxed),
+        rust_preview_generations: RUST_PREVIEW_COUNT.load(Ordering::Relaxed),
+        placeholder_thumbnail_generations: PLACEHOLDER_THUMBNAIL_COUNT.load(Ordering::Relaxed),
+        placeholder_preview_generations: PLACEHOLDER_PREVIEW_COUNT.load(Ordering::Relaxed),
+        tile_generations: TILE_GENERATED_COUNT.load(Ordering::Relaxed),
+    }
+}
+
+pub fn generated_cache_summary(app_cache_dir: &Path) -> GeneratedCacheSummary {
+    let buckets: Vec<GeneratedCacheBucket> = generated_cache_scope_roots(app_cache_dir)
+        .into_iter()
+        .map(|(scope, path)| generated_cache_bucket(scope, &path))
+        .collect();
+    let total_file_count = buckets.iter().map(|bucket| bucket.file_count).sum();
+    let total_size_bytes = buckets.iter().map(|bucket| bucket.size_bytes).sum();
+
+    GeneratedCacheSummary {
+        buckets,
+        total_file_count,
+        total_size_bytes,
+        raw_native_failure_count: raw_native_decode_failure_count(),
+    }
+}
+
+pub fn clear_generated_cache(
+    app_cache_dir: &Path,
+    scope: GeneratedCacheClearScope,
+) -> Result<GeneratedCacheSummary, String> {
+    for (_, cache_root) in generated_cache_scope_roots(app_cache_dir)
+        .into_iter()
+        .filter(|(candidate, _)| cache_scope_matches(scope, *candidate))
+    {
+        clear_generated_cache_root(&cache_root)?;
+    }
+
+    Ok(generated_cache_summary(app_cache_dir))
+}
+
 fn write_cache_file(cache_file: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     let Some(parent) = cache_file.parent() else {
         return fs::write(cache_file, bytes);
@@ -932,6 +1069,109 @@ fn write_cache_file(cache_file: &Path, bytes: &[u8]) -> Result<(), std::io::Erro
     })?;
 
     Ok(())
+}
+
+fn generated_cache_scope_roots(app_cache_dir: &Path) -> Vec<(GeneratedCacheClearScope, PathBuf)> {
+    vec![
+        (GeneratedCacheClearScope::Thumbnails, app_cache_dir.join("thumbnails")),
+        (GeneratedCacheClearScope::Previews, app_cache_dir.join("previews")),
+        (GeneratedCacheClearScope::Tiles, app_cache_dir.join("tiles")),
+    ]
+}
+
+fn cache_scope_matches(
+    selected: GeneratedCacheClearScope,
+    candidate: GeneratedCacheClearScope,
+) -> bool {
+    selected == GeneratedCacheClearScope::All || selected == candidate
+}
+
+fn generated_cache_bucket(
+    scope: GeneratedCacheClearScope,
+    cache_root: &Path,
+) -> GeneratedCacheBucket {
+    let (file_count, size_bytes) = generated_cache_entries(cache_root)
+        .map(|entries| {
+            entries.into_iter().fold((0_usize, 0_u64), |(count, bytes), (_, size)| {
+                (count + 1, bytes.saturating_add(size))
+            })
+        })
+        .unwrap_or((0, 0));
+
+    GeneratedCacheBucket {
+        scope: generated_cache_scope_label(scope).to_string(),
+        path: cache_root.to_string_lossy().to_string(),
+        file_count,
+        size_bytes,
+    }
+}
+
+fn clear_generated_cache_root(cache_root: &Path) -> Result<(), String> {
+    for (path, _) in generated_cache_entries(cache_root)? {
+        fs::remove_file(&path)
+            .map_err(|error| format!("Failed to remove '{}': {}", path.display(), error))?;
+    }
+
+    Ok(())
+}
+
+fn generated_cache_entries(cache_root: &Path) -> Result<Vec<(PathBuf, u64)>, String> {
+    if !cache_root.exists() {
+        return Ok(Vec::new());
+    }
+    if is_redirected_cache_root(cache_root) {
+        return Err(format!(
+            "Refusing to inspect redirected generated cache root '{}'",
+            cache_root.display()
+        ));
+    }
+
+    let root = fs::canonicalize(cache_root)
+        .map_err(|error| format!("Failed to resolve '{}': {}", cache_root.display(), error))?;
+    let read_dir = fs::read_dir(&root)
+        .map_err(|error| format!("Failed to read '{}': {}", root.display(), error))?;
+    let mut entries = Vec::new();
+
+    for entry in read_dir.flatten() {
+        let file_name = entry.file_name();
+        if !is_generated_cache_filename(&file_name.to_string_lossy()) {
+            continue;
+        }
+
+        let entry_path = entry.path();
+        let entry_metadata = match fs::symlink_metadata(&entry_path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if entry_metadata.file_type().is_symlink() || !entry_metadata.file_type().is_file() {
+            continue;
+        }
+
+        let canonical = match fs::canonicalize(&entry_path) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        if !canonical.starts_with(&root) {
+            continue;
+        }
+
+        let size = match fs::metadata(&canonical) {
+            Ok(metadata) => metadata.len(),
+            Err(_) => continue,
+        };
+        entries.push((canonical, size));
+    }
+
+    Ok(entries)
+}
+
+fn generated_cache_scope_label(scope: GeneratedCacheClearScope) -> &'static str {
+    match scope {
+        GeneratedCacheClearScope::All => "all",
+        GeneratedCacheClearScope::Thumbnails => "thumbnails",
+        GeneratedCacheClearScope::Previews => "previews",
+        GeneratedCacheClearScope::Tiles => "tiles",
+    }
 }
 
 fn cleanup_cache_best_effort(cache_root: &Path) {
@@ -1345,7 +1585,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cached_preview_lookup_skips_svg_fallbacks_for_native_raw_formats() {
-        clear_raw_native_decode_failure_cache();
+        reset_raw_native_decode_failure_cache_for_test();
         let formats = cached_preview_formats(Path::new("sample.cr2"), "cache-key");
 
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg]);
@@ -1354,7 +1594,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cached_raw_fallbacks_are_reused_after_native_failure() {
-        clear_raw_native_decode_failure_cache();
+        reset_raw_native_decode_failure_cache_for_test();
 
         let path = Path::new("sample.cr2");
         remember_raw_native_decode_failure(path, "failed-cache-key");
@@ -1425,6 +1665,31 @@ mod tests {
             .count();
         assert!(remaining_hashed <= MAX_CACHE_ENTRIES);
         assert!(cache_dir.join("family-photo.jpg").exists());
+    }
+
+    #[test]
+    fn generated_cache_summary_counts_and_clears_scoped_cache_files() {
+        let dir = tempdir().unwrap();
+        let cache_root = dir.path();
+        let thumbnails_dir = cache_root.join("thumbnails");
+        let previews_dir = cache_root.join("previews");
+        fs::create_dir_all(&thumbnails_dir).unwrap();
+        fs::create_dir_all(&previews_dir).unwrap();
+
+        fs::write(thumbnails_dir.join(cache_file_name_for_index(1, "jpg")), b"thumb").unwrap();
+        fs::write(previews_dir.join(cache_file_name_for_index(2, "png")), b"preview").unwrap();
+        fs::write(previews_dir.join("family-photo.jpg"), b"do-not-delete").unwrap();
+
+        let summary = generated_cache_summary(cache_root);
+        assert_eq!(summary.total_file_count, 2);
+        assert_eq!(summary.total_size_bytes, 12);
+
+        let summary =
+            clear_generated_cache(cache_root, GeneratedCacheClearScope::Previews).unwrap();
+        assert_eq!(summary.total_file_count, 1);
+        assert!(thumbnails_dir.join(cache_file_name_for_index(1, "jpg")).exists());
+        assert!(!previews_dir.join(cache_file_name_for_index(2, "png")).exists());
+        assert!(previews_dir.join("family-photo.jpg").exists());
     }
 
     #[test]
