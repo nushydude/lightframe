@@ -14,6 +14,69 @@ import {
 } from '../services/tauriCommands';
 import { PERFORMANCE_MODE_LABELS } from '../services/performanceMode';
 
+interface RecentFoldersSettingsProps {
+  settings: AppSettings;
+  updateSettings: (settings: Partial<AppSettings>) => Promise<void>;
+}
+
+function normalizedFolderKey(folderPath: string): string {
+  return folderPath.replace(/\\/g, '/').toLowerCase();
+}
+
+function RecentFoldersSettings({ settings, updateSettings }: RecentFoldersSettingsProps) {
+  const handleRemoveRecentFolder = async (folderPath: string) => {
+    const normalizedPath = normalizedFolderKey(folderPath);
+    await updateSettings({
+      recentFolders: settings.recentFolders.filter(
+        (folder) => normalizedFolderKey(folder.path) !== normalizedPath
+      ),
+    });
+  };
+
+  const handleClearRecentFolders = async () => {
+    await updateSettings({ recentFolders: [] });
+  };
+
+  return (
+    <div className="settings-group">
+      <div className="settings-group-title">Recent Folders</div>
+      {settings.recentFolders.length === 0 ? (
+        <p className="setting-help">Opened folders will appear here for quick access.</p>
+      ) : (
+        <>
+          <div className="setting-row setting-row-stack">
+            <span className="setting-label">Folder history</span>
+            <button
+              className="setting-button-secondary"
+              onClick={() => void handleClearRecentFolders()}
+            >
+              Clear all
+            </button>
+          </div>
+          <div className="quick-destination-list">
+            {settings.recentFolders.map((folder) => (
+              <div className="quick-destination-item" key={folder.path}>
+                <div className="quick-destination-meta">
+                  <div className="quick-destination-label">{folder.label}</div>
+                  <div className="quick-destination-path" title={folder.path}>
+                    {folder.path}
+                  </div>
+                </div>
+                <button
+                  className="setting-button-secondary"
+                  onClick={() => void handleRemoveRecentFolder(folder.path)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Settings panel overlay */
 export function SettingsPanel() {
   const { settings, updateSettings } = useSettingsStore();
@@ -329,6 +392,8 @@ export function SettingsPanel() {
               </label>
             </div>
           </div>
+
+          <RecentFoldersSettings settings={settings} updateSettings={updateSettings} />
 
           <div className="settings-group">
             <div className="settings-group-title">Quick Destinations</div>

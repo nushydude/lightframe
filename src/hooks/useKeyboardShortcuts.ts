@@ -18,7 +18,7 @@ interface KeyboardHandlers {
   goLast: () => void;
   refreshFolder: () => void;
   startSlideshow: () => void;
-  stopSlideshow: () => void;
+  stopSlideshow: () => void | Promise<void>;
   toggleSlideshowPause: () => void;
   openCommandPalette: () => void;
   toggleGridView: () => void;
@@ -209,7 +209,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         if (showSettings) {
           setShowSettings(false);
         } else if (isSlideshowActive) {
-          handlers.stopSlideshow();
+          await handlers.stopSlideshow();
         } else if (zoomMode !== 'fit') {
           setZoomMode('fit');
         } else if (isFullscreen) {

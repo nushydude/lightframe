@@ -36,12 +36,13 @@ import { ToolbarIcon } from './ToolbarIcon';
 interface ViewerChromeProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
+  onOpenRecentFolder: (folderPath: string) => void | Promise<void>;
   onRefreshFolder: () => void;
   onGoHome: () => void;
   onFirst: () => void;
   onNext: () => void;
   onPrev: () => void;
-  onStartSlideshow: () => void;
+  onStartSlideshow: () => void | Promise<void>;
   onTogglePause: () => void;
 }
 
@@ -55,6 +56,7 @@ type SecondaryToolbarActionId =
   | 'move-to'
   | 'projector'
   | 'refresh'
+  | 'recent-folders'
   | 'reveal'
   | 'settings';
 
@@ -368,6 +370,7 @@ function buildScaledDefaultPath(currentImagePath: string, width: number, height:
 export function ViewerChrome({
   onOpenFile,
   onOpenFolder,
+  onOpenRecentFolder,
   onRefreshFolder,
   onGoHome,
   onFirst,
@@ -428,6 +431,7 @@ export function ViewerChrome({
   const editQueueFailedCount = useEditQueueStore((state) => state.summary.failedCount);
   const editQueueIsRunning = useEditQueueStore((state) => state.isRunning);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
+  const recentFolders = useSettingsStore((state) => state.settings.recentFolders);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
@@ -567,6 +571,12 @@ export function ViewerChrome({
   const handleRefresh = () => {
     onRefreshFolder();
     recordToolbarActionUsage('refresh');
+    closeOverflowMenus();
+  };
+
+  const handleOpenRecentFolder = async (folderPath: string) => {
+    await onOpenRecentFolder(folderPath);
+    recordToolbarActionUsage('recent-folders');
     closeOverflowMenus();
   };
 
@@ -973,16 +983,17 @@ export function ViewerChrome({
 
   const secondaryActionSortOrder: Record<SecondaryToolbarActionId, number> = {
     refresh: 0,
-    reveal: 1,
-    copy: 2,
-    'copy-to': 3,
-    'move-to': 4,
-    edit: 5,
-    delete: 6,
-    projector: 7,
-    info: 8,
-    settings: 9,
-    crop: 10,
+    'recent-folders': 1,
+    reveal: 2,
+    copy: 3,
+    'copy-to': 4,
+    'move-to': 5,
+    edit: 6,
+    delete: 7,
+    projector: 8,
+    info: 9,
+    settings: 10,
+    crop: 11,
   };
 
   const secondaryActions = [
@@ -998,6 +1009,33 @@ export function ViewerChrome({
         >
           Refresh
         </button>
+      ),
+    },
+    {
+      id: 'recent-folders' as const,
+      node: (
+        <details className="top-bar-submenu">
+          <summary className="top-bar-menu-item" aria-label="Open recent folder">
+            Recent Folders
+          </summary>
+          <div className="top-bar-submenu-panel">
+            {recentFolders.length === 0 ? (
+              <span className="top-bar-menu-empty">No recent folders yet.</span>
+            ) : (
+              recentFolders.map((folder) => (
+                <button
+                  key={folder.path}
+                  className="top-bar-menu-item top-bar-menu-item--truncate"
+                  onClick={() => void handleOpenRecentFolder(folder.path)}
+                  title={folder.path}
+                  type="button"
+                >
+                  {folder.label}
+                </button>
+              ))
+            )}
+          </div>
+        </details>
       ),
     },
     {
@@ -1460,6 +1498,17 @@ export function ViewerChrome({
           <ToolbarIcon name="previous" />
         </button>
 
+        <button
+          className="control-btn has-tooltip"
+          onClick={onNext}
+          data-tooltip="Next (Right Arrow)"
+          title="Next (Right Arrow)"
+          aria-label="Next image"
+          id="btn-ctrl-next"
+        >
+          <ToolbarIcon name="next" />
+        </button>
+
         {!isSlideshowActive ? (
           <button
             className="control-btn has-tooltip"
@@ -1484,17 +1533,6 @@ export function ViewerChrome({
           </button>
         )}
 
-        <button
-          className="control-btn has-tooltip"
-          onClick={onNext}
-          data-tooltip="Next (Right Arrow)"
-          title="Next (→)"
-          aria-label="Next image"
-          id="btn-ctrl-next"
-        >
-          <ToolbarIcon name="next" />
-        </button>
-
         <div className="control-divider" />
 
         <button
@@ -1508,7 +1546,16 @@ export function ViewerChrome({
           <ToolbarIcon name="zoomOut" />
         </button>
 
-        <span className="zoom-display">{getZoomDisplay()}</span>
+        <button
+          className="zoom-display zoom-display--button has-tooltip"
+          onClick={resetZoom}
+          data-tooltip="Recenter and fit"
+          title="Recenter and fit"
+          aria-label="Reset zoom to fit"
+          type="button"
+        >
+          {getZoomDisplay()}
+        </button>
 
         <button
           className="control-btn has-tooltip"
@@ -1758,94 +1805,108 @@ export function ViewerChrome({
         {(isCropMode || pendingCropPreview) && (
           <>
             <div className="control-divider" />
-            <select
-              className="crop-aspect-select"
-              aria-label="Crop aspect ratio"
-              value={cropAspectRatio}
-              onChange={(event) =>
-                setCropAspectRatio(event.target.value as 'free' | '1:1' | '4:3' | '3:2' | '16:9')
-              }
-              disabled={!isCropMode}
-            >
-              <option value="free">Free</option>
-              <option value="1:1">1:1</option>
-              <option value="4:3">4:3</option>
-              <option value="3:2">3:2</option>
-              <option value="16:9">16:9</option>
-            </select>
-            <button
-              className="control-btn has-tooltip"
-              onClick={resetCrop}
-              data-tooltip="Reset crop"
-              title="Reset crop"
-              aria-label="Reset crop"
-              id="btn-crop-reset"
-            >
-              Reset
-            </button>
-            {isCropMode ? (
-              <button
-                className="control-btn active has-tooltip"
-                onClick={applyCropPreview}
-                data-tooltip="Preview crop (Enter)"
-                title="Preview crop (Enter)"
-                aria-label="Preview crop"
-                id="btn-crop-preview"
-                disabled={!canPreviewCrop}
+            <details className="crop-actions-menu">
+              <summary
+                className={`control-btn control-btn--text has-tooltip ${isCropMode ? 'active' : ''}`}
+                data-tooltip="Crop actions"
+                title="Crop actions"
+                aria-label="Crop actions"
+                id="btn-crop-actions"
               >
-                Preview
-              </button>
-            ) : (
-              <button
-                className="control-btn has-tooltip"
-                onClick={clearCropPreview}
-                data-tooltip="Clear crop preview"
-                title="Clear crop preview"
-                aria-label="Clear crop preview"
-                id="btn-crop-clear-preview"
-              >
-                Clear
-              </button>
-            )}
-            {isCropMode && (
-              <button
-                className="control-btn control-btn--text active has-tooltip"
-                onClick={() => void handleQueueCroppedCopy()}
-                data-tooltip="Queue cropped copy"
-                title="Queue cropped copy"
-                aria-label="Queue cropped copy"
-                id="btn-crop-queue-copy"
-                disabled={!cropRect}
-              >
-                Queue Copy
-              </button>
-            )}
-            {isCropMode && (
-              <button
-                className="control-btn active has-tooltip"
-                onClick={() => void handleSaveCroppedCopy()}
-                data-tooltip="Save cropped copy"
-                title="Save cropped copy"
-                aria-label="Save cropped copy"
-                id="btn-crop-save-copy"
-                disabled={!cropRect}
-              >
-                Save Copy
-              </button>
-            )}
-            {isCropMode && (
-              <button
-                className="control-btn has-tooltip"
-                onClick={() => void handleOverwriteCrop()}
-                data-tooltip="Overwrite original with crop"
-                title="Overwrite original with crop"
-                aria-label="Overwrite original with crop"
-                id="btn-crop-overwrite"
-                disabled={!cropRect}
-              >
-                Overwrite
-              </button>
-            )}
+                Crop
+              </summary>
+              <div className="crop-actions-panel">
+                <label className="crop-actions-field">
+                  <span>Aspect</span>
+                  <select
+                    className="crop-aspect-select"
+                    aria-label="Crop aspect ratio"
+                    value={cropAspectRatio}
+                    onChange={(event) =>
+                      setCropAspectRatio(
+                        event.target.value as 'free' | '1:1' | '4:3' | '3:2' | '16:9'
+                      )
+                    }
+                    disabled={!isCropMode}
+                  >
+                    <option value="free">Free</option>
+                    <option value="1:1">1:1</option>
+                    <option value="4:3">4:3</option>
+                    <option value="3:2">3:2</option>
+                    <option value="16:9">16:9</option>
+                  </select>
+                </label>
+                <div className="crop-actions-grid">
+                  <button
+                    className="setting-button-secondary"
+                    onClick={resetCrop}
+                    aria-label="Reset crop"
+                    id="btn-crop-reset"
+                    type="button"
+                  >
+                    Reset
+                  </button>
+                  {isCropMode ? (
+                    <button
+                      className="setting-button-primary"
+                      onClick={applyCropPreview}
+                      aria-label="Preview crop"
+                      id="btn-crop-preview"
+                      disabled={!canPreviewCrop}
+                      type="button"
+                    >
+                      Preview
+                    </button>
+                  ) : (
+                    <button
+                      className="setting-button-secondary"
+                      onClick={clearCropPreview}
+                      aria-label="Clear crop preview"
+                      id="btn-crop-clear-preview"
+                      type="button"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  {isCropMode && (
+                    <button
+                      className="setting-button-secondary"
+                      onClick={() => void handleQueueCroppedCopy()}
+                      aria-label="Queue cropped copy"
+                      id="btn-crop-queue-copy"
+                      disabled={!cropRect}
+                      type="button"
+                    >
+                      Queue
+                    </button>
+                  )}
+                  {isCropMode && (
+                    <button
+                      className="setting-button-primary"
+                      onClick={() => void handleSaveCroppedCopy()}
+                      aria-label="Save cropped copy"
+                      id="btn-crop-save-copy"
+                      disabled={!cropRect}
+                      type="button"
+                    >
+                      Save
+                    </button>
+                  )}
+                  {isCropMode && (
+                    <button
+                      className="setting-button-secondary crop-actions-danger"
+                      onClick={() => void handleOverwriteCrop()}
+                      aria-label="Overwrite original with crop"
+                      id="btn-crop-overwrite"
+                      disabled={!cropRect}
+                      type="button"
+                    >
+                      Overwrite
+                    </button>
+                  )}
+                </div>
+              </div>
+            </details>
           </>
         )}
 

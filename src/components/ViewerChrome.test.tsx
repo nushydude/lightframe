@@ -4,6 +4,7 @@ import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
 import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { DEFAULT_SETTINGS } from '../types/settings';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, message, save } from '@tauri-apps/plugin-dialog';
@@ -25,6 +26,7 @@ describe('ViewerChrome', () => {
   const defaultProps = {
     onOpenFile: vi.fn(),
     onOpenFolder: vi.fn(),
+    onOpenRecentFolder: vi.fn(),
     onRefreshFolder: vi.fn(),
     onGoHome: vi.fn(),
     onFirst: vi.fn(),
@@ -41,7 +43,7 @@ describe('ViewerChrome', () => {
     useSettingsStore.setState((state) => ({
       ...state,
       settings: {
-        ...state.settings,
+        ...DEFAULT_SETTINGS,
         promptProjectorGridOnOpen: true,
         openProjectorInGridView: false,
       },
@@ -177,6 +179,59 @@ describe('ViewerChrome', () => {
     expect(defaultProps.onFirst).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps next image beside previous before the slideshow control', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo1.jpg',
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const toolbarIds = Array.from(container.querySelectorAll('.bottom-controls button')).map(
+      (button) => button.id
+    );
+
+    expect(toolbarIds.indexOf('btn-ctrl-prev')).toBeLessThan(toolbarIds.indexOf('btn-ctrl-next'));
+    expect(toolbarIds.indexOf('btn-ctrl-next')).toBeLessThan(
+      toolbarIds.indexOf('btn-start-slideshow')
+    );
+  });
+
+  it('resets zoom to fit when clicking the zoom display text', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo.jpg',
+      zoomMode: 'custom',
+      zoomLevel: 1.75,
+      panX: 24,
+      panY: -12,
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Reset zoom to fit'));
+
+    expect(useViewerStore.getState()).toMatchObject({
+      zoomMode: 'fit',
+      zoomLevel: 1,
+      panX: 0,
+      panY: 0,
+    });
+  });
+
   it('should call onGoHome when the home button is clicked', () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg' });
 
@@ -198,6 +253,25 @@ describe('ViewerChrome', () => {
 
     fireEvent.click(refreshButton);
     expect(defaultProps.onRefreshFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens recent folders from the overflow menu', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        recentFolders: [{ path: 'D:/Shoots/May', label: 'May', openedAt: 100 }],
+      },
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByLabelText('Open recent folder'));
+    fireEvent.click(screen.getByText('May'));
+
+    expect(defaultProps.onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May');
   });
 
   it('stores overflow action usage so the menu can learn over time', async () => {

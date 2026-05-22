@@ -14,6 +14,14 @@ const mockWindow = {
 };
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: vi.fn(() => mockWindow),
+  currentMonitor: vi.fn(() =>
+    Promise.resolve({
+      name: 'Mock Display',
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+      scaleFactor: 1,
+    })
+  ),
 }));
 
 // Mock Tauri Event APIs

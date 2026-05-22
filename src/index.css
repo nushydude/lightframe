@@ -271,6 +271,12 @@ body,
   background: var(--bg-tertiary);
 }
 
+.top-bar-menu-item--truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .header-menu-empty,
 .top-bar-menu-empty {
   color: var(--text-secondary);
@@ -1342,17 +1348,20 @@ body,
   padding: 0 10px;
 }
 
-.quality-menu {
+.quality-menu,
+.crop-actions-menu {
   position: relative;
   flex: 0 0 auto;
 }
 
 .quality-menu > summary,
+.crop-actions-menu > summary,
 .bottom-controls-menu > summary {
   list-style: none;
 }
 
 .quality-menu > summary::-webkit-details-marker,
+.crop-actions-menu > summary::-webkit-details-marker,
 .bottom-controls-menu > summary::-webkit-details-marker {
   display: none;
 }
@@ -1479,6 +1488,48 @@ body,
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.crop-actions-panel {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(280px, calc(100vw - 32px));
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.crop-actions-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.crop-actions-field .crop-aspect-select {
+  width: 100%;
+}
+
+.crop-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.crop-actions-grid > .crop-actions-danger {
+  grid-column: 1 / -1;
+}
+
+.crop-actions-grid button {
+  justify-content: center;
 }
 
 .edit-queue-menu {
@@ -1671,6 +1722,25 @@ body,
   padding: 0 4px;
 }
 
+.zoom-display--button {
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-family);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.zoom-display--button:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 @media (max-width: 1120px) {
   .rating-controls--inline,
   .control-divider--rating {
@@ -1796,6 +1866,46 @@ body,
   display: flex;
   gap: 12px;
   margin-top: 8px;
+}
+
+.empty-state-recent {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 10px;
+}
+
+.empty-state-recent-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.empty-state-recent-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.empty-state-recent-item {
+  max-width: 180px;
+  padding: 7px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.empty-state-recent-item:hover {
+  background: var(--bg-tertiary);
 }
 
 .btn-primary {

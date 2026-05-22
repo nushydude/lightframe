@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import { useSlideshow } from './useSlideshow';
@@ -31,6 +32,7 @@ const images = [
 describe('useSlideshow', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.clearAllMocks();
     useViewerStore.getState().reset();
     useViewerStore.setState({
       currentImagePath: images[0].path,
@@ -92,5 +94,21 @@ describe('useSlideshow', () => {
 
     expect(useViewerStore.getState().viewMode).toBe('grid');
     expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+  });
+
+  it('returns to window mode when stopping a fullscreen slideshow', async () => {
+    useViewerStore.setState({ isFullscreen: true, isSlideshowActive: true });
+    const mockWindow = getCurrentWindow();
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    expect(mockWindow.setFullscreen).toHaveBeenCalledWith(false);
+    expect(useViewerStore.getState()).toMatchObject({
+      isSlideshowActive: false,
+      isFullscreen: false,
+    });
   });
 });

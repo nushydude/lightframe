@@ -1,9 +1,14 @@
+import { useSettingsStore } from '../state/settingsStore';
+
 interface EmptyStateProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
+  onOpenRecentFolder: (folderPath: string) => void | Promise<void>;
 }
 
-export function EmptyState({ onOpenFile, onOpenFolder }: EmptyStateProps) {
+export function EmptyState({ onOpenFile, onOpenFolder, onOpenRecentFolder }: EmptyStateProps) {
+  const recentFolders = useSettingsStore((state) => state.settings.recentFolders);
+
   return (
     <div className="empty-state">
       <div className="empty-state-icon">🖼</div>
@@ -33,6 +38,24 @@ export function EmptyState({ onOpenFile, onOpenFolder }: EmptyStateProps) {
           Open Folder
         </button>
       </div>
+      {recentFolders.length > 0 && (
+        <div className="empty-state-recent" aria-label="Recent folders">
+          <div className="empty-state-recent-title">Recent Folders</div>
+          <div className="empty-state-recent-list">
+            {recentFolders.slice(0, 5).map((folder) => (
+              <button
+                className="empty-state-recent-item"
+                key={folder.path}
+                onClick={() => void onOpenRecentFolder(folder.path)}
+                title={folder.path}
+                type="button"
+              >
+                {folder.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="shortcut-hints">
         <div className="shortcut-hint">
           <span className="shortcut-key">Ctrl+O</span>
