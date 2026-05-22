@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, settingsFromRust, settingsToRust, type AppSettings } from './settings';
+import {
+  DEFAULT_SETTINGS,
+  rememberRecentFolder,
+  settingsFromRust,
+  settingsToRust,
+  type AppSettings,
+} from './settings';
 
 describe('settingsToRust', () => {
   it('maps optional window bounds fields', () => {
@@ -10,6 +16,9 @@ describe('settingsToRust', () => {
       windowY: 240,
       windowWidth: 1440,
       windowHeight: 900,
+      windowBoundsByDisplay: {
+        'display:0:0:3440x1440@1': { x: 40, y: 50, width: 1800, height: 1000 },
+      },
     };
 
     expect(settingsToRust(settings)).toMatchObject({
@@ -18,6 +27,9 @@ describe('settingsToRust', () => {
       window_y: 240,
       window_width: 1440,
       window_height: 900,
+      window_bounds_by_display: {
+        'display:0:0:3440x1440@1': { x: 40, y: 50, width: 1800, height: 1000 },
+      },
     });
   });
 
@@ -41,6 +53,17 @@ describe('settingsToRust', () => {
 
     expect(rust).toMatchObject({
       quick_destinations: [{ id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' }],
+    });
+  });
+
+  it('maps recent folders to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      recentFolders: [{ path: 'D:/Images', label: 'Images', openedAt: 123 }],
+    });
+
+    expect(rust).toMatchObject({
+      recent_folders: [{ path: 'D:/Images', label: 'Images', opened_at: 123 }],
     });
   });
 
@@ -101,6 +124,9 @@ describe('settingsFromRust', () => {
       window_y: 180,
       window_width: 1280,
       window_height: 720,
+      window_bounds_by_display: {
+        'display:0:0:2560x1440@1': { x: 10, y: 20, width: 1600, height: 900 },
+      },
     });
 
     expect(settings.rememberWindowBounds).toBe(true);
@@ -108,6 +134,9 @@ describe('settingsFromRust', () => {
     expect(settings.windowY).toBe(180);
     expect(settings.windowWidth).toBe(1280);
     expect(settings.windowHeight).toBe(720);
+    expect(settings.windowBoundsByDisplay).toEqual({
+      'display:0:0:2560x1440@1': { x: 10, y: 20, width: 1600, height: 900 },
+    });
   });
 
   it('parses legacy settings without bounds fields', () => {
@@ -135,6 +164,17 @@ describe('settingsFromRust', () => {
     expect(settings.quickDestinations).toEqual([
       { id: 'fav', label: 'Favorites', path: 'D:/Images/Favorites' },
     ]);
+  });
+
+  it('parses recent folders from rust payloads and filters invalid entries', () => {
+    const settings = settingsFromRust({
+      recent_folders: [
+        { path: 'D:/Images', label: 'Images', opened_at: 200 },
+        { path: '', label: 'Broken', opened_at: 100 },
+      ],
+    });
+
+    expect(settings.recentFolders).toEqual([{ path: 'D:/Images', label: 'Images', openedAt: 200 }]);
   });
 
   it('parses external editor settings from rust payloads', () => {
@@ -174,5 +214,18 @@ describe('settingsFromRust', () => {
   it('parses auto-refresh folder preference with a default enabled fallback', () => {
     expect(settingsFromRust({ auto_refresh_folder: false }).autoRefreshFolder).toBe(false);
     expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
+  });
+});
+
+describe('rememberRecentFolder', () => {
+  it('adds recent folders newest first and dedupes case-insensitively', () => {
+    const first = rememberRecentFolder(DEFAULT_SETTINGS, 'D:/Images/Trips', 100);
+    const second = rememberRecentFolder(
+      { ...DEFAULT_SETTINGS, recentFolders: first },
+      'd:/images/trips',
+      200
+    );
+
+    expect(second).toEqual([{ path: 'd:/images/trips', label: 'trips', openedAt: 200 }]);
   });
 });

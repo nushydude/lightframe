@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import {
+  displayKeyFromMonitor,
   hasCompleteWindowBounds,
   persistWindowBoundsSafely,
   shouldPersistWindowBounds,
+  windowBoundsForDisplay,
 } from './windowBounds';
 
 describe('hasCompleteWindowBounds', () => {
@@ -150,5 +152,92 @@ describe('persistWindowBoundsSafely', () => {
     await persistPromise;
 
     expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('persists display-specific bounds alongside legacy bounds', async () => {
+    const updateSettings = vi.fn(async () => {});
+
+    await persistWindowBoundsSafely({
+      isUnmounted: () => false,
+      isSettingsLoaded: true,
+      isMainWindow: true,
+      settings: baseSettings,
+      readWindowFlags: async () => ({ isFullscreen: false, isMinimized: false }),
+      readWindowBounds: async () => ({
+        position: { x: 10, y: 20 },
+        size: { width: 1440, height: 900 },
+      }),
+      readDisplayKey: async () => 'display:0:0:3440x1440@1',
+      updateSettings,
+    });
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      windowX: 10,
+      windowY: 20,
+      windowWidth: 1440,
+      windowHeight: 900,
+      windowBoundsByDisplay: {
+        'display:0:0:3440x1440@1': { x: 10, y: 20, width: 1440, height: 900 },
+      },
+    });
+  });
+});
+
+describe('displayKeyFromMonitor', () => {
+  it('creates stable keys from monitor geometry', () => {
+    expect(
+      displayKeyFromMonitor({
+        name: 'Portrait',
+        position: { x: 1920, y: 0 },
+        size: { width: 1080, height: 1920 },
+        scaleFactor: 1.25,
+      })
+    ).toBe('Portrait|1920,0|1080x1920|scale-1.25');
+  });
+
+  it('returns null without a monitor', () => {
+    expect(displayKeyFromMonitor(null)).toBeNull();
+  });
+});
+
+describe('windowBoundsForDisplay', () => {
+  it('prefers display-specific bounds and uses legacy bounds for first migration', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      windowX: 1,
+      windowY: 2,
+      windowWidth: 3,
+      windowHeight: 4,
+      windowBoundsByDisplay: {},
+    };
+
+    expect(windowBoundsForDisplay(settings, 'primary')).toEqual({
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 4,
+    });
+  });
+
+  it('does not reuse another display size when display-specific bounds exist', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      windowX: 1,
+      windowY: 2,
+      windowWidth: 3,
+      windowHeight: 4,
+      windowBoundsByDisplay: {
+        primary: { x: 10, y: 20, width: 1440, height: 900 },
+      },
+    };
+
+    expect(windowBoundsForDisplay(settings, 'primary')).toEqual({
+      x: 10,
+      y: 20,
+      width: 1440,
+      height: 900,
+    });
+    expect(windowBoundsForDisplay(settings, 'secondary')).toBeNull();
+    expect(windowBoundsForDisplay(settings, null)).toBeNull();
   });
 });

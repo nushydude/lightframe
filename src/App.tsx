@@ -1,6 +1,11 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
+import {
+  currentMonitor,
+  getCurrentWindow,
+  PhysicalPosition,
+  PhysicalSize,
+} from '@tauri-apps/api/window';
 import { getMatches } from '@tauri-apps/plugin-cli';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { ImageCanvas } from './components/ImageCanvas';
@@ -44,7 +49,11 @@ import {
   requestStateSync,
 } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
-import { hasCompleteWindowBounds, persistWindowBoundsSafely } from './services/windowBounds';
+import {
+  displayKeyFromMonitor,
+  persistWindowBoundsSafely,
+  windowBoundsForDisplay,
+} from './services/windowBounds';
 
 // fallow-ignore-next-line complexity
 function App() {
@@ -166,18 +175,18 @@ function App() {
         const loadedDefaultFitMode = isProjectorWindow ? 'fit' : loadedSettings.defaultFitMode;
         useViewerStore.getState().setDefaultZoomMode(loadedDefaultFitMode);
 
-        if (
-          isMainWindowRef.current &&
-          loadedSettings.rememberWindowBounds &&
-          hasCompleteWindowBounds(loadedSettings)
-        ) {
+        if (isMainWindowRef.current && loadedSettings.rememberWindowBounds) {
           try {
-            await appWindowRef.current.setPosition(
-              new PhysicalPosition(loadedSettings.windowX, loadedSettings.windowY)
-            );
-            await appWindowRef.current.setSize(
-              new PhysicalSize(loadedSettings.windowWidth, loadedSettings.windowHeight)
-            );
+            const displayKey = displayKeyFromMonitor(await currentMonitor());
+            const restoredBounds = windowBoundsForDisplay(loadedSettings, displayKey);
+            if (restoredBounds) {
+              await appWindowRef.current.setPosition(
+                new PhysicalPosition(restoredBounds.x, restoredBounds.y)
+              );
+              await appWindowRef.current.setSize(
+                new PhysicalSize(restoredBounds.width, restoredBounds.height)
+              );
+            }
           } catch (err) {
             console.error('Failed to restore window bounds:', err);
           }
@@ -251,6 +260,7 @@ function App() {
             ]);
             return { position, size };
           },
+          readDisplayKey: async () => displayKeyFromMonitor(await currentMonitor()),
           updateSettings: async (partial) => {
             if (isUnmounted) return;
             await updateSettings(partial);
@@ -752,6 +762,7 @@ function App() {
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}
+                onOpenRecentFolder={openFolder}
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onFirst={goFirst}
@@ -768,6 +779,7 @@ function App() {
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}
+                onOpenRecentFolder={openFolder}
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onFirst={goFirst}
@@ -789,7 +801,11 @@ function App() {
           )}
         </>
       ) : (
-        <EmptyState onOpenFile={openFilePicker} onOpenFolder={openFolderPicker} />
+        <EmptyState
+          onOpenFile={openFilePicker}
+          onOpenFolder={openFolderPicker}
+          onOpenRecentFolder={openFolder}
+        />
       )}
 
       {showSettings && <SettingsPanel />}

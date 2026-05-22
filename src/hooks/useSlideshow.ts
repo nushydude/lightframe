@@ -24,6 +24,25 @@ export function useSlideshow() {
   const shuffleOrderRef = useRef<number[]>([]);
   const shuffleIndexRef = useRef(0);
 
+  const exitFullscreenForStop = useCallback(async () => {
+    if (!useViewerStore.getState().isFullscreen) {
+      return;
+    }
+
+    try {
+      const appWindow = getCurrentWindow();
+      await appWindow.setFullscreen(false);
+      setFullscreen(false);
+    } catch (err) {
+      console.error('Failed to exit fullscreen after slideshow:', err);
+    }
+  }, [setFullscreen]);
+
+  const stopAndRestoreWindow = useCallback(async () => {
+    stopSlideshow();
+    await exitFullscreenForStop();
+  }, [exitFullscreenForStop, stopSlideshow]);
+
   /** Generate a shuffled order of indices */
   const generateShuffleOrder = useCallback(
     (startIdx: number) => {
@@ -52,7 +71,7 @@ export function useSlideshow() {
         if (settings.loopSlideshow) {
           shuffleIndexRef.current = 0;
         } else {
-          stopSlideshow();
+          void stopAndRestoreWindow();
           return;
         }
       }
@@ -61,15 +80,15 @@ export function useSlideshow() {
     } else {
       const advanced = navigateNext(settings.loopSlideshow);
       if (!advanced) {
-        stopSlideshow();
+        void stopAndRestoreWindow();
       }
     }
   }, [
     settings.shuffleSlideshow,
     settings.loopSlideshow,
     navigateNext,
-    stopSlideshow,
     setCurrentIndex,
+    stopAndRestoreWindow,
   ]);
 
   // Timer management
@@ -130,9 +149,9 @@ export function useSlideshow() {
   ]);
 
   /** Stop the slideshow */
-  const stop = useCallback(() => {
-    stopSlideshow();
-  }, [stopSlideshow]);
+  const stop = useCallback(async () => {
+    await stopAndRestoreWindow();
+  }, [stopAndRestoreWindow]);
 
   /** Toggle pause/resume */
   const togglePause = useCallback(() => {

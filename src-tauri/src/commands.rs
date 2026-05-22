@@ -134,6 +134,8 @@ pub struct AppSettings {
     pub window_width: Option<f64>,
     #[serde(default)]
     pub window_height: Option<f64>,
+    #[serde(default)]
+    pub window_bounds_by_display: HashMap<String, WindowBounds>,
     pub sort_order: String,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
@@ -146,11 +148,28 @@ pub struct AppSettings {
     #[serde(default = "default_auto_refresh_folder")]
     pub auto_refresh_folder: bool,
     #[serde(default)]
+    pub recent_folders: Vec<RecentFolder>,
+    #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
     #[serde(default)]
     pub external_editor_path: Option<String>,
     #[serde(default)]
     pub external_editor_label: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct WindowBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct RecentFolder {
+    pub path: String,
+    pub label: String,
+    pub opened_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -234,12 +253,14 @@ impl Default for AppSettings {
             window_y: None,
             window_width: None,
             window_height: None,
+            window_bounds_by_display: HashMap::new(),
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
             prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
             open_projector_in_grid_view: false,
             performance_mode: default_performance_mode(),
             auto_refresh_folder: default_auto_refresh_folder(),
+            recent_folders: Vec::new(),
             quick_destinations: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
@@ -3528,9 +3549,11 @@ mod tests {
         assert_eq!(settings.window_y, None);
         assert_eq!(settings.window_width, None);
         assert_eq!(settings.window_height, None);
+        assert!(settings.window_bounds_by_display.is_empty());
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");
         assert!(settings.auto_refresh_folder);
+        assert!(settings.recent_folders.is_empty());
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);
     }

@@ -16,6 +16,7 @@ import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { sortImages } from '../services/imageSorting';
 import { reconcileFolderWatcherPayload } from '../services/folderWatcherReconciliation';
+import { rememberRecentFolder } from '../types/settings';
 import {
   beginFolderOpenTelemetry,
   clearPendingFolderOpenTelemetry,
@@ -56,6 +57,16 @@ function playBoundaryBeep() {
 
 function normalizePathKey(path: string): string {
   return path.replace(/\\/g, '/').toLowerCase();
+}
+
+function rememberOpenedFolder(folderPath: string) {
+  const { settings, updateSettings } = useSettingsStore.getState();
+  const recentFolders = rememberRecentFolder(settings, folderPath);
+  if (recentFolders === settings.recentFolders) {
+    return;
+  }
+
+  void updateSettings({ recentFolders });
 }
 
 function hasImageRecordChanged(previous: ImageFile, next: ImageFile): boolean {
@@ -493,6 +504,7 @@ export function useImageNavigation() {
             return;
           }
 
+          rememberOpenedFolder(nextFolderPath);
           backgroundRefreshStarted = true;
           startBackgroundFolderRefresh(loadGeneration, nextFolderPath);
           return;
@@ -504,7 +516,14 @@ export function useImageNavigation() {
           return;
         }
 
-        await applyOpenedFolderImages(loadGeneration, nextFolderPath, folderImages);
+        const appliedFolderImages = await applyOpenedFolderImages(
+          loadGeneration,
+          nextFolderPath,
+          folderImages
+        );
+        if (appliedFolderImages) {
+          rememberOpenedFolder(nextFolderPath);
+        }
       } catch (err) {
         console.error('Failed to open folder:', err);
         clearPendingFolderOpenTelemetry(loadGeneration);
