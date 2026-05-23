@@ -234,6 +234,14 @@ describe('settingsFromRust', () => {
 
     expect(settings.savedViewPresets).toEqual(['favorites', 'rated5']);
   });
+
+  it('preserves an intentionally empty saved preset list', () => {
+    const settings = settingsFromRust({
+      saved_view_presets: [],
+    });
+
+    expect(settings.savedViewPresets).toEqual([]);
+  });
 });
 
 describe('rememberRecentFolder', () => {

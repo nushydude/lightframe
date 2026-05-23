@@ -236,6 +236,7 @@ interface ViewerState {
   setImages: (images: ImageFile[]) => void;
   setShowOnlyFavorites: (showOnlyFavorites: boolean) => void;
   setCurationFilter: (filter: CurationFilter) => void;
+  prepareCurationFilter: (filter: CurationFilter) => void;
   syncFavoriteFilter: (curationByPath: Record<string, CurationStateSnapshot>) => void;
   setFolderPath: (path: string) => void;
   setFolderScanning: (scanning: boolean) => void;
@@ -597,6 +598,15 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
     setShowOnlyFavorites: (showOnlyFavorites) =>
       get().setCurationFilter(showOnlyFavorites ? 'favorites' : 'all'),
+
+    prepareCurationFilter: (filter) =>
+      set({
+        curationFilter: filter,
+        showOnlyFavorites: filter === 'favorites',
+        favoriteFilterReturnPath: null,
+        curationFilterReturnPath: null,
+        errorMessage: null,
+      }),
 
     setCurationFilter: (filter) =>
       set((state) => {

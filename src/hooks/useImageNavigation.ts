@@ -164,6 +164,7 @@ export function useImageNavigation() {
     setFolderPath,
     setFolderScanning,
     setCurrentIndex,
+    prepareCurationFilter,
     navigateNext,
     navigatePrev,
     navigateFirst,
@@ -487,7 +488,7 @@ export function useImageNavigation() {
         setFolderScanning(true);
         setViewMode('viewer');
         if (options?.curationFilter) {
-          useViewerStore.getState().setCurationFilter(options.curationFilter);
+          prepareCurationFilter(options.curationFilter);
         }
 
         beginFolderOpenTelemetry(loadGeneration);
@@ -547,6 +548,7 @@ export function useImageNavigation() {
       setFolderPath,
       setFolderScanning,
       setViewMode,
+      prepareCurationFilter,
       applyOpenedFolderImages,
       readCachedFolderImages,
       scanIndexedFolder,

@@ -147,6 +147,8 @@ pub struct AppSettings {
     pub performance_mode: String,
     #[serde(default = "default_auto_refresh_folder")]
     pub auto_refresh_folder: bool,
+    #[serde(default = "default_saved_view_presets")]
+    pub saved_view_presets: Vec<String>,
     #[serde(default)]
     pub recent_folders: Vec<RecentFolder>,
     #[serde(default)]
@@ -238,6 +240,14 @@ fn default_auto_refresh_folder() -> bool {
     true
 }
 
+fn default_saved_view_presets() -> Vec<String> {
+    vec![
+        "favorites".to_string(),
+        "rated4".to_string(),
+        "unreviewed".to_string(),
+    ]
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
@@ -260,6 +270,7 @@ impl Default for AppSettings {
             open_projector_in_grid_view: false,
             performance_mode: default_performance_mode(),
             auto_refresh_folder: default_auto_refresh_folder(),
+            saved_view_presets: default_saved_view_presets(),
             recent_folders: Vec::new(),
             quick_destinations: Vec::new(),
             external_editor_path: None,
@@ -3553,6 +3564,14 @@ mod tests {
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");
         assert!(settings.auto_refresh_folder);
+        assert_eq!(
+            settings.saved_view_presets,
+            vec![
+                "favorites".to_string(),
+                "rated4".to_string(),
+                "unreviewed".to_string()
+            ]
+        );
         assert!(settings.recent_folders.is_empty());
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);

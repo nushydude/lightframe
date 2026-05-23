@@ -1,9 +1,5 @@
 import { isPerformanceMode } from '../services/performanceMode';
-import {
-  isCurationFilter,
-  SAVED_VIEW_PRESET_OPTIONS,
-  type CurationFilter,
-} from '../services/curationFilter';
+import { isCurationFilter, type CurationFilter } from '../services/curationFilter';
 
 export interface QuickDestination {
   id: string;
@@ -266,11 +262,7 @@ function parseSavedViewPresets(raw: unknown): CurationFilter[] {
     presets.push(value);
   }
 
-  return presets.length > 0
-    ? presets
-    : DEFAULT_SETTINGS.savedViewPresets.filter((preset) =>
-        SAVED_VIEW_PRESET_OPTIONS.some((option) => option.value === preset)
-      );
+  return presets;
 }
 
 function folderLabelFromPath(path: string): string {
