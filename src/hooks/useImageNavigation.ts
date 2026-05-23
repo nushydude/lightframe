@@ -17,6 +17,7 @@ import { invalidateThumbnail } from '../services/thumbnailCache';
 import { sortImages } from '../services/imageSorting';
 import { reconcileFolderWatcherPayload } from '../services/folderWatcherReconciliation';
 import { rememberRecentFolder } from '../types/settings';
+import type { CurationFilter } from '../services/curationFilter';
 import {
   beginFolderOpenTelemetry,
   clearPendingFolderOpenTelemetry,
@@ -477,7 +478,7 @@ export function useImageNavigation() {
 
   /** Open a specific folder */
   const openFolder = useCallback(
-    async (nextFolderPath: string) => {
+    async (nextFolderPath: string, options?: { curationFilter?: CurationFilter }) => {
       const loadGeneration = beginLoadGeneration();
       let backgroundRefreshStarted = false;
 
@@ -485,6 +486,9 @@ export function useImageNavigation() {
         setFolderPath(nextFolderPath);
         setFolderScanning(true);
         setViewMode('viewer');
+        if (options?.curationFilter) {
+          useViewerStore.getState().setCurationFilter(options.curationFilter);
+        }
 
         beginFolderOpenTelemetry(loadGeneration);
         const cachedImages = await readCachedFolderImages(nextFolderPath);

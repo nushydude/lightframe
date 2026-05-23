@@ -114,6 +114,17 @@ describe('settingsToRust', () => {
       auto_refresh_folder: false,
     });
   });
+
+  it('maps saved view presets to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      savedViewPresets: ['favorites', 'rated5'],
+    });
+
+    expect(rust).toMatchObject({
+      saved_view_presets: ['favorites', 'rated5'],
+    });
+  });
 });
 
 describe('settingsFromRust', () => {
@@ -214,6 +225,14 @@ describe('settingsFromRust', () => {
   it('parses auto-refresh folder preference with a default enabled fallback', () => {
     expect(settingsFromRust({ auto_refresh_folder: false }).autoRefreshFolder).toBe(false);
     expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
+  });
+
+  it('parses saved view presets and filters invalid values', () => {
+    const settings = settingsFromRust({
+      saved_view_presets: ['favorites', 'all', 'rated5', 'rated5', 'mystery'],
+    });
+
+    expect(settings.savedViewPresets).toEqual(['favorites', 'rated5']);
   });
 });
 

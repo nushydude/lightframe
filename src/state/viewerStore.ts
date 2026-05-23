@@ -4,6 +4,14 @@ import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { recordImageSelectedTelemetry } from '../services/performanceTelemetry';
 import {
+  getCurationFilterEmptyMessage,
+  isFavoriteCuration,
+  matchesCurationFilter,
+  sortImagesForCurationFilter,
+  type CurationFilter,
+  type CurationStateSnapshot,
+} from '../services/curationFilter';
+import {
   clampNormalizedRect,
   type CropAspectRatioPreset,
   type NormalizedCropRect,
@@ -20,7 +28,6 @@ const DEFAULT_CROP_RECT: NormalizedCropRect = {
   width: 0.8,
   height: 0.8,
 };
-const NO_FAVORITES_MESSAGE = 'No favorite images found in the current folder';
 
 function isValidImageIndex(index: number, imageCount: number): boolean {
   return index >= 0 && index < imageCount;
@@ -28,18 +35,17 @@ function isValidImageIndex(index: number, imageCount: number): boolean {
 
 type FavoritePathMap = Record<string, boolean>;
 
-function isFavoriteImage(image: ImageFile, favoritePaths: FavoritePathMap): boolean {
-  return Boolean(favoritePaths[image.path]);
-}
-
 function getVisibleImages(
   images: ImageFile[],
-  showOnlyFavorites: boolean,
-  favoritePaths: FavoritePathMap
+  curationFilter: CurationFilter,
+  curationStateByPath: Record<string, CurationStateSnapshot>
 ): ImageFile[] {
-  return showOnlyFavorites
-    ? images.filter((image) => isFavoriteImage(image, favoritePaths))
-    : images;
+  const filteredImages =
+    curationFilter === 'all'
+      ? images
+      : images.filter((image) => matchesCurationFilter(image, curationFilter, curationStateByPath));
+
+  return sortImagesForCurationFilter(filteredImages, curationFilter, curationStateByPath);
 }
 
 function clampAdjustment(value: number): number {
@@ -216,8 +222,11 @@ interface ViewerState {
   errorMessage: string | null;
   viewMode: ViewMode;
   showOnlyFavorites: boolean;
+  curationFilter: CurationFilter;
   favoritePaths: FavoritePathMap;
+  curationStateByPath: Record<string, CurationStateSnapshot>;
   favoriteFilterReturnPath: string | null;
+  curationFilterReturnPath: string | null;
   comparePrimaryIndex: number;
   compareSecondaryIndex: number;
   compareFocusedPane: CompareFocusedPane;
@@ -226,7 +235,8 @@ interface ViewerState {
   setCurrentImage: (path: string, index: number) => void;
   setImages: (images: ImageFile[]) => void;
   setShowOnlyFavorites: (showOnlyFavorites: boolean) => void;
-  syncFavoriteFilter: (curationByPath: Record<string, { favorite?: boolean }>) => void;
+  setCurationFilter: (filter: CurationFilter) => void;
+  syncFavoriteFilter: (curationByPath: Record<string, CurationStateSnapshot>) => void;
   setFolderPath: (path: string) => void;
   setFolderScanning: (scanning: boolean) => void;
   setCurrentIndex: (index: number, options?: { zoomMode?: ZoomMode }) => void;
@@ -314,8 +324,11 @@ const initialState = {
   loadGeneration: 0,
   viewMode: 'viewer' as ViewMode,
   showOnlyFavorites: false,
+  curationFilter: 'all' as CurationFilter,
   favoritePaths: {},
+  curationStateByPath: {},
   favoriteFilterReturnPath: null,
+  curationFilterReturnPath: null,
   comparePrimaryIndex: -1,
   compareSecondaryIndex: -1,
   compareFocusedPane: 'secondary' as CompareFocusedPane,
@@ -417,11 +430,12 @@ function getCommittedEditState(
 function getFilteredImagesState(
   state: ViewerState,
   nextAllImages: ImageFile[],
-  nextShowOnlyFavorites: boolean,
+  nextCurationFilter: CurationFilter,
   nextFavoritePaths = state.favoritePaths,
+  nextCurationStateByPath = state.curationStateByPath,
   preferredCurrentPath = state.currentImagePath
 ): Partial<ViewerState> {
-  const nextImages = getVisibleImages(nextAllImages, nextShowOnlyFavorites, nextFavoritePaths);
+  const nextImages = getVisibleImages(nextAllImages, nextCurationFilter, nextCurationStateByPath);
   const compareState = resolveCompareStateForImages(
     state.images,
     nextImages,
@@ -433,8 +447,10 @@ function getFilteredImagesState(
   const updates: Partial<ViewerState> = {
     allImages: nextAllImages,
     images: nextImages,
-    showOnlyFavorites: nextShowOnlyFavorites,
+    showOnlyFavorites: nextCurationFilter === 'favorites',
+    curationFilter: nextCurationFilter,
     favoritePaths: nextFavoritePaths,
+    curationStateByPath: nextCurationStateByPath,
     comparePrimaryIndex: compareState.comparePrimaryIndex,
     compareSecondaryIndex: compareState.compareSecondaryIndex,
     compareFocusedPane: compareState.compareFocusedPane,
@@ -477,29 +493,38 @@ function getFilteredImagesState(
 function getFavoriteSafeImagesState(
   state: ViewerState,
   nextAllImages: ImageFile[],
-  nextShowOnlyFavorites: boolean,
+  nextCurationFilter: CurationFilter,
   nextFavoritePaths = state.favoritePaths,
+  nextCurationStateByPath = state.curationStateByPath,
   preferredCurrentPath = state.currentImagePath
 ): Partial<ViewerState> {
   const filteredState = getFilteredImagesState(
     state,
     nextAllImages,
-    nextShowOnlyFavorites,
+    nextCurationFilter,
     nextFavoritePaths,
+    nextCurationStateByPath,
     preferredCurrentPath
   );
 
   if (
-    !nextShowOnlyFavorites ||
+    nextCurationFilter === 'all' ||
     nextAllImages.length === 0 ||
     (filteredState.images?.length ?? 0) > 0
   ) {
     return filteredState;
   }
 
+  const emptyMessage = getCurationFilterEmptyMessage(nextCurationFilter);
   return {
-    ...getFilteredImagesState(state, nextAllImages, false, nextFavoritePaths),
-    errorMessage: NO_FAVORITES_MESSAGE,
+    ...getFilteredImagesState(
+      state,
+      nextAllImages,
+      'all',
+      nextFavoritePaths,
+      nextCurationStateByPath
+    ),
+    errorMessage: emptyMessage,
   };
 }
 
@@ -568,30 +593,37 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     },
 
     setImages: (images) =>
-      set((state) => getFavoriteSafeImagesState(state, images, state.showOnlyFavorites)),
+      set((state) => getFavoriteSafeImagesState(state, images, state.curationFilter)),
 
     setShowOnlyFavorites: (showOnlyFavorites) =>
+      get().setCurationFilter(showOnlyFavorites ? 'favorites' : 'all'),
+
+    setCurationFilter: (filter) =>
       set((state) => {
-        if (showOnlyFavorites === state.showOnlyFavorites) {
+        if (filter === state.curationFilter) {
           return {};
         }
 
         const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
-        const preferredCurrentPath = showOnlyFavorites
-          ? state.currentImagePath
-          : (state.favoriteFilterReturnPath ?? state.currentImagePath);
+        const preferredCurrentPath =
+          filter === 'all'
+            ? (state.curationFilterReturnPath ?? state.currentImagePath)
+            : state.currentImagePath;
         const filterState = getFavoriteSafeImagesState(
           state,
           sourceImages,
-          showOnlyFavorites,
+          filter,
           state.favoritePaths,
+          state.curationStateByPath,
           preferredCurrentPath
         );
 
         return {
           ...filterState,
           favoriteFilterReturnPath:
-            filterState.showOnlyFavorites === true ? state.currentImagePath : null,
+            filterState.curationFilter === 'favorites' ? state.currentImagePath : null,
+          curationFilterReturnPath:
+            filterState.curationFilter !== 'all' ? state.currentImagePath : null,
         };
       }),
 
@@ -599,15 +631,37 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       set((state) => {
         const nextFavoritePaths = Object.fromEntries(
           Object.entries(curationByPath)
-            .filter(([, curation]) => Boolean(curation.favorite))
+            .filter(([, curation]) => isFavoriteCuration(curation))
             .map(([path]) => [path, true])
         );
-        if (!state.showOnlyFavorites) {
-          return { favoritePaths: nextFavoritePaths };
+        if (state.curationFilter === 'all') {
+          return {
+            favoritePaths: nextFavoritePaths,
+            curationStateByPath: curationByPath,
+          };
         }
 
         const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
-        return getFavoriteSafeImagesState(state, sourceImages, true, nextFavoritePaths);
+        const preferredCurrentPath =
+          state.curationFilter === 'favorites'
+            ? state.currentImagePath
+            : (state.curationFilterReturnPath ?? state.currentImagePath);
+        const filterState = getFavoriteSafeImagesState(
+          state,
+          sourceImages,
+          state.curationFilter,
+          nextFavoritePaths,
+          curationByPath,
+          preferredCurrentPath
+        );
+
+        return {
+          ...filterState,
+          favoriteFilterReturnPath:
+            filterState.curationFilter === 'favorites' ? state.favoriteFilterReturnPath : null,
+          curationFilterReturnPath:
+            filterState.curationFilter !== 'all' ? state.curationFilterReturnPath : null,
+        };
       }),
 
     setFolderPath: (path) => set({ folderPath: path }),
@@ -736,7 +790,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         }
 
         return {
-          ...getFavoriteSafeImagesState(currentState, newAllImages, currentState.showOnlyFavorites),
+          ...getFavoriteSafeImagesState(currentState, newAllImages, currentState.curationFilter),
           pendingEditsByPath: nextPendingEdits,
         };
       });

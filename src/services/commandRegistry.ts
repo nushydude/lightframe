@@ -1,5 +1,6 @@
 import { useViewerStore } from '../state/viewerStore';
 import { canSaveRotationForPath } from './viewerActions';
+import { CURATION_FILTER_OPTIONS } from './curationFilter';
 
 type ViewerState = ReturnType<typeof useViewerStore.getState>;
 
@@ -156,6 +157,13 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
         state.setViewMode(state.viewMode === 'viewer' ? 'grid' : 'viewer');
       },
     },
+    ...CURATION_FILTER_OPTIONS.map((filter) => ({
+      id: `curation-filter-${filter.value}`,
+      label: filter.value === 'all' ? 'Show All Images' : `Show ${filter.label}`,
+      keywords: ['filter', 'curation', 'review', filter.label.toLowerCase()],
+      isEnabled: (state: ViewerState) => state.allImages.length > 0 || state.images.length > 0,
+      run: () => useViewerStore.getState().setCurationFilter(filter.value),
+    })),
     {
       id: 'toggle-compare',
       label: 'Toggle Compare View',

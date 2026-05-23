@@ -26,6 +26,7 @@ import { useViewerStore } from './state/viewerStore';
 import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
+import type { CurationFilter } from './services/curationFilter';
 import {
   recordStartupFirstImageKnownTelemetry,
   resetPerformanceTelemetry,
@@ -407,6 +408,13 @@ function App() {
     }
   }, [isFullscreen, reset, setFullscreen]);
 
+  const handleOpenRecentFolder = useCallback(
+    async (folderPath: string, filter: CurationFilter = 'all') => {
+      await openFolder(folderPath, { curationFilter: filter });
+    },
+    [openFolder]
+  );
+
   const handleToggleFullscreen = useCallback(async () => {
     try {
       const nextFullscreen = !useViewerStore.getState().isFullscreen;
@@ -762,7 +770,7 @@ function App() {
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}
-                onOpenRecentFolder={openFolder}
+                onOpenRecentFolder={handleOpenRecentFolder}
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onFirst={goFirst}
@@ -779,7 +787,7 @@ function App() {
               <ViewerChrome
                 onOpenFile={openFilePicker}
                 onOpenFolder={openFolderPicker}
-                onOpenRecentFolder={openFolder}
+                onOpenRecentFolder={handleOpenRecentFolder}
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onFirst={goFirst}
@@ -804,7 +812,7 @@ function App() {
         <EmptyState
           onOpenFile={openFilePicker}
           onOpenFolder={openFolderPicker}
-          onOpenRecentFolder={openFolder}
+          onOpenRecentFolder={handleOpenRecentFolder}
         />
       )}
 

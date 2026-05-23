@@ -76,4 +76,28 @@ describe('EmptyState', () => {
 
     expect(onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May');
   });
+
+  it('opens a recent folder directly into a saved view preset', () => {
+    const onOpenRecentFolder = vi.fn();
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        recentFolders: [{ path: 'D:/Shoots/May', label: 'May', openedAt: 100 }],
+        savedViewPresets: ['favorites', 'unreviewed'],
+      },
+    }));
+
+    render(
+      <EmptyState
+        onOpenFile={vi.fn()}
+        onOpenFolder={vi.fn()}
+        onOpenRecentFolder={onOpenRecentFolder}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }));
+
+    expect(onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May', 'favorites');
+  });
 });

@@ -1,4 +1,9 @@
 import { isPerformanceMode } from '../services/performanceMode';
+import {
+  isCurationFilter,
+  SAVED_VIEW_PRESET_OPTIONS,
+  type CurationFilter,
+} from '../services/curationFilter';
 
 export interface QuickDestination {
   id: string;
@@ -41,6 +46,7 @@ export interface AppSettings {
   openProjectorInGridView: boolean;
   performanceMode: PerformanceMode;
   autoRefreshFolder: boolean;
+  savedViewPresets: CurationFilter[];
   recentFolders: RecentFolder[];
   quickDestinations: QuickDestination[];
   externalEditorPath?: string;
@@ -63,6 +69,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   openProjectorInGridView: false,
   performanceMode: 'balanced',
   autoRefreshFolder: true,
+  savedViewPresets: ['favorites', 'rated4', 'unreviewed'],
   recentFolders: [],
   quickDestinations: [],
 };
@@ -91,6 +98,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     open_projector_in_grid_view: settings.openProjectorInGridView,
     performance_mode: settings.performanceMode,
     auto_refresh_folder: settings.autoRefreshFolder,
+    saved_view_presets: settings.savedViewPresets,
     recent_folders: settings.recentFolders.map((folder) => ({
       path: folder.path,
       label: folder.label,
@@ -148,6 +156,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       ? raw.performance_mode
       : DEFAULT_SETTINGS.performanceMode,
     autoRefreshFolder: booleanSetting(raw.auto_refresh_folder, DEFAULT_SETTINGS.autoRefreshFolder),
+    savedViewPresets: parseSavedViewPresets(raw.saved_view_presets),
     recentFolders: parseRecentFolders(raw.recent_folders),
     quickDestinations: parseQuickDestinations(raw.quick_destinations),
     externalEditorPath: optionalTrimmedString(raw.external_editor_path),
@@ -240,6 +249,28 @@ function parseRecentFolders(raw: unknown): RecentFolder[] {
     .filter((value): value is RecentFolder => value !== null)
     .sort((a, b) => b.openedAt - a.openedAt)
     .slice(0, MAX_RECENT_FOLDERS);
+}
+
+function parseSavedViewPresets(raw: unknown): CurationFilter[] {
+  if (!Array.isArray(raw)) {
+    return DEFAULT_SETTINGS.savedViewPresets;
+  }
+
+  const seen = new Set<CurationFilter>();
+  const presets: CurationFilter[] = [];
+  for (const value of raw) {
+    if (!isCurationFilter(value) || value === 'all' || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    presets.push(value);
+  }
+
+  return presets.length > 0
+    ? presets
+    : DEFAULT_SETTINGS.savedViewPresets.filter((preset) =>
+        SAVED_VIEW_PRESET_OPTIONS.some((option) => option.value === preset)
+      );
 }
 
 function folderLabelFromPath(path: string): string {

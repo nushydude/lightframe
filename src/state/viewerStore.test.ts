@@ -261,6 +261,74 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('1.jpg');
   });
 
+  it('sorts curated favorites by highest rating and most recent review first', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+    useViewerStore.getState().syncFavoriteFilter({
+      '1.jpg': { favorite: true, rating: 4, updated_at: 100 },
+      '2.jpg': { favorite: true, rating: 5, updated_at: 90 },
+      '3.jpg': { favorite: true, rating: 4, updated_at: 200 },
+    });
+
+    useViewerStore.getState().setCurationFilter('favorites');
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      '2.jpg',
+      '3.jpg',
+      '1.jpg',
+    ]);
+  });
+
+  it('filters images to 4+ star items and returns to the prior image when cleared', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+    useViewerStore.getState().setCurrentIndex(2);
+    useViewerStore.getState().syncFavoriteFilter({
+      '1.jpg': { rating: 4 },
+      '2.jpg': { favorite: true, rating: 5 },
+    });
+
+    useViewerStore.getState().setCurationFilter('rated4');
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['2.jpg', '1.jpg']);
+    expect(useViewerStore.getState().currentImagePath).toBe('1.jpg');
+    expect(useViewerStore.getState().curationFilter).toBe('rated4');
+
+    useViewerStore.getState().setCurationFilter('all');
+
+    expect(useViewerStore.getState().currentImagePath).toBe('3.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('refreshes unreviewed filtering when curation changes', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+    useViewerStore.getState().setCurrentIndex(0);
+    useViewerStore.getState().syncFavoriteFilter({
+      '2.jpg': { rating: 5, favorite: true },
+    });
+
+    useViewerStore.getState().setCurationFilter('unreviewed');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg', '3.jpg']);
+
+    useViewerStore.getState().syncFavoriteFilter({
+      '1.jpg': { rating: 4, favorite: true },
+      '2.jpg': { rating: 5, favorite: true },
+    });
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['3.jpg']);
+    expect(useViewerStore.getState().currentImagePath).toBe('3.jpg');
+  });
+
   it('removes multiple images in one pass while preserving the nearest current image', () => {
     useViewerStore.setState({
       images: [
@@ -318,6 +386,19 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().showOnlyFavorites).toBe(false);
     expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg', '2.jpg']);
     expect(useViewerStore.getState().errorMessage).toContain('No favorite images');
+  });
+
+  it('keeps the full list visible when a curation filter has no matches', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+
+    useViewerStore.getState().setCurationFilter('rated5');
+
+    expect(useViewerStore.getState().curationFilter).toBe('all');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg', '2.jpg']);
+    expect(useViewerStore.getState().errorMessage).toContain('No 5-star images');
   });
 
   it('should reset store to initial state', () => {
