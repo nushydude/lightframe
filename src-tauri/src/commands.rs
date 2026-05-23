@@ -241,11 +241,7 @@ fn default_auto_refresh_folder() -> bool {
 }
 
 fn default_saved_view_presets() -> Vec<String> {
-    vec![
-        "favorites".to_string(),
-        "rated4".to_string(),
-        "unreviewed".to_string(),
-    ]
+    vec!["favorites".to_string(), "rated4".to_string(), "unreviewed".to_string()]
 }
 
 impl Default for AppSettings {
@@ -3566,11 +3562,7 @@ mod tests {
         assert!(settings.auto_refresh_folder);
         assert_eq!(
             settings.saved_view_presets,
-            vec![
-                "favorites".to_string(),
-                "rated4".to_string(),
-                "unreviewed".to_string()
-            ]
+            vec!["favorites".to_string(), "rated4".to_string(), "unreviewed".to_string()]
         );
         assert!(settings.recent_folders.is_empty());
         assert_eq!(settings.external_editor_path, None);
