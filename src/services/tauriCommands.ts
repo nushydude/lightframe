@@ -56,6 +56,11 @@ interface GeneratedCacheSummary {
 }
 
 interface GeneratedAssetRuntimeStats {
+  nativePreviewTiming: GeneratedAssetRuntimeTiming;
+  rustPreviewTiming: GeneratedAssetRuntimeTiming;
+  placeholderPreviewTiming: GeneratedAssetRuntimeTiming;
+  nativeTileTiming: GeneratedAssetRuntimeTiming;
+  rustTileTiming: GeneratedAssetRuntimeTiming;
   thumbnailCacheHits: number;
   previewCacheHits: number;
   tileCacheHits: number;
@@ -66,6 +71,12 @@ interface GeneratedAssetRuntimeStats {
   placeholderThumbnailGenerations: number;
   placeholderPreviewGenerations: number;
   tileGenerations: number;
+}
+
+interface GeneratedAssetRuntimeTiming {
+  sampleCount: number;
+  totalMs: number;
+  maxMs: number;
 }
 
 interface CodecHealthEntry {

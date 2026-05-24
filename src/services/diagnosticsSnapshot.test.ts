@@ -33,6 +33,11 @@ const codecHealth: CodecHealthReport = {
     rawNativeFailureCount: 0,
   },
   runtimeStats: {
+    nativePreviewTiming: { sampleCount: 5, totalMs: 225, maxMs: 63 },
+    rustPreviewTiming: { sampleCount: 7, totalMs: 154, maxMs: 31 },
+    placeholderPreviewTiming: { sampleCount: 9, totalMs: 18, maxMs: 4 },
+    nativeTileTiming: { sampleCount: 3, totalMs: 66, maxMs: 28 },
+    rustTileTiming: { sampleCount: 7, totalMs: 49, maxMs: 11 },
     thumbnailCacheHits: 1,
     previewCacheHits: 2,
     tileCacheHits: 3,
