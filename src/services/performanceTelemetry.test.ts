@@ -10,12 +10,19 @@ import {
   recordFullAssetCacheHit,
   recordFullAssetCacheMiss,
   recordFullResolutionReadyTelemetry,
+  recordFolderOpenBackgroundRefreshTelemetry,
+  recordFolderOpenIndexReadTelemetry,
+  recordFolderOpenReconcileTelemetry,
+  recordFolderOpenSourceTelemetry,
   recordImageCodecTelemetry,
   recordImageSelectedTelemetry,
   recordPreviewAssetCacheHit,
   recordPreviewAssetCacheMiss,
   recordPreviewVisibleTelemetry,
+  recordStartupCliResolveTelemetry,
   recordStartupFirstImageKnownTelemetry,
+  recordStartupInitialImageOpenTelemetry,
+  recordStartupSettingsAndCurationLoadTelemetry,
   recordThumbnailCacheHit,
   recordThumbnailCacheMiss,
   recordVisibleImageSourceUpdatedTelemetry,
@@ -55,6 +62,9 @@ describe('performanceTelemetry', () => {
     setPerformanceTelemetryEnabled(true);
 
     currentTime = 25;
+    recordStartupSettingsAndCurationLoadTelemetry(18);
+    recordStartupCliResolveTelemetry(6);
+    recordStartupInitialImageOpenTelemetry(22);
     recordStartupFirstImageKnownTelemetry();
 
     currentTime = 30;
@@ -78,14 +88,18 @@ describe('performanceTelemetry', () => {
 
     currentTime = 140;
     beginFolderOpenTelemetry();
+    recordFolderOpenSourceTelemetry('cache');
+    recordFolderOpenIndexReadTelemetry(8);
     setNextImageSelectionKind('folder-open');
 
     currentTime = 170;
     recordImageSelectedTelemetry('C:/images/c.jpg');
     recordImageCodecTelemetry('C:/images/c.jpg', 'windows_native', true);
+    recordFolderOpenReconcileTelemetry(11);
 
     currentTime = 185;
     recordPreviewVisibleTelemetry('C:/images/c.jpg');
+    recordFolderOpenBackgroundRefreshTelemetry(52);
 
     currentTime = 200;
     await measurePerformanceSpan('folderScan', async () => {
@@ -125,6 +139,17 @@ describe('performanceTelemetry', () => {
     expect(snapshot.currentImage.previewVisibleMs).toBe(15);
     expect(snapshot.currentImage.fullResolutionReadyMs).toBeNull();
     expect(snapshot.currentImage.visibleSourceUpdatedMs).toBeNull();
+    expect(snapshot.startupPhases.settingsAndCurationLoadMs).toBe(18);
+    expect(snapshot.startupPhases.cliResolveMs).toBe(6);
+    expect(snapshot.startupPhases.initialImageOpenMs).toBe(22);
+    expect(snapshot.startupPhases.firstImageKnownMs).toBe(25);
+    expect(snapshot.folderOpenPhases.source).toBe('cache');
+    expect(snapshot.folderOpenPhases.indexReadMs).toBe(8);
+    expect(snapshot.folderOpenPhases.reconcileMs).toBe(11);
+    expect(snapshot.folderOpenPhases.firstImageVisibleMs).toBe(45);
+    expect(snapshot.folderOpenPhases.backgroundRefreshMs).toBe(52);
+    expect(snapshot.sessionSummary.startup).toMatch(/Startup looked healthy/);
+    expect(snapshot.sessionSummary.folderOpen).toMatch(/background refresh finished in 52 ms/);
     expect(snapshot.latencies.startupToFirstImageKnown.currentMs).toBe(25);
     expect(snapshot.latencies.imageSelectToPreviewVisible.currentMs).toBe(15);
     expect(snapshot.latencies.imageSelectToFullReady.currentMs).toBe(35);
@@ -176,6 +201,8 @@ describe('performanceTelemetry', () => {
 
     const snapshot = getPerformanceTelemetrySnapshot();
     expect(snapshot.currentImage.path).toBeNull();
+    expect(snapshot.startupPhases.firstImageKnownMs).toBeNull();
+    expect(snapshot.folderOpenPhases.source).toBeNull();
     expect(snapshot.latencies.folderIndexRead.sampleCount).toBe(0);
     expect(snapshot.latencies.folderScan.sampleCount).toBe(0);
     expect(snapshot.latencies.tileGeneration.sampleCount).toBe(0);
@@ -195,6 +222,7 @@ describe('performanceTelemetry', () => {
 
     const snapshot = getPerformanceTelemetrySnapshot();
     expect(snapshot.enabled).toBe(false);
+    expect(snapshot.sessionSummary.startup).toBeNull();
     expect(snapshot.latencies.previewGeneration.sampleCount).toBe(0);
     expect(snapshot.caches.thumbnail.hits).toBe(0);
     expect(snapshot.queues.thumbnailQueueDepth).toBe(0);
@@ -229,6 +257,7 @@ describe('performanceTelemetry', () => {
 
     currentTime = 10;
     beginFolderOpenTelemetry(1);
+    recordFolderOpenSourceTelemetry('scan');
     clearPendingFolderOpenTelemetry(2);
 
     currentTime = 30;
@@ -240,6 +269,7 @@ describe('performanceTelemetry', () => {
 
     const snapshot = getPerformanceTelemetrySnapshot();
     expect(snapshot.latencies.folderOpenToFirstImageVisible.currentMs).toBe(45);
+    expect(snapshot.folderOpenPhases.firstImageVisibleMs).toBe(45);
     expect(snapshot.latencies.imageSelectToPreviewVisible.currentMs).toBe(25);
     expect(snapshot.latencies.imageSelectToFullReady.currentMs).toBe(25);
 

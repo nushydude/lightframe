@@ -29,6 +29,9 @@ import { createViewerCommands } from './services/commandRegistry';
 import type { CurationFilter } from './services/curationFilter';
 import {
   recordStartupFirstImageKnownTelemetry,
+  recordStartupCliResolveTelemetry,
+  recordStartupInitialImageOpenTelemetry,
+  recordStartupSettingsAndCurationLoadTelemetry,
   resetPerformanceTelemetry,
   setPerformanceTelemetryEnabled,
 } from './services/performanceTelemetry';
@@ -170,7 +173,9 @@ function App() {
     // fallow-ignore-next-line complexity
     async function init() {
       // Ensure persisted settings are loaded before startup image open.
+      const settingsLoadStartedAt = performance.now();
       await Promise.all([loadSettings(), loadCuration()]);
+      recordStartupSettingsAndCurationLoadTelemetry(performance.now() - settingsLoadStartedAt);
       if (!isCancelled) {
         const loadedSettings = useSettingsStore.getState().settings;
         const loadedDefaultFitMode = isProjectorWindow ? 'fit' : loadedSettings.defaultFitMode;
@@ -195,11 +200,15 @@ function App() {
       }
 
       try {
+        const cliResolveStartedAt = performance.now();
         const matches = await getMatches();
         const startupDecision = resolveStartupDecision(matches.args.file);
+        recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
         if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
+          const startupImageOpenStartedAt = performance.now();
           await openImageForStartup(startupDecision.filePath);
+          recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
         }
       } catch (err) {
         console.error('Failed to parse CLI args on startup:', err);

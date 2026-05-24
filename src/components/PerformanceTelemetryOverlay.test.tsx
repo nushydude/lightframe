@@ -14,6 +14,24 @@ const snapshot: PerformanceTelemetrySnapshot = {
     fullResolutionReadyMs: 64,
     visibleSourceUpdatedMs: 12,
   },
+  startupPhases: {
+    settingsAndCurationLoadMs: 48,
+    cliResolveMs: 12,
+    initialImageOpenMs: 85,
+    firstImageKnownMs: 120,
+  },
+  folderOpenPhases: {
+    source: 'cache',
+    indexReadMs: 6,
+    reconcileMs: 14,
+    firstImageVisibleMs: 85,
+    backgroundRefreshMs: 90,
+  },
+  sessionSummary: {
+    startup: 'Startup was led by startup image open (85 ms); first image settled in 120 ms.',
+    folderOpen:
+      'cached index showed the first image in 85 ms; background refresh finished in 90 ms.',
+  },
   latencies: {
     startupToFirstImageKnown: { currentMs: 120, p50Ms: 100, p95Ms: 180, sampleCount: 4 },
     imageSelectToPreviewVisible: { currentMs: 32, p50Ms: 28, p95Ms: 44, sampleCount: 7 },
@@ -71,6 +89,11 @@ describe('PerformanceTelemetryOverlay', () => {
       screen.getByRole('complementary', { name: 'Performance telemetry' })
     ).toBeInTheDocument();
     expect(screen.getByText('C:/images/current.jpg')).toBeInTheDocument();
+    expect(screen.getByText(/Startup was led by startup image open/)).toBeInTheDocument();
+    expect(screen.getByText(/background refresh finished in 90 ms/i)).toBeInTheDocument();
+    expect(screen.getByText('Settings + curation')).toBeInTheDocument();
+    expect(screen.getByText('Last Folder Open')).toBeInTheDocument();
+    expect(screen.getByText('Cached index')).toBeInTheDocument();
     expect(screen.getByText('keyboard-next')).toBeInTheDocument();
     expect(screen.getByText('windows_native (native)')).toBeInTheDocument();
     expect(screen.getAllByText('32 ms')).toHaveLength(2);
