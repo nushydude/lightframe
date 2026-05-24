@@ -1,6 +1,7 @@
 type ToolbarIconName =
   | 'favorite'
   | 'favorites'
+  | 'filter'
   | 'first'
   | 'fit'
   | 'more'
@@ -23,6 +24,7 @@ const ICON_PATHS: Record<ToolbarIconName, string[]> = {
     'M11.5 3.5 13.7 8l5 .7-3.6 3.5.9 5-4.5-2.4L7 17.2l.9-5-3.6-3.5 5-.7 2.2-4.5Z',
     'M17 4.5h2.5M17 7h4M17 9.5h2.5',
   ],
+  filter: ['M4 6h16', 'M7 12h10', 'M10 18h4'],
   first: ['M6 6v12', 'M18 6 10 12l8 6V6Z'],
   fit: ['M5 9V5h4', 'M15 5h4v4', 'M19 15v4h-4', 'M9 19H5v-4'],
   more: ['M5 12h.01', 'M12 12h.01', 'M19 12h.01'],

@@ -271,6 +271,48 @@ body,
   background: var(--bg-tertiary);
 }
 
+.top-bar-menu-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.top-bar-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px 10px;
+}
+
+.top-bar-preset-chip,
+.settings-chip,
+.empty-state-preset-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.top-bar-preset-chip {
+  padding: 6px 8px;
+}
+
+.top-bar-preset-chip:hover,
+.settings-chip:hover,
+.empty-state-preset-chip:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
 .top-bar-menu-item--truncate {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1883,14 +1925,18 @@ body,
 }
 
 .empty-state-recent-list {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  display: grid;
   gap: 8px;
 }
 
+.empty-state-recent-entry {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
 .empty-state-recent-item {
-  max-width: 180px;
+  width: min(240px, 100%);
   padding: 7px 10px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1906,6 +1952,17 @@ body,
 
 .empty-state-recent-item:hover {
   background: var(--bg-tertiary);
+}
+
+.empty-state-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.empty-state-preset-chip {
+  padding: 6px 10px;
 }
 
 .btn-primary {
@@ -2396,6 +2453,22 @@ body,
   font-size: 0.75rem;
   color: var(--text-secondary);
   line-height: 1.4;
+}
+
+.settings-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-chip {
+  padding: 8px 12px;
+}
+
+.settings-chip.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
 }
 
 .setting-button-row {

@@ -234,6 +234,55 @@ describe('useImageNavigation', () => {
     expect(refreshFolderIndex).toHaveBeenCalledWith('c:/test');
   });
 
+  it('applies recent-folder preset filters against the newly opened folder', async () => {
+    act(() => {
+      useViewerStore.getState().setImages([
+        {
+          path: 'c:/old/a.jpg',
+          file_name: 'a.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1000',
+        },
+      ]);
+      useViewerStore.getState().setCurrentIndex(0);
+      useViewerStore.getState().syncFavoriteFilter({
+        'c:/next/two.jpg': { favorite: true, rating: 5, updated_at: 10 },
+      });
+    });
+
+    const nextFolderImages = [
+      {
+        path: 'c:/next/one.jpg',
+        file_name: 'one.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/next/two.jpg',
+        file_name: 'two.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+    (readFolderIndex as any).mockResolvedValue([]);
+    (refreshFolderIndex as any).mockResolvedValue(nextFolderImages);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/next', { curationFilter: 'rated5' });
+    });
+
+    expect(useViewerStore.getState().curationFilter).toBe('rated5');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/next/two.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/next/two.jpg');
+  });
+
   it('shows cached folder entries before verified refresh finishes', async () => {
     const cachedImages = [
       {

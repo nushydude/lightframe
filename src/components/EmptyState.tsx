@@ -1,13 +1,15 @@
 import { useSettingsStore } from '../state/settingsStore';
+import { getCurationFilterLabel, type CurationFilter } from '../services/curationFilter';
 
 interface EmptyStateProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
-  onOpenRecentFolder: (folderPath: string) => void | Promise<void>;
+  onOpenRecentFolder: (folderPath: string, filter?: CurationFilter) => void | Promise<void>;
 }
 
 export function EmptyState({ onOpenFile, onOpenFolder, onOpenRecentFolder }: EmptyStateProps) {
   const recentFolders = useSettingsStore((state) => state.settings.recentFolders);
+  const savedViewPresets = useSettingsStore((state) => state.settings.savedViewPresets);
 
   return (
     <div className="empty-state">
@@ -43,15 +45,30 @@ export function EmptyState({ onOpenFile, onOpenFolder, onOpenRecentFolder }: Emp
           <div className="empty-state-recent-title">Recent Folders</div>
           <div className="empty-state-recent-list">
             {recentFolders.slice(0, 5).map((folder) => (
-              <button
-                className="empty-state-recent-item"
-                key={folder.path}
-                onClick={() => void onOpenRecentFolder(folder.path)}
-                title={folder.path}
-                type="button"
-              >
-                {folder.label}
-              </button>
+              <div className="empty-state-recent-entry" key={folder.path}>
+                <button
+                  className="empty-state-recent-item"
+                  onClick={() => void onOpenRecentFolder(folder.path)}
+                  title={folder.path}
+                  type="button"
+                >
+                  {folder.label}
+                </button>
+                {savedViewPresets.length > 0 && (
+                  <div className="empty-state-preset-row">
+                    {savedViewPresets.map((preset) => (
+                      <button
+                        key={`${folder.path}:${preset}`}
+                        className="empty-state-preset-chip"
+                        onClick={() => void onOpenRecentFolder(folder.path, preset)}
+                        type="button"
+                      >
+                        {getCurationFilterLabel(preset)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>

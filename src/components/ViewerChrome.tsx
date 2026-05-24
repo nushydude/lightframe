@@ -29,14 +29,16 @@ import { useProjectorState } from '../hooks/useProjectorState';
 import { useCurationStore } from '../state/curationStore';
 import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { getCurationFilterLabel, type CurationFilter } from '../services/curationFilter';
 import type { QuickDestination } from '../types/settings';
+import { CurationFilterMenu } from './CurationFilterMenu';
 import { EditQueuePanel } from './EditQueuePanel';
 import { ToolbarIcon } from './ToolbarIcon';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
   onOpenFolder: () => void;
-  onOpenRecentFolder: (folderPath: string) => void | Promise<void>;
+  onOpenRecentFolder: (folderPath: string, filter?: CurationFilter) => void | Promise<void>;
   onRefreshFolder: () => void;
   onGoHome: () => void;
   onFirst: () => void;
@@ -392,7 +394,7 @@ export function ViewerChrome({
     imageSmoothing,
     imageSharpening,
     isFolderScanning,
-    showOnlyFavorites,
+    curationFilter,
     setFullscreen,
     setShowSettings,
     setZoomMode,
@@ -400,7 +402,7 @@ export function ViewerChrome({
     setImageSmoothing,
     setImageSharpening,
     resetImageAdjustments,
-    setShowOnlyFavorites,
+    setCurationFilter,
     zoomIn,
     zoomOut,
     removeImage,
@@ -432,6 +434,7 @@ export function ViewerChrome({
   const editQueueIsRunning = useEditQueueStore((state) => state.isRunning);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const recentFolders = useSettingsStore((state) => state.settings.recentFolders);
+  const savedViewPresets = useSettingsStore((state) => state.settings.savedViewPresets);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
@@ -574,8 +577,8 @@ export function ViewerChrome({
     closeOverflowMenus();
   };
 
-  const handleOpenRecentFolder = async (folderPath: string) => {
-    await onOpenRecentFolder(folderPath);
+  const handleOpenRecentFolder = async (folderPath: string, filter?: CurationFilter) => {
+    await onOpenRecentFolder(folderPath, filter);
     recordToolbarActionUsage('recent-folders');
     closeOverflowMenus();
   };
@@ -1023,15 +1026,30 @@ export function ViewerChrome({
               <span className="top-bar-menu-empty">No recent folders yet.</span>
             ) : (
               recentFolders.map((folder) => (
-                <button
-                  key={folder.path}
-                  className="top-bar-menu-item top-bar-menu-item--truncate"
-                  onClick={() => void handleOpenRecentFolder(folder.path)}
-                  title={folder.path}
-                  type="button"
-                >
-                  {folder.label}
-                </button>
+                <div key={folder.path} className="top-bar-menu-entry">
+                  <button
+                    className="top-bar-menu-item top-bar-menu-item--truncate"
+                    onClick={() => void handleOpenRecentFolder(folder.path)}
+                    title={folder.path}
+                    type="button"
+                  >
+                    {folder.label}
+                  </button>
+                  {savedViewPresets.length > 0 && (
+                    <div className="top-bar-preset-row">
+                      {savedViewPresets.map((preset) => (
+                        <button
+                          key={`${folder.path}:${preset}`}
+                          className="top-bar-preset-chip"
+                          onClick={() => void handleOpenRecentFolder(folder.path, preset)}
+                          type="button"
+                        >
+                          {getCurationFilterLabel(preset)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ))
             )}
           </div>
@@ -1275,19 +1293,9 @@ export function ViewerChrome({
               </span>
               <span className="top-bar-btn-label">Favorite</span>
             </button>
-            <button
-              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${showOnlyFavorites ? 'active' : ''}`}
-              onClick={() => setShowOnlyFavorites(!showOnlyFavorites)}
-              data-tooltip={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
-              title={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
-              aria-label={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
-              id="btn-favorites-filter"
-            >
-              <span className="top-bar-btn-icon">
-                <ToolbarIcon name="favorites" />
-              </span>
-              <span className="top-bar-btn-label">Only</span>
-            </button>
+            <div id="btn-curation-filter">
+              <CurationFilterMenu currentFilter={curationFilter} onSelect={setCurationFilter} />
+            </div>
             <button
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isSlideshowActive ? 'active' : ''}`}
               onClick={isSlideshowActive ? onTogglePause : onStartSlideshow}

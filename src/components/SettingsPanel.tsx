@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
+import { SAVED_VIEW_PRESET_OPTIONS, type CurationFilter } from '../services/curationFilter';
 import {
   clearGeneratedImageCache,
   getCodecHealth,
@@ -73,6 +74,41 @@ function RecentFoldersSettings({ settings, updateSettings }: RecentFoldersSettin
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function SavedViewPresetsSettings({ settings, updateSettings }: RecentFoldersSettingsProps) {
+  const togglePreset = async (preset: CurationFilter) => {
+    const nextPresets = settings.savedViewPresets.includes(preset)
+      ? settings.savedViewPresets.filter((value) => value !== preset)
+      : [...settings.savedViewPresets, preset];
+
+    await updateSettings({ savedViewPresets: nextPresets });
+  };
+
+  return (
+    <div className="settings-group">
+      <div className="settings-group-title">Saved View Presets</div>
+      <p className="setting-help">
+        Choose which review views show up on recent folders so you can jump straight into them from
+        launch.
+      </p>
+      <div className="settings-chip-list">
+        {SAVED_VIEW_PRESET_OPTIONS.map((option) => {
+          const isActive = settings.savedViewPresets.includes(option.value);
+          return (
+            <button
+              key={option.value}
+              className={`settings-chip ${isActive ? 'active' : ''}`}
+              onClick={() => void togglePreset(option.value)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -392,6 +428,8 @@ export function SettingsPanel() {
               </label>
             </div>
           </div>
+
+          <SavedViewPresetsSettings settings={settings} updateSettings={updateSettings} />
 
           <RecentFoldersSettings settings={settings} updateSettings={updateSettings} />
 

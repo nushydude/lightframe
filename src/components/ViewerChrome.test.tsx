@@ -271,7 +271,28 @@ describe('ViewerChrome', () => {
     fireEvent.click(screen.getByLabelText('Open recent folder'));
     fireEvent.click(screen.getByText('May'));
 
-    expect(defaultProps.onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May');
+    expect(defaultProps.onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May', undefined);
+  });
+
+  it('opens recent folders into a saved preset from the overflow menu', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        recentFolders: [{ path: 'D:/Shoots/May', label: 'May', openedAt: 100 }],
+        savedViewPresets: ['rated4'],
+      },
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByLabelText('Open recent folder'));
+    const presetButtons = screen.getAllByRole('button', { name: '4+ Stars' });
+    fireEvent.click(presetButtons[presetButtons.length - 1] as HTMLButtonElement);
+
+    expect(defaultProps.onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May', 'rated4');
   });
 
   it('stores overflow action usage so the menu can learn over time', async () => {
@@ -391,7 +412,7 @@ describe('ViewerChrome', () => {
     expect(screen.queryByLabelText('More controls')).not.toBeInTheDocument();
   });
 
-  it('toggles the favorites-only filter from the toolbar', () => {
+  it('applies a curation filter from the toolbar menu', () => {
     const folderImages = [
       {
         path: 'C:/photo1.jpg',
@@ -416,7 +437,8 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    fireEvent.click(screen.getByLabelText('Show only favorites'));
+    fireEvent.click(screen.getByLabelText('Filter images'));
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }));
 
     expect(useViewerStore.getState().showOnlyFavorites).toBe(true);
     expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['C:/photo2.jpg']);

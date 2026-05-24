@@ -20,7 +20,9 @@ import {
   showTransferResultMessage,
   transferImagesToDestination,
 } from '../services/viewerActions';
+import { getCurationFilterCountLabel } from '../services/curationFilter';
 import type { QuickDestination } from '../types/settings';
+import { CurationFilterMenu } from './CurationFilterMenu';
 import { ToolbarIcon } from './ToolbarIcon';
 
 const GRID_ITEM_SIZE = 140;
@@ -57,11 +59,11 @@ export function ContactSheet({
     isFullscreen,
     rotation,
     pendingCropPreview,
-    showOnlyFavorites,
+    curationFilter,
     setCurrentIndex,
     setFullscreen,
     setViewMode,
-    setShowOnlyFavorites,
+    setCurationFilter,
     setShowSettings,
     enterCompareMode,
     enterCropMode,
@@ -458,7 +460,7 @@ export function ContactSheet({
         <div className="header-left">
           <h2>Contact Sheet</h2>
           <span className="image-count">
-            {images.length} {showOnlyFavorites ? 'favorites' : 'images'}
+            {images.length} {getCurationFilterCountLabel(curationFilter)}
           </span>
           {selectedPaths.length > 0 && (
             <span className="image-count">{selectedPaths.length} selected</span>
@@ -514,18 +516,7 @@ export function ContactSheet({
               </span>
               <span className="top-bar-btn-label">Favorite</span>
             </button>
-            <button
-              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${showOnlyFavorites ? 'active' : ''}`}
-              onClick={() => setShowOnlyFavorites(!showOnlyFavorites)}
-              data-tooltip={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
-              title={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
-              aria-label={showOnlyFavorites ? 'Show all images' : 'Show only favorites'}
-            >
-              <span className="top-bar-btn-icon">
-                <ToolbarIcon name="favorites" />
-              </span>
-              <span className="top-bar-btn-label">Only</span>
-            </button>
+            <CurationFilterMenu currentFilter={curationFilter} onSelect={setCurationFilter} />
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
               onClick={() => void handleStartSlideshow()}
