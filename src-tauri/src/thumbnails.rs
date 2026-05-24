@@ -435,15 +435,15 @@ pub fn get_or_create_preview(
         }
     }
 
+    let preview_started_at = Instant::now();
     if native_codecs::should_prefer_native_preview(file_path) {
-        let native_preview_started_at = Instant::now();
         match native_codecs::generate_preview_jpeg(file_path, max_dimension) {
             Ok(jpeg_bytes) => {
                 NATIVE_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
                 record_runtime_duration(
                     &NATIVE_PREVIEW_TOTAL_MS,
                     &NATIVE_PREVIEW_MAX_MS,
-                    elapsed_millis(native_preview_started_at),
+                    elapsed_millis(preview_started_at),
                 );
                 return cache_asset_bytes(
                     cache_root,
@@ -468,7 +468,6 @@ pub fn get_or_create_preview(
         }
     }
 
-    let rust_preview_started_at = Instant::now();
     let img = match image::open(file_path) {
         Ok(img) => img,
         Err(error) => {
@@ -478,7 +477,7 @@ pub fn get_or_create_preview(
                 record_runtime_duration(
                     &PLACEHOLDER_PREVIEW_TOTAL_MS,
                     &PLACEHOLDER_PREVIEW_MAX_MS,
-                    elapsed_millis(rust_preview_started_at),
+                    elapsed_millis(preview_started_at),
                 );
                 return cache_asset_text(
                     cache_root,
@@ -523,7 +522,7 @@ pub fn get_or_create_preview(
     record_runtime_duration(
         &RUST_PREVIEW_TOTAL_MS,
         &RUST_PREVIEW_MAX_MS,
-        elapsed_millis(rust_preview_started_at),
+        elapsed_millis(preview_started_at),
     );
     cache_asset_bytes(
         cache_root,
