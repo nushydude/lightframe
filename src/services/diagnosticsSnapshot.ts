@@ -57,16 +57,21 @@ export interface DiagnosticsSnapshot {
     windowBoundsByDisplayCount: number;
   };
   currentImageMetadata: ImageMetadata | null;
-  codecHealth: CodecHealthReport;
+  codecHealth: CodecHealthReport | null;
+  probeErrors: {
+    codecHealth?: string;
+    currentImageMetadata?: string;
+  };
   telemetry: PerformanceTelemetrySnapshot;
 }
 
 export interface BuildDiagnosticsSnapshotOptions {
   settings: AppSettings;
   viewer: ViewerDiagnosticsState;
-  codecHealth: CodecHealthReport;
+  codecHealth: CodecHealthReport | null;
   telemetry: PerformanceTelemetrySnapshot;
   currentImageMetadata: ImageMetadata | null;
+  probeErrors?: DiagnosticsSnapshot['probeErrors'];
   windowLabel: string;
   collectedAt?: Date;
 }
@@ -123,6 +128,7 @@ export function buildDiagnosticsSnapshot(
     },
     currentImageMetadata: options.currentImageMetadata,
     codecHealth: options.codecHealth,
+    probeErrors: options.probeErrors ?? {},
     telemetry: options.telemetry,
   };
 }

@@ -1176,24 +1176,47 @@ pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(),
     fs::write(&path, content).map_err(|e| format!("Failed to write settings: {}", e))
 }
 
-#[tauri::command]
-pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    let normalized_path = path.trim().to_string();
+fn diagnostics_export_path(path: &str) -> Result<PathBuf, String> {
+    let normalized_path = path.trim();
     if normalized_path.is_empty() {
         return Err("path must not be empty".to_string());
     }
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let target_path = PathBuf::from(&normalized_path);
-        if let Some(parent) = target_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to prepare destination folder: {}", e))?;
-        }
+    let target_path = PathBuf::from(normalized_path);
+    let file_name = target_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Diagnostics path must include a valid file name".to_string())?;
 
-        fs::write(&target_path, content).map_err(|e| format!("Failed to write text file: {}", e))
+    if !file_name.starts_with("lightframe-diagnostics-") || !file_name.ends_with(".json") {
+        return Err(
+            "Diagnostics export must use a lightframe-diagnostics-*.json file name".to_string()
+        );
+    }
+
+    let parent = target_path.parent().ok_or_else(|| {
+        "Diagnostics export must target a file inside an existing folder".to_string()
+    })?;
+    if !parent.is_dir() {
+        return Err("Diagnostics export folder does not exist".to_string());
+    }
+
+    Ok(target_path)
+}
+
+#[tauri::command]
+pub async fn save_diagnostics_snapshot(path: String, content: String) -> Result<(), String> {
+    let target_path = diagnostics_export_path(&path)?;
+    if content.len() > 4 * 1024 * 1024 {
+        return Err("Diagnostics export is unexpectedly large".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        fs::write(&target_path, content)
+            .map_err(|e| format!("Failed to save diagnostics snapshot: {}", e))
     })
     .await
-    .map_err(|err| format!("Write text file worker failed: {}", err))?
+    .map_err(|err| format!("Diagnostics export worker failed: {}", err))?
 }
 
 #[tauri::command]

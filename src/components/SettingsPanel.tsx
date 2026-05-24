@@ -19,7 +19,7 @@ import {
   openSettings,
   openUrlExternal,
   retryNativeCodecs,
-  writeTextFile,
+  saveDiagnosticsSnapshot,
   type CodecHealthReport,
   type GeneratedCacheCommandScope,
 } from '../services/tauriCommands';
@@ -669,10 +669,26 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
   const [isBusy, setIsBusy] = React.useState(false);
 
   const collectDiagnosticsText = React.useCallback(async () => {
-    const [freshCodecHealth, currentImageMetadata] = await Promise.all([
-      codecHealth ? Promise.resolve(codecHealth) : getCodecHealth(),
-      currentImagePath ? getImageMetadata(currentImagePath) : Promise.resolve(null),
-    ]);
+    const probeErrors: { codecHealth?: string; currentImageMetadata?: string } = {};
+
+    let freshCodecHealth = codecHealth;
+    if (!freshCodecHealth) {
+      try {
+        freshCodecHealth = await getCodecHealth();
+      } catch (error) {
+        probeErrors.codecHealth = error instanceof Error ? error.message : String(error);
+        freshCodecHealth = null;
+      }
+    }
+
+    let currentImageMetadata = null;
+    if (currentImagePath) {
+      try {
+        currentImageMetadata = await getImageMetadata(currentImagePath);
+      } catch (error) {
+        probeErrors.currentImageMetadata = error instanceof Error ? error.message : String(error);
+      }
+    }
 
     const snapshot = buildDiagnosticsSnapshot({
       settings,
@@ -694,6 +710,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
       codecHealth: freshCodecHealth,
       telemetry: getPerformanceTelemetrySnapshot(),
       currentImageMetadata,
+      probeErrors,
       windowLabel: getCurrentWindow().label,
     });
 
@@ -741,7 +758,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
         return;
       }
 
-      await writeTextFile(outputPath, await collectDiagnosticsText());
+      await saveDiagnosticsSnapshot(outputPath, await collectDiagnosticsText());
       setStatus('Diagnostics saved');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));

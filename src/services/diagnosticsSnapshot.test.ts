@@ -145,7 +145,8 @@ describe('diagnosticsSnapshot', () => {
     expect(snapshot.settings.performanceMode).toBe('fast');
     expect(snapshot.settings.recentFoldersCount).toBe(1);
     expect(snapshot.currentImageMetadata?.format).toBe('JPEG');
-    expect(snapshot.codecHealth.entries[0]?.label).toBe('HEIF');
+    expect(snapshot.codecHealth?.entries[0]?.label).toBe('HEIF');
+    expect(snapshot.probeErrors).toEqual({});
     expect(snapshot.telemetry.latencies.tileGeneration.currentMs).toBe(9);
   });
 
@@ -171,6 +172,7 @@ describe('diagnosticsSnapshot', () => {
         codecHealth,
         telemetry,
         currentImageMetadata: null,
+        probeErrors: { currentImageMetadata: 'missing file' },
         windowLabel: 'secondary',
         collectedAt: new Date('2026-05-24T03:00:00.000Z'),
       })
@@ -181,6 +183,7 @@ describe('diagnosticsSnapshot', () => {
       app: { name: 'LightFrame' },
       viewer: { currentImagePath: null, viewMode: 'viewer' },
       currentImageMetadata: null,
+      probeErrors: { currentImageMetadata: 'missing file' },
     });
   });
 
