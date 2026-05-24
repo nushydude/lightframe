@@ -1177,6 +1177,26 @@ pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(),
 }
 
 #[tauri::command]
+pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
+    let normalized_path = path.trim().to_string();
+    if normalized_path.is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let target_path = PathBuf::from(&normalized_path);
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to prepare destination folder: {}", e))?;
+        }
+
+        fs::write(&target_path, content).map_err(|e| format!("Failed to write text file: {}", e))
+    })
+    .await
+    .map_err(|err| format!("Write text file worker failed: {}", err))?
+}
+
+#[tauri::command]
 pub async fn read_curation_metadata(
     app: AppHandle,
 ) -> Result<HashMap<String, ImageCuration>, String> {
