@@ -57,6 +57,23 @@ const telemetry: PerformanceTelemetrySnapshot = {
     fullResolutionReadyMs: 24,
     visibleSourceUpdatedMs: 10,
   },
+  startupPhases: {
+    settingsAndCurationLoadMs: 10,
+    cliResolveMs: 11,
+    initialImageOpenMs: 12,
+    firstImageKnownMs: 1,
+  },
+  folderOpenPhases: {
+    source: 'scan',
+    indexReadMs: 6,
+    reconcileMs: 13,
+    firstImageVisibleMs: 5,
+    backgroundRefreshMs: null,
+  },
+  sessionSummary: {
+    startup: 'Startup looked healthy; first image was ready in 1 ms.',
+    folderOpen: 'live scan looked healthy; first image was visible in 5 ms.',
+  },
   latencies: {
     startupToFirstImageKnown: { currentMs: 1, p50Ms: 1, p95Ms: 1, sampleCount: 1 },
     imageSelectToPreviewVisible: { currentMs: 2, p50Ms: 2, p95Ms: 2, sampleCount: 1 },

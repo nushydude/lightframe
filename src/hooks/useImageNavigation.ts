@@ -22,6 +22,10 @@ import {
   beginFolderOpenTelemetry,
   clearPendingFolderOpenTelemetry,
   measurePerformanceSpan,
+  recordFolderOpenBackgroundRefreshTelemetry,
+  recordFolderOpenIndexReadTelemetry,
+  recordFolderOpenReconcileTelemetry,
+  recordFolderOpenSourceTelemetry,
   setNextImageSelectionKind,
 } from '../services/performanceTelemetry';
 import { useViewerStore } from '../state/viewerStore';
@@ -149,6 +153,10 @@ function hasMatchingPath(paths: Set<string>, targetPath: string): boolean {
   return false;
 }
 
+function getNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
 /** Hook for image navigation and file opening */
 export function useImageNavigation() {
   const emptyFolderOpenMessage = 'No supported images found in the selected folder';
@@ -269,9 +277,11 @@ export function useImageNavigation() {
   const readCachedFolderImages = useCallback(
     async (nextFolderPath: string) => {
       try {
+        const indexReadStartedAt = getNow();
         const cachedResult = await measurePerformanceSpan('folderIndexRead', () =>
           readFolderIndex(nextFolderPath)
         );
+        recordFolderOpenIndexReadTelemetry(getNow() - indexReadStartedAt);
         const folderImages = Array.isArray(cachedResult) ? cachedResult : [];
         return applyActiveSortOrder(folderImages);
       } catch (err) {
@@ -297,11 +307,13 @@ export function useImageNavigation() {
       }
 
       setNextImageSelectionKind('folder-open');
+      const reconcileStartedAt = getNow();
       applyFolderImages(folderImages, {
         emptyMessage: emptyFolderOpenMessage,
         preferredIndex: 0,
         preferredPath: null,
       });
+      recordFolderOpenReconcileTelemetry(getNow() - reconcileStartedAt);
 
       await setFolderWindowTitle(nextFolderPath);
       if (!isCurrentGeneration(loadGeneration)) {
@@ -317,6 +329,7 @@ export function useImageNavigation() {
   const startBackgroundFolderRefresh = useCallback(
     (loadGeneration: number, nextFolderPath: string) => {
       void (async () => {
+        const backgroundRefreshStartedAt = getNow();
         try {
           const verifiedImages = await scanIndexedFolder(loadGeneration, nextFolderPath);
           if (!verifiedImages || !isCurrentGeneration(loadGeneration)) {
@@ -332,6 +345,7 @@ export function useImageNavigation() {
             preferredIndex: state.currentIndex >= 0 ? state.currentIndex : 0,
             preferredPath: state.currentImagePath,
           });
+          recordFolderOpenBackgroundRefreshTelemetry(getNow() - backgroundRefreshStartedAt);
         } catch (err) {
           console.error('Failed to refresh folder:', err);
           if (isCurrentGeneration(loadGeneration)) {
@@ -502,6 +516,7 @@ export function useImageNavigation() {
         }
 
         if (cachedImages.length > 0) {
+          recordFolderOpenSourceTelemetry('cache');
           const appliedCachedImages = await applyOpenedFolderImages(
             loadGeneration,
             nextFolderPath,
@@ -517,6 +532,7 @@ export function useImageNavigation() {
           return;
         }
 
+        recordFolderOpenSourceTelemetry('scan');
         const folderImages = await scanIndexedFolder(loadGeneration, nextFolderPath);
         if (!folderImages || !isCurrentGeneration(loadGeneration)) {
           clearPendingFolderOpenTelemetry(loadGeneration);

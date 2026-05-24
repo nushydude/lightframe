@@ -23,6 +23,8 @@ export type TelemetryLatencyMetricKey =
   | 'previewGeneration'
   | 'tileGeneration';
 
+type FolderOpenSource = 'cache' | 'scan';
+
 type CounterKey =
   | 'thumbnailCacheHits'
   | 'thumbnailCacheMisses'
@@ -87,6 +89,19 @@ type InternalTelemetryState = {
   pendingFolderOpen: PendingFolderOpen | null;
   pendingNavigationKeydown: PendingNavigationKeydown | null;
   latencies: Record<TelemetryLatencyMetricKey, RollingLatencySummary>;
+  startupPhases: {
+    settingsAndCurationLoadMs: number | null;
+    cliResolveMs: number | null;
+    initialImageOpenMs: number | null;
+    firstImageKnownMs: number | null;
+  };
+  folderOpenPhases: {
+    source: FolderOpenSource | null;
+    indexReadMs: number | null;
+    reconcileMs: number | null;
+    firstImageVisibleMs: number | null;
+    backgroundRefreshMs: number | null;
+  };
   counters: Record<CounterKey, number>;
   gauges: Record<GaugeKey, number>;
 };
@@ -114,6 +129,23 @@ export interface PerformanceTelemetrySnapshot {
     previewVisibleMs: number | null;
     fullResolutionReadyMs: number | null;
     visibleSourceUpdatedMs: number | null;
+  };
+  startupPhases: {
+    settingsAndCurationLoadMs: number | null;
+    cliResolveMs: number | null;
+    initialImageOpenMs: number | null;
+    firstImageKnownMs: number | null;
+  };
+  folderOpenPhases: {
+    source: FolderOpenSource | null;
+    indexReadMs: number | null;
+    reconcileMs: number | null;
+    firstImageVisibleMs: number | null;
+    backgroundRefreshMs: number | null;
+  };
+  sessionSummary: {
+    startup: string | null;
+    folderOpen: string | null;
   };
   latencies: Record<TelemetryLatencyMetricKey, TelemetryLatencySummarySnapshot>;
   caches: {
@@ -195,6 +227,25 @@ function createLatencySummaries(): Record<TelemetryLatencyMetricKey, RollingLate
   };
 }
 
+function createStartupPhasesState(): InternalTelemetryState['startupPhases'] {
+  return {
+    settingsAndCurationLoadMs: null,
+    cliResolveMs: null,
+    initialImageOpenMs: null,
+    firstImageKnownMs: null,
+  };
+}
+
+function createFolderOpenPhasesState(): InternalTelemetryState['folderOpenPhases'] {
+  return {
+    source: null,
+    indexReadMs: null,
+    reconcileMs: null,
+    firstImageVisibleMs: null,
+    backgroundRefreshMs: null,
+  };
+}
+
 function createCounterState(): Record<CounterKey, number> {
   return {
     thumbnailCacheHits: 0,
@@ -236,6 +287,8 @@ function createInitialState(): InternalTelemetryState {
     pendingFolderOpen: null,
     pendingNavigationKeydown: null,
     latencies: createLatencySummaries(),
+    startupPhases: createStartupPhasesState(),
+    folderOpenPhases: createFolderOpenPhasesState(),
     counters: createCounterState(),
     gauges: createGaugeState(),
   };
@@ -291,6 +344,84 @@ let snapshotDirty = true;
 let cachedSnapshot: PerformanceTelemetrySnapshot = buildSnapshot();
 let pendingNotifyHandle: number | null = null;
 
+function formatPhaseDuration(durationMs: number | null): string {
+  if (durationMs == null) {
+    return '--';
+  }
+
+  return `${Math.round(durationMs)} ms`;
+}
+
+function buildStartupSummary(
+  startupPhases: InternalTelemetryState['startupPhases']
+): string | null {
+  if (startupPhases.firstImageKnownMs == null) {
+    return null;
+  }
+
+  const candidates: Array<{ label: string; durationMs: number | null }> = [
+    { label: 'settings and curation load', durationMs: startupPhases.settingsAndCurationLoadMs },
+    { label: 'CLI/open-file resolution', durationMs: startupPhases.cliResolveMs },
+    { label: 'startup image open', durationMs: startupPhases.initialImageOpenMs },
+  ];
+  const timedCandidates = candidates.filter(
+    (candidate): candidate is { label: string; durationMs: number } => candidate.durationMs != null
+  );
+
+  const dominantPhase = timedCandidates.reduce<{ label: string; durationMs: number } | null>(
+    (best, candidate) => {
+      if (!best || candidate.durationMs > best.durationMs) {
+        return candidate;
+      }
+      return best;
+    },
+    null
+  );
+
+  if (dominantPhase && dominantPhase.durationMs >= 150) {
+    return `Startup was led by ${dominantPhase.label} (${formatPhaseDuration(
+      dominantPhase.durationMs
+    )}); first image settled in ${formatPhaseDuration(startupPhases.firstImageKnownMs)}.`;
+  }
+
+  return `Startup looked healthy; first image was ready in ${formatPhaseDuration(
+    startupPhases.firstImageKnownMs
+  )}.`;
+}
+
+function buildFolderOpenSummary(
+  folderOpenPhases: InternalTelemetryState['folderOpenPhases']
+): string | null {
+  if (folderOpenPhases.firstImageVisibleMs == null) {
+    return null;
+  }
+
+  const sourceLabel =
+    folderOpenPhases.source === 'cache'
+      ? 'cached index'
+      : folderOpenPhases.source === 'scan'
+        ? 'live scan'
+        : 'folder open';
+
+  if (folderOpenPhases.source === 'cache' && folderOpenPhases.backgroundRefreshMs != null) {
+    return `${sourceLabel} showed the first image in ${formatPhaseDuration(
+      folderOpenPhases.firstImageVisibleMs
+    )}; background refresh finished in ${formatPhaseDuration(
+      folderOpenPhases.backgroundRefreshMs
+    )}.`;
+  }
+
+  if (folderOpenPhases.reconcileMs != null && folderOpenPhases.reconcileMs >= 100) {
+    return `${sourceLabel} was visible in ${formatPhaseDuration(
+      folderOpenPhases.firstImageVisibleMs
+    )}, with sort/reconcile taking ${formatPhaseDuration(folderOpenPhases.reconcileMs)}.`;
+  }
+
+  return `${sourceLabel} looked healthy; first image was visible in ${formatPhaseDuration(
+    folderOpenPhases.firstImageVisibleMs
+  )}.`;
+}
+
 function buildSnapshot(): PerformanceTelemetrySnapshot {
   return {
     enabled: state.enabled,
@@ -302,6 +433,23 @@ function buildSnapshot(): PerformanceTelemetrySnapshot {
       previewVisibleMs: state.currentImage.previewVisibleMs,
       fullResolutionReadyMs: state.currentImage.fullResolutionReadyMs,
       visibleSourceUpdatedMs: state.currentImage.visibleSourceUpdatedMs,
+    },
+    startupPhases: {
+      settingsAndCurationLoadMs: state.startupPhases.settingsAndCurationLoadMs,
+      cliResolveMs: state.startupPhases.cliResolveMs,
+      initialImageOpenMs: state.startupPhases.initialImageOpenMs,
+      firstImageKnownMs: state.startupPhases.firstImageKnownMs,
+    },
+    folderOpenPhases: {
+      source: state.folderOpenPhases.source,
+      indexReadMs: state.folderOpenPhases.indexReadMs,
+      reconcileMs: state.folderOpenPhases.reconcileMs,
+      firstImageVisibleMs: state.folderOpenPhases.firstImageVisibleMs,
+      backgroundRefreshMs: state.folderOpenPhases.backgroundRefreshMs,
+    },
+    sessionSummary: {
+      startup: buildStartupSummary(state.startupPhases),
+      folderOpen: buildFolderOpenSummary(state.folderOpenPhases),
     },
     latencies: {
       startupToFirstImageKnown: state.latencies.startupToFirstImageKnown.snapshot(),
@@ -419,6 +567,8 @@ function updateGauge(gauge: GaugeKey, value: number): void {
 
 function resetMutableMetrics(): void {
   state.latencies = createLatencySummaries();
+  state.startupPhases = createStartupPhasesState();
+  state.folderOpenPhases = createFolderOpenPhasesState();
   state.counters = createCounterState();
   state.gauges = createGaugeState();
   state.currentImage = createCurrentImageState();
@@ -443,6 +593,7 @@ const noopPerformanceTelemetrySpan: PerformanceTelemetrySpan = {
 
 export function markPerformanceTelemetryAppStart(): void {
   state.appStartedAt = now();
+  state.startupPhases = createStartupPhasesState();
 }
 
 export function setPerformanceTelemetryEnabled(enabled: boolean): void {
@@ -550,6 +701,7 @@ export function beginFolderOpenTelemetry(token = 0): void {
     return;
   }
 
+  state.folderOpenPhases = createFolderOpenPhasesState();
   state.pendingFolderOpen = {
     token,
     startedAt: now(),
@@ -592,7 +744,72 @@ export function recordStartupFirstImageKnownTelemetry(): void {
   }
 
   state.startupMetricRecorded = true;
-  recordLatency('startupToFirstImageKnown', now() - state.appStartedAt);
+  const durationMs = now() - state.appStartedAt;
+  state.startupPhases.firstImageKnownMs = durationMs;
+  recordLatency('startupToFirstImageKnown', durationMs);
+}
+
+export function recordStartupSettingsAndCurationLoadTelemetry(durationMs: number): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.startupPhases.settingsAndCurationLoadMs = durationMs;
+  markSnapshotDirty();
+}
+
+export function recordStartupCliResolveTelemetry(durationMs: number): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.startupPhases.cliResolveMs = durationMs;
+  markSnapshotDirty();
+}
+
+export function recordStartupInitialImageOpenTelemetry(durationMs: number): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.startupPhases.initialImageOpenMs = durationMs;
+  markSnapshotDirty();
+}
+
+export function recordFolderOpenSourceTelemetry(source: FolderOpenSource): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.folderOpenPhases.source = source;
+  markSnapshotDirty();
+}
+
+export function recordFolderOpenIndexReadTelemetry(durationMs: number): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.folderOpenPhases.indexReadMs = durationMs;
+  markSnapshotDirty();
+}
+
+export function recordFolderOpenReconcileTelemetry(durationMs: number): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.folderOpenPhases.reconcileMs = durationMs;
+  markSnapshotDirty();
+}
+
+export function recordFolderOpenBackgroundRefreshTelemetry(durationMs: number): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  state.folderOpenPhases.backgroundRefreshMs = durationMs;
+  markSnapshotDirty();
 }
 
 export function recordImageSelectedTelemetry(path: string): void {
@@ -690,7 +907,9 @@ export function recordPreviewVisibleTelemetry(path: string): void {
   recordLatency('imageSelectToPreviewVisible', durationMs);
 
   if (state.pendingFolderOpen?.targetPath === path) {
-    recordLatency('folderOpenToFirstImageVisible', now() - state.pendingFolderOpen.startedAt);
+    const folderOpenDurationMs = now() - state.pendingFolderOpen.startedAt;
+    state.folderOpenPhases.firstImageVisibleMs = folderOpenDurationMs;
+    recordLatency('folderOpenToFirstImageVisible', folderOpenDurationMs);
     state.pendingFolderOpen = null;
   }
 }
@@ -713,7 +932,9 @@ export function recordFullResolutionReadyTelemetry(path: string): void {
   }
 
   if (state.pendingFolderOpen?.targetPath === path) {
-    recordLatency('folderOpenToFirstImageVisible', now() - state.pendingFolderOpen.startedAt);
+    const folderOpenDurationMs = now() - state.pendingFolderOpen.startedAt;
+    state.folderOpenPhases.firstImageVisibleMs = folderOpenDurationMs;
+    recordLatency('folderOpenToFirstImageVisible', folderOpenDurationMs);
     state.pendingFolderOpen = null;
   }
 

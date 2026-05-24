@@ -23,6 +23,20 @@ function formatMilliseconds(value: number | null): string {
   return `${Math.round(value)} ms`;
 }
 
+function formatFolderOpenSource(
+  source: PerformanceTelemetrySnapshot['folderOpenPhases']['source']
+): string {
+  if (source === 'cache') {
+    return 'Cached index';
+  }
+
+  if (source === 'scan') {
+    return 'Live scan';
+  }
+
+  return '--';
+}
+
 function formatRate(value: number | null): string {
   if (value == null) {
     return '--';
@@ -118,6 +132,20 @@ export function PerformanceTelemetryOverlay({
       </div>
 
       <div className="performance-telemetry-section">
+        <h3>Session Summary</h3>
+        <dl>
+          <div>
+            <dt>Startup</dt>
+            <dd>{resolvedSnapshot.sessionSummary.startup ?? '--'}</dd>
+          </div>
+          <div>
+            <dt>Folder open</dt>
+            <dd>{resolvedSnapshot.sessionSummary.folderOpen ?? '--'}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="performance-telemetry-section">
         <h3>Current Image</h3>
         <dl>
           <div>
@@ -148,6 +176,54 @@ export function PerformanceTelemetryOverlay({
           <div>
             <dt>Src update</dt>
             <dd>{formatMilliseconds(resolvedSnapshot.currentImage.visibleSourceUpdatedMs)}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="performance-telemetry-section">
+        <h3>Startup Phases</h3>
+        <dl>
+          <div>
+            <dt>Settings + curation</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.startupPhases.settingsAndCurationLoadMs)}</dd>
+          </div>
+          <div>
+            <dt>CLI resolve</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.startupPhases.cliResolveMs)}</dd>
+          </div>
+          <div>
+            <dt>Startup image open</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.startupPhases.initialImageOpenMs)}</dd>
+          </div>
+          <div>
+            <dt>First image known</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.startupPhases.firstImageKnownMs)}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="performance-telemetry-section">
+        <h3>Last Folder Open</h3>
+        <dl>
+          <div>
+            <dt>Source</dt>
+            <dd>{formatFolderOpenSource(resolvedSnapshot.folderOpenPhases.source)}</dd>
+          </div>
+          <div>
+            <dt>Index read</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.folderOpenPhases.indexReadMs)}</dd>
+          </div>
+          <div>
+            <dt>Sort + reconcile</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.folderOpenPhases.reconcileMs)}</dd>
+          </div>
+          <div>
+            <dt>First visible</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.folderOpenPhases.firstImageVisibleMs)}</dd>
+          </div>
+          <div>
+            <dt>Background refresh</dt>
+            <dd>{formatMilliseconds(resolvedSnapshot.folderOpenPhases.backgroundRefreshMs)}</dd>
           </div>
         </dl>
       </div>
