@@ -232,6 +232,11 @@ export async function writeSettings(settings: AppSettings): Promise<void> {
   return invoke('write_settings', { settings: settingsToRust(settings) });
 }
 
+/** Save a diagnostics snapshot JSON file */
+export async function saveDiagnosticsSnapshot(path: string, content: string): Promise<void> {
+  return invoke('save_diagnostics_snapshot', { path, content });
+}
+
 /** Read persisted curation metadata (favorite + rating) for scanned images */
 export async function readCurationMetadata(): Promise<Record<string, ImageCuration>> {
   return invoke<Record<string, ImageCuration>>('read_curation_metadata');

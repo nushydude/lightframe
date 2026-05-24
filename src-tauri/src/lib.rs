@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_image_tile,
             commands::read_settings,
             commands::write_settings,
+            commands::save_diagnostics_snapshot,
             commands::read_curation_metadata,
             commands::write_image_curation,
             commands::write_image_curation_batch,

@@ -1,15 +1,25 @@
 import React from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
 import { SAVED_VIEW_PRESET_OPTIONS, type CurationFilter } from '../services/curationFilter';
 import {
+  buildDiagnosticsFileName,
+  buildDiagnosticsSnapshot,
+  copyDiagnosticsText,
+  serializeDiagnosticsSnapshot,
+} from '../services/diagnosticsSnapshot';
+import { getPerformanceTelemetrySnapshot } from '../services/performanceTelemetry';
+import {
   clearGeneratedImageCache,
   getCodecHealth,
+  getImageMetadata,
   openSettings,
   openUrlExternal,
   retryNativeCodecs,
+  saveDiagnosticsSnapshot,
   type CodecHealthReport,
   type GeneratedCacheCommandScope,
 } from '../services/tauriCommands';
@@ -619,6 +629,171 @@ function CodecHealthSettings() {
           Clear All Generated
         </button>
       </div>
+      <DiagnosticsSettings codecHealth={codecHealth} />
+    </div>
+  );
+}
+
+function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport | null }) {
+  const settings = useSettingsStore((state) => state.settings);
+  const {
+    currentImagePath,
+    folderPath,
+    currentIndex,
+    images,
+    allImages,
+    viewMode,
+    zoomMode,
+    zoomLevel,
+    isFullscreen,
+    isSlideshowActive,
+    isFolderScanning,
+    curationFilter,
+    showPerformanceTelemetry,
+  } = useViewerStore((state) => ({
+    currentImagePath: state.currentImagePath,
+    folderPath: state.folderPath,
+    currentIndex: state.currentIndex,
+    images: state.images,
+    allImages: state.allImages,
+    viewMode: state.viewMode,
+    zoomMode: state.zoomMode,
+    zoomLevel: state.zoomLevel,
+    isFullscreen: state.isFullscreen,
+    isSlideshowActive: state.isSlideshowActive,
+    isFolderScanning: state.isFolderScanning,
+    curationFilter: state.curationFilter,
+    showPerformanceTelemetry: state.showPerformanceTelemetry,
+  }));
+  const [status, setStatus] = React.useState<string | null>(null);
+  const [isBusy, setIsBusy] = React.useState(false);
+
+  const collectDiagnosticsText = React.useCallback(async () => {
+    const probeErrors: { codecHealth?: string; currentImageMetadata?: string } = {};
+
+    let freshCodecHealth = codecHealth;
+    if (!freshCodecHealth) {
+      try {
+        freshCodecHealth = await getCodecHealth();
+      } catch (error) {
+        probeErrors.codecHealth = error instanceof Error ? error.message : String(error);
+        freshCodecHealth = null;
+      }
+    }
+
+    let currentImageMetadata = null;
+    if (currentImagePath) {
+      try {
+        currentImageMetadata = await getImageMetadata(currentImagePath);
+      } catch (error) {
+        probeErrors.currentImageMetadata = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    const snapshot = buildDiagnosticsSnapshot({
+      settings,
+      viewer: {
+        currentImagePath,
+        folderPath,
+        currentIndex,
+        visibleImageCount: images.length,
+        folderImageCount: allImages.length > 0 ? allImages.length : images.length,
+        viewMode,
+        zoomMode,
+        zoomLevel,
+        isFullscreen,
+        isSlideshowActive,
+        isFolderScanning,
+        curationFilter,
+        showPerformanceTelemetry,
+      },
+      codecHealth: freshCodecHealth,
+      telemetry: getPerformanceTelemetrySnapshot(),
+      currentImageMetadata,
+      probeErrors,
+      windowLabel: getCurrentWindow().label,
+    });
+
+    return serializeDiagnosticsSnapshot(snapshot);
+  }, [
+    allImages.length,
+    codecHealth,
+    curationFilter,
+    currentImagePath,
+    currentIndex,
+    folderPath,
+    images.length,
+    isFolderScanning,
+    isFullscreen,
+    isSlideshowActive,
+    settings,
+    showPerformanceTelemetry,
+    viewMode,
+    zoomLevel,
+    zoomMode,
+  ]);
+
+  const handleCopyDiagnostics = async () => {
+    setIsBusy(true);
+    setStatus(null);
+    try {
+      await copyDiagnosticsText(await collectDiagnosticsText());
+      setStatus('Diagnostics copied');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleSaveDiagnostics = async () => {
+    setIsBusy(true);
+    setStatus(null);
+    try {
+      const outputPath = await save({
+        defaultPath: buildDiagnosticsFileName(),
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!outputPath) {
+        return;
+      }
+
+      await saveDiagnosticsSnapshot(outputPath, await collectDiagnosticsText());
+      setStatus('Diagnostics saved');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  return (
+    <div className="settings-group">
+      <div className="settings-group-title">Diagnostics</div>
+      <p className="setting-help">
+        Capture a support snapshot with app version, active settings, codec health, cache/runtime
+        stats, current image metadata, and the latest performance telemetry.
+      </p>
+      <div className="setting-row">
+        <span className="setting-label">Support snapshot</span>
+        <div className="setting-button-row">
+          <button
+            className="setting-button-secondary"
+            onClick={() => void handleCopyDiagnostics()}
+            disabled={isBusy}
+          >
+            Copy Diagnostics
+          </button>
+          <button
+            className="setting-button-secondary"
+            onClick={() => void handleSaveDiagnostics()}
+            disabled={isBusy}
+          >
+            Save JSON
+          </button>
+        </div>
+      </div>
+      {status && <p className="setting-help">{status}</p>}
     </div>
   );
 }
