@@ -18,8 +18,10 @@ export type TelemetryLatencyMetricKey =
   | 'imageSelectToFullReady'
   | 'navigationKeydownToVisibleSourceUpdate'
   | 'folderOpenToFirstImageVisible'
+  | 'folderIndexRead'
   | 'folderScan'
-  | 'previewGeneration';
+  | 'previewGeneration'
+  | 'tileGeneration';
 
 type CounterKey =
   | 'thumbnailCacheHits'
@@ -186,8 +188,10 @@ function createLatencySummaries(): Record<TelemetryLatencyMetricKey, RollingLate
     imageSelectToFullReady: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
     navigationKeydownToVisibleSourceUpdate: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
     folderOpenToFirstImageVisible: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
+    folderIndexRead: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
     folderScan: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
     previewGeneration: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
+    tileGeneration: new RollingLatencySummary(LATENCY_HISTORY_LIMIT),
   };
 }
 
@@ -306,8 +310,10 @@ function buildSnapshot(): PerformanceTelemetrySnapshot {
       navigationKeydownToVisibleSourceUpdate:
         state.latencies.navigationKeydownToVisibleSourceUpdate.snapshot(),
       folderOpenToFirstImageVisible: state.latencies.folderOpenToFirstImageVisible.snapshot(),
+      folderIndexRead: state.latencies.folderIndexRead.snapshot(),
       folderScan: state.latencies.folderScan.snapshot(),
       previewGeneration: state.latencies.previewGeneration.snapshot(),
+      tileGeneration: state.latencies.tileGeneration.snapshot(),
     },
     caches: {
       thumbnail: {

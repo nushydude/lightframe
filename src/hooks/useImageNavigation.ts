@@ -269,7 +269,9 @@ export function useImageNavigation() {
   const readCachedFolderImages = useCallback(
     async (nextFolderPath: string) => {
       try {
-        const cachedResult = await readFolderIndex(nextFolderPath);
+        const cachedResult = await measurePerformanceSpan('folderIndexRead', () =>
+          readFolderIndex(nextFolderPath)
+        );
         const folderImages = Array.isArray(cachedResult) ? cachedResult : [];
         return applyActiveSortOrder(folderImages);
       } catch (err) {

@@ -25,8 +25,10 @@ const snapshot: PerformanceTelemetrySnapshot = {
       sampleCount: 6,
     },
     folderOpenToFirstImageVisible: { currentMs: 85, p50Ms: 80, p95Ms: 100, sampleCount: 3 },
+    folderIndexRead: { currentMs: 6, p50Ms: 5, p95Ms: 9, sampleCount: 4 },
     folderScan: { currentMs: 45, p50Ms: 42, p95Ms: 60, sampleCount: 5 },
     previewGeneration: { currentMs: 18, p50Ms: 16, p95Ms: 24, sampleCount: 5 },
+    tileGeneration: { currentMs: 22, p50Ms: 20, p95Ms: 30, sampleCount: 4 },
   },
   caches: {
     thumbnail: {
@@ -83,6 +85,8 @@ describe('PerformanceTelemetryOverlay', () => {
     expect(screen.getByText('Thumbnail depth')).toBeInTheDocument();
     expect(screen.getByText('Image work depth')).toBeInTheDocument();
     expect(screen.getByText('Dropped queued')).toBeInTheDocument();
+    expect(screen.getByText('Folder index read')).toBeInTheDocument();
+    expect(screen.getByText('Tile generation')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 

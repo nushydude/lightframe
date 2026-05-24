@@ -130,7 +130,9 @@ describe('performanceTelemetry', () => {
     expect(snapshot.latencies.imageSelectToFullReady.currentMs).toBe(35);
     expect(snapshot.latencies.navigationKeydownToVisibleSourceUpdate.currentMs).toBe(30);
     expect(snapshot.latencies.folderOpenToFirstImageVisible.currentMs).toBe(45);
+    expect(snapshot.latencies.folderIndexRead.sampleCount).toBe(0);
     expect(snapshot.latencies.folderScan.currentMs).toBe(15);
+    expect(snapshot.latencies.tileGeneration.sampleCount).toBe(0);
     expect(snapshot.caches.thumbnail.hitRate).toBe(0.5);
     expect(snapshot.caches.previewAssets.hitRate).toBe(0.5);
     expect(snapshot.caches.fullAssets.hitRate).toBe(0.5);
@@ -174,7 +176,9 @@ describe('performanceTelemetry', () => {
 
     const snapshot = getPerformanceTelemetrySnapshot();
     expect(snapshot.currentImage.path).toBeNull();
+    expect(snapshot.latencies.folderIndexRead.sampleCount).toBe(0);
     expect(snapshot.latencies.folderScan.sampleCount).toBe(0);
+    expect(snapshot.latencies.tileGeneration.sampleCount).toBe(0);
     expect(snapshot.caches.thumbnail.hits).toBe(0);
     expect(snapshot.caches.thumbnail.misses).toBe(0);
     expect(snapshot.caches.thumbnail.hitRate).toBeNull();
@@ -194,6 +198,27 @@ describe('performanceTelemetry', () => {
     expect(snapshot.latencies.previewGeneration.sampleCount).toBe(0);
     expect(snapshot.caches.thumbnail.hits).toBe(0);
     expect(snapshot.queues.thumbnailQueueDepth).toBe(0);
+  });
+
+  it('tracks folder index reads and tile generation spans separately', async () => {
+    let currentTime = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => currentTime);
+    setPerformanceTelemetryEnabled(true);
+
+    await measurePerformanceSpan('folderIndexRead', async () => {
+      currentTime = 12;
+      return [];
+    });
+
+    currentTime = 20;
+    await measurePerformanceSpan('tileGeneration', async () => {
+      currentTime = 29;
+      return 'tile';
+    });
+
+    const snapshot = getPerformanceTelemetrySnapshot();
+    expect(snapshot.latencies.folderIndexRead.currentMs).toBe(12);
+    expect(snapshot.latencies.tileGeneration.currentMs).toBe(9);
   });
 
   it('completes folder-open timing on full-resolution visibility and clears stale folder tokens', () => {

@@ -20,6 +20,7 @@ const {
   recordPreviewVisibleTelemetryMock,
   recordVisibleImageSourceUpdatedTelemetryMock,
   recordImageSelectedTelemetryMock,
+  measurePerformanceSpanMock,
   zoomPanState,
 } = vi.hoisted(() => ({
   getPreviewAssetMock: vi.fn(async () => 'asset://localhost/cache/preview.jpg?v=preview'),
@@ -54,6 +55,9 @@ const {
   recordPreviewVisibleTelemetryMock: vi.fn(),
   recordVisibleImageSourceUpdatedTelemetryMock: vi.fn(),
   recordImageSelectedTelemetryMock: vi.fn(),
+  measurePerformanceSpanMock: vi.fn(async (_metric: string, operation: () => Promise<unknown>) =>
+    operation()
+  ),
   zoomPanState: {
     zoomLevel: 1,
     panX: 0,
@@ -105,6 +109,7 @@ vi.mock('../services/performanceTelemetry', () => ({
   recordPreviewVisibleTelemetry: recordPreviewVisibleTelemetryMock,
   recordVisibleImageSourceUpdatedTelemetry: recordVisibleImageSourceUpdatedTelemetryMock,
   recordImageSelectedTelemetry: recordImageSelectedTelemetryMock,
+  measurePerformanceSpan: measurePerformanceSpanMock,
 }));
 
 vi.mock('../hooks/useZoomPan', () => ({
@@ -139,6 +144,9 @@ describe('ImageCanvas', () => {
       width: 512,
       height: 512,
     }));
+    measurePerformanceSpanMock.mockImplementation(
+      async (_metric: string, operation: () => Promise<unknown>) => operation()
+    );
     generatedImageAssetToUrlMock.mockImplementation(
       (asset: { file_path: string; cache_key: string }) =>
         `asset://localhost/${asset.file_path}?v=${asset.cache_key}`
