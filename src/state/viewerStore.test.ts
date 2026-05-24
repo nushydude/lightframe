@@ -2,15 +2,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useViewerStore } from './viewerStore';
 
 const {
+  confirmMock,
   saveRotatedImageMock,
   overwriteWithCropMock,
   invalidateImageAssetMock,
   invalidateThumbnailMock,
 } = vi.hoisted(() => ({
+  confirmMock: vi.fn(),
   saveRotatedImageMock: vi.fn(),
   overwriteWithCropMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
   invalidateThumbnailMock: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  confirm: confirmMock,
 }));
 
 vi.mock('../services/tauriCommands', () => ({
@@ -31,6 +37,7 @@ describe('viewerStore', () => {
     useViewerStore.getState().reset();
     useViewerStore.getState().setDefaultZoomMode('fit');
     vi.clearAllMocks();
+    confirmMock.mockResolvedValue(true);
   });
 
   it('should set current image and reset display state', () => {

@@ -1,8 +1,10 @@
 import { create } from 'zustand';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { recordImageSelectedTelemetry } from '../services/performanceTelemetry';
+import { overwriteWithCrop, saveRotatedImage } from '../services/tauriCommands';
 import {
   getCurationFilterEmptyMessage,
   isFavoriteCuration,
@@ -361,7 +363,6 @@ async function savePendingEdit(
   }
 
   if (pendingEdit.rotationDegrees !== 0) {
-    const { saveRotatedImage } = await import('../services/tauriCommands');
     await saveRotatedImage(targetPath, pendingEdit.rotationDegrees);
   }
 
@@ -373,8 +374,6 @@ async function overwritePendingCrop(
   cropRect: NormalizedCropRect,
   rotationDegrees: number
 ): Promise<boolean> {
-  const { confirm } = await import('@tauri-apps/plugin-dialog');
-  const { overwriteWithCrop } = await import('../services/tauriCommands');
   const fileName = targetPath.replace(/\\/g, '/').split('/').pop() || targetPath;
   const confirmed = await confirm(
     `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,

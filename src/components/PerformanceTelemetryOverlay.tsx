@@ -71,6 +71,11 @@ function buildRows(snapshot: PerformanceTelemetrySnapshot): TelemetryRow[] {
       ...snapshot.latencies.folderOpenToFirstImageVisible,
     },
     {
+      id: 'folder-index-read',
+      label: 'Folder index read',
+      ...snapshot.latencies.folderIndexRead,
+    },
+    {
       id: 'folder-scan',
       label: 'Folder scan',
       ...snapshot.latencies.folderScan,
@@ -79,6 +84,11 @@ function buildRows(snapshot: PerformanceTelemetrySnapshot): TelemetryRow[] {
       id: 'preview-generation',
       label: 'Preview generation',
       ...snapshot.latencies.previewGeneration,
+    },
+    {
+      id: 'tile-generation',
+      label: 'Tile generation',
+      ...snapshot.latencies.tileGeneration,
     },
   ];
 }

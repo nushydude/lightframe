@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
 import { generatedImageAssetToUrl, getImageTile } from '../services/tauriCommands';
 import { IMAGE_WORK_PRIORITY, imageWorkScheduler } from '../services/imageWorkScheduler';
+import { measurePerformanceSpan } from '../services/performanceTelemetry';
 import type { ZoomMode } from '../state/viewerStore';
 import type { ImageMetadata } from '../types/image';
 import {
@@ -248,13 +249,15 @@ export function TiledImageRenderer({
               throw createAbortError('Tile work aborted before execution.');
             }
 
-            const asset = await getImageTile(
-              filePath,
-              sourceWidth,
-              sourceHeight,
-              TILE_SIZE,
-              request.tileX,
-              request.tileY
+            const asset = await measurePerformanceSpan('tileGeneration', () =>
+              getImageTile(
+                filePath,
+                sourceWidth,
+                sourceHeight,
+                TILE_SIZE,
+                request.tileX,
+                request.tileY
+              )
             );
             if (signal.aborted) {
               throw createAbortError('Tile work aborted after execution.');
