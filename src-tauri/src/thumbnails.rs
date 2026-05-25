@@ -7,9 +7,9 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
 const THUMBNAIL_SIZE: u32 = 160;
 const THUMBNAIL_CACHE_VERSION: &str = "thumb-v3";
@@ -35,6 +35,18 @@ static RUST_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PLACEHOLDER_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PLACEHOLDER_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 static TILE_GENERATED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NATIVE_PREVIEW_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+static NATIVE_PREVIEW_MAX_MS: AtomicU64 = AtomicU64::new(0);
+static RUST_PREVIEW_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+static RUST_PREVIEW_MAX_MS: AtomicU64 = AtomicU64::new(0);
+static PLACEHOLDER_PREVIEW_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+static PLACEHOLDER_PREVIEW_MAX_MS: AtomicU64 = AtomicU64::new(0);
+static NATIVE_TILE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NATIVE_TILE_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+static NATIVE_TILE_MAX_MS: AtomicU64 = AtomicU64::new(0);
+static RUST_TILE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RUST_TILE_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+static RUST_TILE_MAX_MS: AtomicU64 = AtomicU64::new(0);
 static JPEG_TILE_SOURCE_CACHE: OnceLock<Mutex<Option<CachedJpegSource>>> = OnceLock::new();
 static RAW_NATIVE_DECODE_FAILURE_CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -108,6 +120,14 @@ pub struct GeneratedCacheSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct GeneratedAssetRuntimeTiming {
+    pub sample_count: usize,
+    pub total_ms: u64,
+    pub max_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneratedAssetRuntimeStats {
     pub thumbnail_cache_hits: usize,
     pub preview_cache_hits: usize,
@@ -119,6 +139,11 @@ pub struct GeneratedAssetRuntimeStats {
     pub placeholder_thumbnail_generations: usize,
     pub placeholder_preview_generations: usize,
     pub tile_generations: usize,
+    pub native_preview_timing: GeneratedAssetRuntimeTiming,
+    pub rust_preview_timing: GeneratedAssetRuntimeTiming,
+    pub placeholder_preview_timing: GeneratedAssetRuntimeTiming,
+    pub native_tile_timing: GeneratedAssetRuntimeTiming,
+    pub rust_tile_timing: GeneratedAssetRuntimeTiming,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +175,41 @@ impl GeneratedImageFormat {
 enum ThumbnailGenerationBackend {
     Native,
     Rust,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TileGenerationBackend {
+    Native,
+    RustJpeg,
+}
+
+fn elapsed_millis(started_at: Instant) -> u64 {
+    let elapsed = started_at.elapsed().as_millis();
+    elapsed.min(u128::from(u64::MAX)) as u64
+}
+
+fn record_runtime_duration(total_ms: &AtomicU64, max_ms: &AtomicU64, duration_ms: u64) {
+    total_ms.fetch_add(duration_ms, Ordering::Relaxed);
+
+    let mut observed = max_ms.load(Ordering::Relaxed);
+    while duration_ms > observed {
+        match max_ms.compare_exchange(observed, duration_ms, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(current) => observed = current,
+        }
+    }
+}
+
+fn timing_snapshot(
+    sample_count: usize,
+    total_ms: &AtomicU64,
+    max_ms: &AtomicU64,
+) -> GeneratedAssetRuntimeTiming {
+    GeneratedAssetRuntimeTiming {
+        sample_count,
+        total_ms: total_ms.load(Ordering::Relaxed),
+        max_ms: max_ms.load(Ordering::Relaxed),
+    }
 }
 
 pub fn resolve_source_metadata(
@@ -375,10 +435,16 @@ pub fn get_or_create_preview(
         }
     }
 
+    let preview_started_at = Instant::now();
     if native_codecs::should_prefer_native_preview(file_path) {
         match native_codecs::generate_preview_jpeg(file_path, max_dimension) {
             Ok(jpeg_bytes) => {
                 NATIVE_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
+                record_runtime_duration(
+                    &NATIVE_PREVIEW_TOTAL_MS,
+                    &NATIVE_PREVIEW_MAX_MS,
+                    elapsed_millis(preview_started_at),
+                );
                 return cache_asset_bytes(
                     cache_root,
                     cache_available,
@@ -408,6 +474,11 @@ pub fn get_or_create_preview(
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
                 remember_raw_native_decode_failure(file_path, &cache_hash);
                 PLACEHOLDER_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
+                record_runtime_duration(
+                    &PLACEHOLDER_PREVIEW_TOTAL_MS,
+                    &PLACEHOLDER_PREVIEW_MAX_MS,
+                    elapsed_millis(preview_started_at),
+                );
                 return cache_asset_text(
                     cache_root,
                     cache_available,
@@ -448,6 +519,11 @@ pub fn get_or_create_preview(
     };
 
     RUST_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
+    record_runtime_duration(
+        &RUST_PREVIEW_TOTAL_MS,
+        &RUST_PREVIEW_MAX_MS,
+        elapsed_millis(preview_started_at),
+    );
     cache_asset_bytes(
         cache_root,
         cache_available,
@@ -517,8 +593,9 @@ pub fn get_or_create_tile(
         }
     }
 
-    let jpeg_bytes = if native_codecs::should_prefer_native_detail(file_path) {
-        native_codecs::generate_region_jpeg(
+    let tile_started_at = Instant::now();
+    let (jpeg_bytes, backend) = if native_codecs::should_prefer_native_detail(file_path) {
+        let jpeg_bytes = native_codecs::generate_region_jpeg(
             file_path,
             native_codecs::NativeImageRegion {
                 x: bounds.x,
@@ -526,13 +603,26 @@ pub fn get_or_create_tile(
                 width: bounds.width,
                 height: bounds.height,
             },
-        )?
+        )?;
+        (jpeg_bytes, TileGenerationBackend::Native)
     } else {
         let source = get_cached_jpeg_tile_source(file_path, metadata)?;
-        generate_jpeg_tile(source.as_ref().as_slice(), bounds)?
+        let jpeg_bytes = generate_jpeg_tile(source.as_ref().as_slice(), bounds)?;
+        (jpeg_bytes, TileGenerationBackend::RustJpeg)
     };
 
     TILE_GENERATED_COUNT.fetch_add(1, Ordering::Relaxed);
+    let tile_duration_ms = elapsed_millis(tile_started_at);
+    match backend {
+        TileGenerationBackend::Native => {
+            NATIVE_TILE_COUNT.fetch_add(1, Ordering::Relaxed);
+            record_runtime_duration(&NATIVE_TILE_TOTAL_MS, &NATIVE_TILE_MAX_MS, tile_duration_ms);
+        }
+        TileGenerationBackend::RustJpeg => {
+            RUST_TILE_COUNT.fetch_add(1, Ordering::Relaxed);
+            record_runtime_duration(&RUST_TILE_TOTAL_MS, &RUST_TILE_MAX_MS, tile_duration_ms);
+        }
+    }
     cache_asset_bytes(
         cache_root,
         cache_available,
@@ -1005,17 +1095,48 @@ fn cache_asset_text(
 }
 
 pub fn generated_asset_runtime_stats() -> GeneratedAssetRuntimeStats {
+    let native_preview_generations = NATIVE_PREVIEW_COUNT.load(Ordering::Relaxed);
+    let rust_preview_generations = RUST_PREVIEW_COUNT.load(Ordering::Relaxed);
+    let placeholder_preview_generations = PLACEHOLDER_PREVIEW_COUNT.load(Ordering::Relaxed);
+    let native_tile_generations = NATIVE_TILE_COUNT.load(Ordering::Relaxed);
+    let rust_tile_generations = RUST_TILE_COUNT.load(Ordering::Relaxed);
+
     GeneratedAssetRuntimeStats {
         thumbnail_cache_hits: THUMBNAIL_CACHE_HIT_COUNT.load(Ordering::Relaxed),
         preview_cache_hits: PREVIEW_CACHE_HIT_COUNT.load(Ordering::Relaxed),
         tile_cache_hits: TILE_CACHE_HIT_COUNT.load(Ordering::Relaxed),
         native_thumbnail_generations: NATIVE_THUMBNAIL_COUNT.load(Ordering::Relaxed),
-        native_preview_generations: NATIVE_PREVIEW_COUNT.load(Ordering::Relaxed),
+        native_preview_generations,
         rust_thumbnail_generations: RUST_THUMBNAIL_COUNT.load(Ordering::Relaxed),
-        rust_preview_generations: RUST_PREVIEW_COUNT.load(Ordering::Relaxed),
+        rust_preview_generations,
         placeholder_thumbnail_generations: PLACEHOLDER_THUMBNAIL_COUNT.load(Ordering::Relaxed),
-        placeholder_preview_generations: PLACEHOLDER_PREVIEW_COUNT.load(Ordering::Relaxed),
+        placeholder_preview_generations,
         tile_generations: TILE_GENERATED_COUNT.load(Ordering::Relaxed),
+        native_preview_timing: timing_snapshot(
+            native_preview_generations,
+            &NATIVE_PREVIEW_TOTAL_MS,
+            &NATIVE_PREVIEW_MAX_MS,
+        ),
+        rust_preview_timing: timing_snapshot(
+            rust_preview_generations,
+            &RUST_PREVIEW_TOTAL_MS,
+            &RUST_PREVIEW_MAX_MS,
+        ),
+        placeholder_preview_timing: timing_snapshot(
+            placeholder_preview_generations,
+            &PLACEHOLDER_PREVIEW_TOTAL_MS,
+            &PLACEHOLDER_PREVIEW_MAX_MS,
+        ),
+        native_tile_timing: timing_snapshot(
+            native_tile_generations,
+            &NATIVE_TILE_TOTAL_MS,
+            &NATIVE_TILE_MAX_MS,
+        ),
+        rust_tile_timing: timing_snapshot(
+            rust_tile_generations,
+            &RUST_TILE_TOTAL_MS,
+            &RUST_TILE_MAX_MS,
+        ),
     }
 }
 

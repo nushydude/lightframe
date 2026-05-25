@@ -902,6 +902,15 @@ function CodecCacheSummary({ report }: { report: CodecHealthReport | null }) {
         Runtime {runtimeCacheHits(report)} hits / {runtimeNativeGenerations(report)} native /{' '}
         {runtimePlaceholderGenerations(report)} placeholders
       </div>
+      <div className="codec-health-runtime">
+        Preview avg {formatRuntimeTiming(report.runtimeStats.nativePreviewTiming, 'WIC')} /{' '}
+        {formatRuntimeTiming(report.runtimeStats.rustPreviewTiming, 'Rust')} /{' '}
+        {formatRuntimeTiming(report.runtimeStats.placeholderPreviewTiming, 'Fallback')}
+      </div>
+      <div className="codec-health-runtime">
+        Tile avg {formatRuntimeTiming(report.runtimeStats.nativeTileTiming, 'WIC')} /{' '}
+        {formatRuntimeTiming(report.runtimeStats.rustTileTiming, 'JPEG')}
+      </div>
     </>
   );
 }
@@ -1007,4 +1016,18 @@ function runtimePlaceholderGenerations(report: CodecHealthReport): number {
     report.runtimeStats.placeholderThumbnailGenerations +
     report.runtimeStats.placeholderPreviewGenerations
   );
+}
+
+function formatRuntimeTiming(
+  timing: { sampleCount: number; totalMs: number; maxMs: number },
+  label: string
+): string {
+  if (timing.sampleCount <= 0) {
+    return `${label} --`;
+  }
+
+  const averageMs = timing.totalMs / timing.sampleCount;
+  return `${label} ${Math.round(averageMs)} ms avg (${timing.sampleCount}, max ${Math.round(
+    timing.maxMs
+  )} ms)`;
 }
