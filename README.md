@@ -1,65 +1,98 @@
-# LightFrame 🖼️
+# LightFrame
 
-LightFrame is a blazingly fast, minimal, and highly responsive image viewer built with [Tauri v2](https://v2.tauri.app/), [React](https://reactjs.org/), and [Rust](https://www.rust-lang.org/). It is designed to replace bloated default OS viewers by offering instant startup times, smooth keyboard navigation, and zero-distraction viewing.
+LightFrame is a fast, Windows-first desktop image viewer and photo review app built with
+[Tauri v2](https://v2.tauri.app/), [React](https://react.dev/), and Rust. It focuses on quick
+startup, responsive keyboard navigation, large-folder review, and practical curation tools without
+turning the viewer into a full photo manager.
+
+The app is currently at version `7.11.0`.
+
+## Current State
+
+LightFrame is an actively developed Tauri desktop app with a React frontend, Rust filesystem and
+image-processing commands, local settings/curation persistence, updater support, and GitHub Actions
+quality gates. The release workflow currently builds Windows packages only, although the codebase
+uses cross-platform Tauri where possible.
 
 ## Features
 
-- **Blazing Fast**: Native filesystem access and Rust-powered folder scanning.
-- **Ultra-Responsive Navigation**: Instant keyboard navigation with debounced background loading to mimic high-performance viewers like IrfanView.
-- **Smart Folder Support**: Drag and drop an image or a whole folder. LightFrame instantly understands what you want.
-- **Native Natural Sorting**: Images are loaded and sorted logically (e.g., `image2` comes before `image10`), with support for sorting by Date, Size, or Random.
-- **Micro-Animations & Clean UI**: A disappearing Chrome interface, dark/light themes, and buttery smooth transitions.
-- **Zoom & Pan**: Fluid mouse-drag panning and shortcut-driven zoom controls.
+- Fast file and folder opening with drag-and-drop, CLI/file-association startup, recent folders, and
+  cached folder indexes.
+- Keyboard-first navigation with natural filename sorting, date/size/random sort options, fullscreen
+  viewing, slideshow mode, and configurable mouse wheel behavior.
+- Preview-first image loading with adjacent-image preloading, bounded in-memory caches, and
+  performance modes for Fast, Balanced, and Low Memory use.
+- Large-image safety paths that avoid unsafe full-resolution decodes for huge non-JPEG images.
+- Deep zoom for large JPEG images through cached viewport tiles, with Windows-native tiled detail for
+  HEIC/HEIF when the OS codec is available.
+- Thumbnail strip and virtualized contact sheet grid for large folders.
+- Favorites, 0-5 star ratings, curation filters, saved review presets, and side-by-side compare mode.
+- Bulk selection in the contact sheet with batch favorite/rating updates and quick copy/move actions.
+- Crop preview, crop copy, crop overwrite, rotation preview/save, high-quality scaled export, and a
+  retryable background edit queue for crop/scale jobs.
+- Configurable quick destination folders, external-editor launch, reveal in file manager, copy to
+  clipboard, and move to trash.
+- Projector mode that opens a synced fullscreen secondary window for second-display review.
+- EXIF/file info panel with XMP sidecar support for RAW workflows.
+- Settings for theme, default fit mode, slideshow behavior, folder auto-refresh, window bounds,
+  projector behavior, performance mode, recent folders, quick destinations, and external editor.
+- Format-support diagnostics, generated-cache controls, performance telemetry overlay, and support
+  snapshot export.
+- Built-in update checks through the Tauri updater plugin.
 
-## Roadmap
+## Format Support
 
-### Recently Shipped
+LightFrame scans and works with common image formats:
 
-- **Preview-first loading**: Large images render a generated preview before full-resolution pixels are requested.
-- **JPEG tiled detail**: Very large JPEGs use cached viewport tiles for actual-size and deep-zoom inspection.
-- **Large non-JPEG safety**: Huge PNG, TIFF, AVIF, HEIC, and SVG paths stay preview-first and avoid unsafe direct full-image decodes.
-- **Shared caches and workers**: Preview, thumbnail, and image work queues are budgeted, prioritized, and shared across viewer surfaces.
-- **Incremental folders**: Folder contents refresh from filesystem watcher events with persistent index support.
-- **Curation workflow**: Favorites, star ratings, favorites-only review, compare mode, and copy/move actions are available from the viewer and grid.
-- **Editing workflow**: Crop, crop overwrite, high-quality scaled export, lossless JPEG rotation, pending edits, and external-editor launch are in place.
-- **Viewer polish**: Projector mode, slideshow controls, persistent window bounds, command palette, mouse wheel navigation, and default fit modes are implemented.
-- **Format fallbacks**: HEIC/HEIF thumbnail generation uses Windows native codecs when available and falls back to clear placeholders when it is not.
-- **Windows-native HEIC/HEIF previews**: When the OS codec is installed, HEIC/HEIF viewer previews are generated through Windows Imaging Component instead of the unsupported Rust decode path.
-- **Windows-native HEIC/HEIF detail**: Large HEIC/HEIF files can use WIC-backed regional tiles for actual-size and deep-zoom viewing when the OS codec is available.
-- **RAW sidecar workflow**: Common RAW files appear in review folders with XMP sidecar metadata in the Info panel, plus Windows-native preview and thumbnail attempts when a RAW codec is available.
-- **Advanced editing queue**: Scaled and cropped copy jobs can be queued, reviewed, retried, and run as a background batch.
-- **Release hardening telemetry**: The performance overlay now tracks cached folder-index reads and tiled detail generation, and the frontend build stays free of the stale dynamic-import warnings.
+- Standard formats: JPEG, PNG, WebP, GIF, BMP, TIFF/TIF, AVIF, and SVG.
+- HEIC/HEIF: metadata, previews, thumbnails, and deep-zoom detail use Windows Imaging Component when
+  the matching Windows codecs are installed. Without native support, LightFrame falls back to browser
+  rendering or clear placeholders where appropriate.
+- RAW review files: DNG, CR2, CR3, NEF, NRW, ARW, SRF, SR2, RAF, ORF, RW2, PEF, and SRW appear in
+  scanned folders. On Windows, previews and thumbnails are attempted through native codecs; XMP
+  sidecar metadata is shown in the info panel when available.
 
-### Next Focus
-
-- **Release hardening**: Keep extending focused performance telemetry and CI quality gates before each release.
+Full-detail rendering is intentionally conservative for formats that are expensive or unsafe to
+decode at original size. In those cases the app prefers generated previews, placeholders, or tiled
+paths when supported.
 
 ## Installation
 
-You can download the latest pre-compiled installers for Windows, macOS, and Linux from the [Releases page](../../releases).
+Windows builds are published from tagged releases as draft GitHub releases. Download the latest
+Windows installer from the [Releases page](../../releases) when a release has been published.
 
-> [!NOTE]
-> **Windows Users**: Because LightFrame is new and open-source, you may see a "Windows protected your PC" warning. To install, click **More info** and then **Run anyway**. This warning will disappear as the app gains more users.
+Because LightFrame is a newer open-source Windows app, Windows SmartScreen may show a "Windows
+protected your PC" warning. Choose **More info** and then **Run anyway** if you trust the build.
 
 ## Development
 
-To run LightFrame locally, you'll need [Node.js](https://nodejs.org/), [pnpm](https://pnpm.io/), and [Rust](https://www.rust-lang.org/tools/install) installed.
+Prerequisites:
+
+- Node.js 24
+- pnpm 10.33.2
+- Rust stable
+- Tauri desktop prerequisites for your operating system
+
+Install and run the app locally:
 
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/lightframe.git
-cd lightframe
-
-# Install frontend dependencies
 pnpm install
-
-# Run the Tauri dev server
 pnpm tauri dev
 ```
 
-## Build for Production
+Run the frontend-only dev server:
 
-To compile the application into a standalone binary/installer:
+```bash
+pnpm dev
+```
+
+Build the frontend:
+
+```bash
+pnpm run build
+```
+
+Build a Tauri application package:
 
 ```bash
 pnpm tauri build
@@ -67,23 +100,45 @@ pnpm tauri build
 
 ## Quality Gates
 
-Before pushing broad changes, run the same guardrails used by CI:
+Frontend checks:
+
+```bash
+pnpm run format:check
+pnpm run lint
+pnpm run test:run
+pnpm run build
+pnpm run quality:audit:ci
+```
+
+Rust checks:
+
+```bash
+pnpm run ci:rust
+```
+
+Full local CI:
 
 ```bash
 pnpm run ci:local
 ```
 
-For scoped work, use `pnpm run ci:frontend` for React/TypeScript changes and `pnpm run ci:rust` for
-Tauri/Rust changes. Commits are also guarded locally by a checked-in pre-commit hook that runs
-`pnpm run commit:gate`, which fetches `origin/main` if needed and then runs the same frontend gate
-CI expects. A companion `commit-msg` hook enforces Conventional Commit messages. `pnpm run quality:audit`
-runs Fallow on the current branch, while `pnpm run quality:audit:ci` matches the GitHub Actions base
-of `origin/main`.
+The repository installs local git hooks with `pnpm install`. The pre-commit hook runs
+`pnpm run commit:gate`, and the commit-msg hook enforces Conventional Commit messages.
+
+## Project Structure
+
+- `src/` contains the React app, Zustand stores, hooks, UI components, image loading, curation,
+  editing queue, telemetry, and tests.
+- `src-tauri/` contains the Tauri shell, Rust commands, folder watching, native Windows codec
+  integration, generated asset caches, image editing operations, and Rust tests.
+- `.github/workflows/ci.yml` runs frontend and Rust quality gates for pushes and pull requests to
+  `main`.
+- `.github/workflows/release.yml` builds draft Windows releases from version tags.
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests to us.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and contribution guidance.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+LightFrame is licensed under the MIT License. See [LICENSE](LICENSE) for details.
