@@ -7,8 +7,9 @@ import { useSettingsStore } from '../state/settingsStore';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, message, save } from '@tauri-apps/plugin-dialog';
+import { confirm, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
+import { useToastStore } from '../state/toastStore';
 
 const projectorState = vi.hoisted(() => ({
   isProjectorOpen: false,
@@ -51,6 +52,7 @@ describe('ViewerChrome', () => {
     projectorState.isProjectorOpen = false;
     projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
+    useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
   });
@@ -650,9 +652,12 @@ describe('ViewerChrome', () => {
     });
 
     expect(useEditQueueStore.getState().jobs).toHaveLength(1);
-    expect(message).toHaveBeenCalledWith(
-      expect.stringContaining('active queued export'),
-      expect.objectContaining({ title: 'Editing Queue', kind: 'error' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Editing Queue',
+        kind: 'error',
+        message: expect.stringContaining('active queued export'),
+      })
     );
   });
 
@@ -820,9 +825,12 @@ describe('ViewerChrome', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     });
 
-    expect(message).toHaveBeenCalledWith(
-      expect.stringContaining('Scaled export can save JPEG'),
-      expect.objectContaining({ kind: 'error' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Scale Copy',
+        kind: 'error',
+        message: expect.stringContaining('Scaled export can save JPEG'),
+      })
     );
     expect(scaleSpy).not.toHaveBeenCalled();
   });
@@ -866,7 +874,7 @@ describe('ViewerChrome', () => {
     });
 
     expect(save).not.toHaveBeenCalled();
-    expect(message).not.toHaveBeenCalled();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
     expect(scaleSpy).not.toHaveBeenCalled();
   });
 

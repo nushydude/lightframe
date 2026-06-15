@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, message, save } from '@tauri-apps/plugin-dialog';
+import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
 import {
   closeSecondaryWindow,
@@ -29,6 +29,7 @@ import { useProjectorState } from '../hooks/useProjectorState';
 import { useCurationStore } from '../state/curationStore';
 import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { useToastStore } from '../state/toastStore';
 import { getCurationFilterLabel, type CurationFilter } from '../services/curationFilter';
 import type { QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
@@ -445,6 +446,7 @@ export function ViewerChrome({
     (state) => state.settings.openProjectorInGridView
   );
   const updateSettings = useSettingsStore((state) => state.updateSettings);
+  const pushToast = useToastStore((state) => state.pushToast);
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
@@ -594,7 +596,7 @@ export function ViewerChrome({
         .getState()
         .removeImagesByPaths(result.successes.map((success) => success.sourcePath));
     }
-    await showTransferResultMessage(result, destination, mode);
+    showTransferResultMessage(result, destination, mode);
     recordToolbarActionUsage(mode === 'copy' ? 'copy-to' : 'move-to');
     closeOverflowMenus();
   };
@@ -662,9 +664,10 @@ export function ViewerChrome({
 
     const sourceMessage = getScaleExportSourceMessage(currentImagePath);
     if (sourceMessage) {
-      await message(sourceMessage, {
+      pushToast({
         title: 'Scale Copy',
         kind: 'error',
+        message: sourceMessage,
       });
       return null;
     }
@@ -675,17 +678,19 @@ export function ViewerChrome({
     const validationMessage = getScaleValidationMessage(width, height);
 
     if (validationMessage) {
-      await message(validationMessage, {
+      pushToast({
         title: 'Scale Copy',
         kind: 'error',
+        message: validationMessage,
       });
       return null;
     }
 
     if (!width || !height) {
-      await message('Unable to determine dimensions for scaled export.', {
+      pushToast({
         title: 'Scale Copy',
         kind: 'error',
+        message: 'Unable to determine dimensions for scaled export.',
       });
       return null;
     }
@@ -701,9 +706,10 @@ export function ViewerChrome({
 
     const outputMessage = getScaleExportOutputMessage(outputPath);
     if (outputMessage) {
-      await message(outputMessage, {
+      pushToast({
         title: 'Scale Copy',
         kind: 'error',
+        message: outputMessage,
       });
       return null;
     }
@@ -727,9 +733,10 @@ export function ViewerChrome({
       sharpening: imageSharpening,
     });
     if (!result.ok) {
-      await message(result.error, {
+      pushToast({
         title: 'Editing Queue',
         kind: 'error',
+        message: result.error,
       });
       return;
     }
@@ -752,15 +759,17 @@ export function ViewerChrome({
         imageSmoothing,
         imageSharpening
       );
-      await message(`Saved scaled copy to:\n${preparedCopy.outputPath}`, {
+      pushToast({
         title: 'Scaled Copy Saved',
-        kind: 'info',
+        kind: 'success',
+        message: `Saved scaled copy to ${preparedCopy.outputPath}`,
       });
     } catch (err) {
       console.error('Failed to save scaled copy:', err);
-      await message(`Failed to save scaled copy: ${err}`, {
-        title: 'Error',
+      pushToast({
+        title: 'Scaled Copy Failed',
         kind: 'error',
+        message: `Failed to save scaled copy: ${err}`,
       });
     }
   };
@@ -812,15 +821,13 @@ export function ViewerChrome({
       closeOverflowMenus();
     } catch (err) {
       console.error('Failed to toggle projector mode:', err);
-      await message(
-        isProjectorOpen
+      pushToast({
+        title: 'Projector mode',
+        kind: 'error',
+        message: isProjectorOpen
           ? 'Unable to close projector mode right now.'
           : 'Unable to open projector mode. Please try again after reconnecting the display.',
-        {
-          title: 'Projector mode',
-          kind: 'error',
-        }
-      );
+      });
     }
   };
 
@@ -850,9 +857,10 @@ export function ViewerChrome({
     const imageHeight = activeImage?.naturalHeight ?? 0;
 
     if (imageWidth <= 0 || imageHeight <= 0) {
-      await message('Unable to determine image dimensions for crop export.', {
-        title: 'Error',
+      pushToast({
+        title: 'Crop Copy',
         kind: 'error',
+        message: 'Unable to determine image dimensions for crop export.',
       });
       return null;
     }
@@ -887,9 +895,10 @@ export function ViewerChrome({
       rotationDegrees: rotation,
     });
     if (!result.ok) {
-      await message(result.error, {
+      pushToast({
         title: 'Editing Queue',
         kind: 'error',
+        message: result.error,
       });
       return;
     }
@@ -910,15 +919,17 @@ export function ViewerChrome({
         preparedCopy.outputPath,
         rotation
       );
-      await message(`Saved cropped copy to:\n${preparedCopy.outputPath}`, {
+      pushToast({
         title: 'Cropped Copy Saved',
-        kind: 'info',
+        kind: 'success',
+        message: `Saved cropped copy to ${preparedCopy.outputPath}`,
       });
     } catch (err) {
       console.error('Failed to save cropped copy:', err);
-      await message(`Failed to save cropped copy: ${err}`, {
-        title: 'Error',
+      pushToast({
+        title: 'Cropped Copy Failed',
         kind: 'error',
+        message: `Failed to save cropped copy: ${err}`,
       });
     }
   };
@@ -932,9 +943,10 @@ export function ViewerChrome({
     const imageWidth = activeImage?.naturalWidth ?? 0;
     const imageHeight = activeImage?.naturalHeight ?? 0;
     if (imageWidth <= 0 || imageHeight <= 0) {
-      await message('Unable to determine image dimensions for crop overwrite.', {
-        title: 'Error',
+      pushToast({
+        title: 'Crop Overwrite',
         kind: 'error',
+        message: 'Unable to determine image dimensions for crop overwrite.',
       });
       return;
     }
@@ -962,15 +974,17 @@ export function ViewerChrome({
       clearPendingEdits(currentImagePath);
       useViewerStore.setState({ cacheBuster: Date.now() });
       setExifRefreshToken((value) => value + 1);
-      await message('Original image updated with the cropped selection.', {
+      pushToast({
         title: 'Crop Saved',
-        kind: 'info',
+        kind: 'success',
+        message: 'Original image updated with the cropped selection.',
       });
     } catch (err) {
       console.error('Failed to overwrite cropped image:', err);
-      await message(`Failed to overwrite cropped image: ${err}`, {
-        title: 'Error',
+      pushToast({
+        title: 'Crop Overwrite Failed',
         kind: 'error',
+        message: `Failed to overwrite cropped image: ${err}`,
       });
     }
   };

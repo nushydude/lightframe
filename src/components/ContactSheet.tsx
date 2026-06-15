@@ -264,7 +264,7 @@ export function ContactSheet({
       removeMovedImages([...movedPaths]);
       setSelectedPaths((current) => current.filter((path) => !movedPaths.has(path)));
     }
-    await showTransferResultMessage(result, destination, mode);
+    showTransferResultMessage(result, destination, mode);
   };
 
   const handleSelectAll = () => {

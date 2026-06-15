@@ -8,10 +8,10 @@ import {
   transferImagesToDestination,
 } from './viewerActions';
 import { useSettingsStore } from '../state/settingsStore';
+import { useToastStore } from '../state/toastStore';
 
 const {
   confirmMock,
-  messageMock,
   copyImageToClipboardMock,
   moveToTrashMock,
   openInExternalApplicationMock,
@@ -19,7 +19,6 @@ const {
   transferImagesToFolderMock,
 } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
-  messageMock: vi.fn(),
   copyImageToClipboardMock: vi.fn(),
   moveToTrashMock: vi.fn(),
   openInExternalApplicationMock: vi.fn(),
@@ -29,7 +28,6 @@ const {
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   confirm: confirmMock,
-  message: messageMock,
 }));
 
 vi.mock('./tauriCommands', () => ({
@@ -44,7 +42,7 @@ describe('viewerActions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
-    messageMock.mockResolvedValue(undefined);
+    useToastStore.getState().clearToasts();
     useSettingsStore.getState().updateSettings = vi.fn().mockResolvedValue(undefined);
     useSettingsStore.setState((state) => ({
       ...state,
@@ -61,9 +59,12 @@ describe('viewerActions', () => {
 
     await expect(revealCurrentImage('c:/images/test.jpg')).resolves.toBeUndefined();
 
-    expect(messageMock).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to reveal file:'),
-      expect.objectContaining({ title: 'Error', kind: 'error' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Reveal failed',
+        kind: 'error',
+        message: expect.stringContaining('Failed to reveal file:'),
+      })
     );
   });
 
@@ -72,18 +73,25 @@ describe('viewerActions', () => {
 
     await expect(copyCurrentImage('c:/images/test.jpg')).resolves.toBeUndefined();
 
-    expect(messageMock).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to copy image:'),
-      expect.objectContaining({ title: 'Error', kind: 'error' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Clipboard copy failed',
+        kind: 'error',
+        message: expect.stringContaining('Failed to copy image:'),
+      })
     );
   });
 
   it('shows a helpful message when no external editor is configured', async () => {
     await expect(openCurrentImageInEditor('c:/images/test.jpg')).resolves.toBeUndefined();
 
-    expect(messageMock).toHaveBeenCalledWith(
-      'No external editor is configured. Set one in Settings > External Editor.',
-      expect.objectContaining({ title: 'External editor not configured', kind: 'warning' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'External editor not configured',
+        kind: 'warning',
+        message: 'No external editor is configured.',
+        detail: 'Set one in Settings > External Editor.',
+      })
     );
     expect(openInExternalApplicationMock).not.toHaveBeenCalled();
   });
@@ -105,9 +113,12 @@ describe('viewerActions', () => {
       'c:/images/test.jpg',
       'c:/Program Files/Paint.NET/paintdotnet.exe'
     );
-    expect(messageMock).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to open image in Paint.NET:'),
-      expect.objectContaining({ title: 'Could not open editor', kind: 'error' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Could not open editor',
+        kind: 'error',
+        message: expect.stringContaining('Failed to open image in Paint.NET:'),
+      })
     );
   });
 
@@ -123,9 +134,12 @@ describe('viewerActions', () => {
       })
     ).resolves.toBeUndefined();
 
-    expect(messageMock).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to delete:'),
-      expect.objectContaining({ title: 'Error', kind: 'error' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Delete failed',
+        kind: 'error',
+        message: expect.stringContaining('Failed to delete:'),
+      })
     );
     expect(removeImage).not.toHaveBeenCalled();
   });
@@ -154,7 +168,7 @@ describe('viewerActions', () => {
   });
 
   it('shows a warning message when a quick transfer partially fails', async () => {
-    await showTransferResultMessage(
+    showTransferResultMessage(
       {
         successes: [{ sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/one.jpg' }],
         failures: [{ sourcePath: 'c:/images/two.jpg', error: 'disk full' }],
@@ -163,9 +177,13 @@ describe('viewerActions', () => {
       'move'
     );
 
-    expect(messageMock).toHaveBeenCalledWith(
-      expect.stringContaining('Moved 1 image to Favorites, but 1 failed.'),
-      expect.objectContaining({ title: 'Move issues', kind: 'warning' })
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Move issues',
+        kind: 'warning',
+        message: 'Moved 1 image to Favorites, but 1 failed.',
+        detail: 'c:/images/two.jpg\ndisk full',
+      })
     );
   });
 });
