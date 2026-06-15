@@ -38,6 +38,7 @@ export interface QuickTransferFailure {
 export interface QuickTransferResult {
   successes: QuickTransferSuccess[];
   failures: QuickTransferFailure[];
+  failureCount: number;
 }
 
 export async function transferImagesToDestination(
@@ -46,12 +47,20 @@ export async function transferImagesToDestination(
   mode: 'copy' | 'move'
 ): Promise<QuickTransferResult> {
   try {
-    return await transferImagesToFolder(imagePaths, destination.path, mode);
+    const result = await transferImagesToFolder(imagePaths, destination.path, mode);
+    return {
+      ...result,
+      failureCount: result.failures.length,
+    };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     return {
       successes: [],
-      failures: imagePaths.map((sourcePath) => ({ sourcePath, error })),
+      failures:
+        imagePaths.length > 0
+          ? [{ sourcePath: imagePaths[0], error }]
+          : [{ sourcePath: destination.path, error }],
+      failureCount: imagePaths.length,
     };
   }
 }
@@ -65,7 +74,7 @@ export function showTransferResultMessage(
   const noun = result.successes.length === 1 ? 'image' : 'images';
   const pushToast = useToastStore.getState().pushToast;
 
-  if (result.failures.length === 0) {
+  if (result.failureCount === 0) {
     pushToast({
       title: mode === 'copy' ? 'Copy complete' : 'Move complete',
       kind: 'success',
@@ -77,7 +86,7 @@ export function showTransferResultMessage(
   const firstFailure = result.failures[0];
   const partialPrefix =
     result.successes.length > 0
-      ? `${verb} ${result.successes.length} ${noun} to ${destination.label}, but ${result.failures.length} failed.`
+      ? `${verb} ${result.successes.length} ${noun} to ${destination.label}, but ${result.failureCount} failed.`
       : `Could not ${mode} the selected images to ${destination.label}.`;
   pushToast({
     title: mode === 'copy' ? 'Copy issues' : 'Move issues',

@@ -165,6 +165,7 @@ describe('viewerActions', () => {
       { sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/test-1.jpg' },
     ]);
     expect(result.failures).toEqual([{ sourcePath: 'c:/images/two.jpg', error: 'disk full' }]);
+    expect(result.failureCount).toBe(1);
   });
 
   it('shows a warning message when a quick transfer partially fails', async () => {
@@ -172,6 +173,7 @@ describe('viewerActions', () => {
       {
         successes: [{ sourcePath: 'c:/images/one.jpg', targetPath: 'd:/favorites/one.jpg' }],
         failures: [{ sourcePath: 'c:/images/two.jpg', error: 'disk full' }],
+        failureCount: 1,
       },
       { id: 'fav', label: 'Favorites', path: 'd:/favorites' },
       'move'
@@ -185,5 +187,19 @@ describe('viewerActions', () => {
         detail: 'c:/images/two.jpg\ndisk full',
       })
     );
+  });
+
+  it('collapses thrown bulk transfer failures to the first failing path while preserving the count', async () => {
+    transferImagesToFolderMock.mockRejectedValue(new Error('share offline'));
+
+    const result = await transferImagesToDestination(
+      ['c:/images/one.jpg', 'c:/images/two.jpg', 'c:/images/three.jpg'],
+      { id: 'fav', label: 'Favorites', path: 'd:/favorites' },
+      'copy'
+    );
+
+    expect(result.successes).toEqual([]);
+    expect(result.failures).toEqual([{ sourcePath: 'c:/images/one.jpg', error: 'share offline' }]);
+    expect(result.failureCount).toBe(3);
   });
 });
