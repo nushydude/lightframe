@@ -1,4 +1,4 @@
-import { confirm, message } from '@tauri-apps/plugin-dialog';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import {
   copyImageToClipboard,
   moveToTrash,
@@ -7,6 +7,7 @@ import {
   transferImagesToFolder,
 } from './tauriCommands';
 import { useSettingsStore } from '../state/settingsStore';
+import { useToastStore } from '../state/toastStore';
 import type { QuickDestination } from '../types/settings';
 
 interface DeleteCurrentImageOptions {
@@ -37,6 +38,7 @@ export interface QuickTransferFailure {
 export interface QuickTransferResult {
   successes: QuickTransferSuccess[];
   failures: QuickTransferFailure[];
+  failureCount: number;
 }
 
 export async function transferImagesToDestination(
@@ -45,28 +47,38 @@ export async function transferImagesToDestination(
   mode: 'copy' | 'move'
 ): Promise<QuickTransferResult> {
   try {
-    return await transferImagesToFolder(imagePaths, destination.path, mode);
+    const result = await transferImagesToFolder(imagePaths, destination.path, mode);
+    return {
+      ...result,
+      failureCount: result.failures.length,
+    };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     return {
       successes: [],
-      failures: imagePaths.map((sourcePath) => ({ sourcePath, error })),
+      failures:
+        imagePaths.length > 0
+          ? [{ sourcePath: imagePaths[0], error }]
+          : [{ sourcePath: destination.path, error }],
+      failureCount: imagePaths.length,
     };
   }
 }
 
-export async function showTransferResultMessage(
+export function showTransferResultMessage(
   result: QuickTransferResult,
   destination: QuickDestination,
   mode: 'copy' | 'move'
-): Promise<void> {
+): void {
   const verb = mode === 'copy' ? 'Copied' : 'Moved';
   const noun = result.successes.length === 1 ? 'image' : 'images';
+  const pushToast = useToastStore.getState().pushToast;
 
-  if (result.failures.length === 0) {
-    await message(`${verb} ${result.successes.length} ${noun} to ${destination.label}.`, {
+  if (result.failureCount === 0) {
+    pushToast({
       title: mode === 'copy' ? 'Copy complete' : 'Move complete',
-      kind: 'info',
+      kind: 'success',
+      message: `${verb} ${result.successes.length} ${noun} to ${destination.label}.`,
     });
     return;
   }
@@ -74,15 +86,15 @@ export async function showTransferResultMessage(
   const firstFailure = result.failures[0];
   const partialPrefix =
     result.successes.length > 0
-      ? `${verb} ${result.successes.length} ${noun} to ${destination.label}, but ${result.failures.length} failed.`
+      ? `${verb} ${result.successes.length} ${noun} to ${destination.label}, but ${result.failureCount} failed.`
       : `Could not ${mode} the selected images to ${destination.label}.`;
-  await message(
-    `${partialPrefix}\n\nFirst failure:\n${firstFailure.sourcePath}\n${firstFailure.error}`,
-    {
-      title: mode === 'copy' ? 'Copy issues' : 'Move issues',
-      kind: result.successes.length > 0 ? 'warning' : 'error',
-    }
-  );
+  pushToast({
+    title: mode === 'copy' ? 'Copy issues' : 'Move issues',
+    kind: result.successes.length > 0 ? 'warning' : 'error',
+    message: partialPrefix,
+    detail: `${firstFailure.sourcePath}\n${firstFailure.error}`,
+    duration: result.successes.length > 0 ? 7000 : 8000,
+  });
 }
 
 export async function revealCurrentImage(currentImagePath: string | null): Promise<void> {
@@ -94,7 +106,11 @@ export async function revealCurrentImage(currentImagePath: string | null): Promi
     await revealInExplorer(currentImagePath);
   } catch (err) {
     console.error('Failed to reveal file:', err);
-    await message(`Failed to reveal file: ${err}`, { title: 'Error', kind: 'error' });
+    useToastStore.getState().pushToast({
+      title: 'Reveal failed',
+      kind: 'error',
+      message: `Failed to reveal file: ${err}`,
+    });
   }
 }
 
@@ -105,10 +121,18 @@ export async function copyCurrentImage(currentImagePath: string | null): Promise
 
   try {
     await copyImageToClipboard(currentImagePath);
-    await message('Image copied to clipboard!', { title: 'Success', kind: 'info' });
+    useToastStore.getState().pushToast({
+      title: 'Copied to clipboard',
+      kind: 'success',
+      message: 'Image copied to clipboard.',
+    });
   } catch (err) {
     console.error('Failed to copy image:', err);
-    await message(`Failed to copy image: ${err}`, { title: 'Error', kind: 'error' });
+    useToastStore.getState().pushToast({
+      title: 'Clipboard copy failed',
+      kind: 'error',
+      message: `Failed to copy image: ${err}`,
+    });
   }
 }
 
@@ -125,9 +149,11 @@ export async function openCurrentImageInEditor(
   const editorPath = externalEditorPath?.trim() || settings.externalEditorPath?.trim();
 
   if (!editorPath) {
-    await message('No external editor is configured. Set one in Settings > External Editor.', {
+    useToastStore.getState().pushToast({
       title: 'External editor not configured',
       kind: 'warning',
+      message: 'No external editor is configured.',
+      detail: 'Set one in Settings > External Editor.',
     });
     return;
   }
@@ -142,9 +168,10 @@ export async function openCurrentImageInEditor(
     await openInExternalApplication(currentImagePath, editorPath);
   } catch (err) {
     console.error('Failed to open image in external editor:', err);
-    await message(`Failed to open image in ${editorLabel}: ${err}`, {
+    useToastStore.getState().pushToast({
       title: 'Could not open editor',
       kind: 'error',
+      message: `Failed to open image in ${editorLabel}: ${err}`,
     });
   }
 }
@@ -176,6 +203,10 @@ export async function deleteCurrentImage({
     removeImage(currentIndex);
   } catch (err) {
     console.error('Failed to move to trash:', err);
-    await message(`Failed to delete: ${err}`, { title: 'Error', kind: 'error' });
+    useToastStore.getState().pushToast({
+      title: 'Delete failed',
+      kind: 'error',
+      message: `Failed to delete: ${err}`,
+    });
   }
 }

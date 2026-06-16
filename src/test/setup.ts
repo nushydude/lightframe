@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom';
-import { vi } from 'vitest';
+import { afterEach, vi } from 'vitest';
+import { useToastStore } from '../state/toastStore';
 
 // Mock Tauri Core APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -53,3 +54,7 @@ global.window.AudioContext = vi.fn().mockImplementation(() => ({
   destination: {},
   currentTime: 0,
 })) as any;
+
+afterEach(() => {
+  useToastStore.getState().clearToasts();
+});

@@ -18,6 +18,7 @@ import { EmptyState } from './components/EmptyState';
 import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
 import { PerformanceTelemetryOverlay } from './components/PerformanceTelemetryOverlay';
+import { ToastViewport } from './components/ToastViewport';
 import { useImageNavigation } from './hooks/useImageNavigation';
 import { useSlideshow } from './hooks/useSlideshow';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -837,6 +838,7 @@ function App() {
         <PerformanceTelemetryOverlay onReset={handleResetPerformanceTelemetry} />
       )}
       <UpdateNotification />
+      <ToastViewport />
 
       {/* Error Banner */}
       {errorMessage && (
