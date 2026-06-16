@@ -12,7 +12,7 @@ export interface Toast {
   duration: number;
 }
 
-export interface ToastInput {
+interface ToastInput {
   kind: ToastKind;
   title: string;
   message: string;
