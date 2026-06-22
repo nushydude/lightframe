@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
@@ -501,11 +501,34 @@ export function ViewerChrome({
     setScaleAspectRatio(null);
   }, [currentImagePath]);
 
-  const closeOverflowMenus = () => {
-    chromeRootRef.current
-      ?.querySelectorAll('details[open]')
-      .forEach((menu) => ((menu as HTMLDetailsElement).open = false));
-  };
+  const menuRefs = useMemo(
+    () => [
+      chromeRootRef,
+      moreMenuRef,
+      qualityMenuRef,
+      editQueueMenuRef,
+      cropActionsMenuRef,
+      compactBottomMenuRef,
+    ],
+    []
+  );
+
+  const closeOverflowMenus = useCallback(() => {
+    for (const ref of menuRefs) {
+      const node = ref.current;
+      if (!node) {
+        continue;
+      }
+
+      if (node instanceof HTMLDetailsElement) {
+        node.open = false;
+      }
+
+      node.querySelectorAll('details[open]').forEach((menu) => {
+        (menu as HTMLDetailsElement).open = false;
+      });
+    }
+  }, [menuRefs]);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
@@ -514,10 +537,7 @@ export function ViewerChrome({
         return;
       }
 
-      const menuRoot = target.closest(
-        '.top-bar-menu, .top-bar-submenu, .quality-menu, .edit-queue-menu, .crop-actions-menu, .bottom-controls-menu'
-      );
-      if (menuRoot && chromeRootRef.current?.contains(menuRoot)) {
+      if (menuRefs.some((ref) => ref.current?.contains(target))) {
         return;
       }
 
@@ -536,7 +556,7 @@ export function ViewerChrome({
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, []);
+  }, [closeOverflowMenus, menuRefs]);
 
   const togglePinnedAction = async (actionId: PinnableToolbarActionId) => {
     const nextPinnedActions = pinnedToolbarActions.includes(actionId)

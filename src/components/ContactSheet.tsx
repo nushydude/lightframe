@@ -96,8 +96,8 @@ export function ContactSheet({
   const [bulkCurationPending, setBulkCurationPending] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
+  const contactSheetRootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const chromeRootRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
   const bulkCurationPendingRef = useRef(false);
   const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
@@ -457,11 +457,11 @@ export function ContactSheet({
       }
 
       const menuRoot = target.closest('.top-bar-menu, .top-bar-submenu');
-      if (menuRoot && chromeRootRef.current?.contains(menuRoot)) {
+      if (menuRoot && contactSheetRootRef.current?.contains(menuRoot)) {
         return;
       }
 
-      chromeRootRef.current
+      contactSheetRootRef.current
         ?.querySelectorAll('details[open]')
         .forEach((menu) => ((menu as HTMLDetailsElement).open = false));
     };
@@ -508,7 +508,7 @@ export function ContactSheet({
   }, [columns, currentIndex, handleDeleteCurrent, images.length, onExitGridView, setCurrentIndex]);
 
   return (
-    <div className="contact-sheet-overlay">
+    <div className="contact-sheet-overlay" ref={contactSheetRootRef}>
       <div className="contact-sheet-header">
         <div className="header-left">
           <h2>Contact Sheet</h2>
@@ -519,7 +519,7 @@ export function ContactSheet({
             <span className="image-count">{selectedPaths.length} selected</span>
           )}
         </div>
-        <div className="top-bar-right header-actions" ref={chromeRootRef}>
+        <div className="top-bar-right header-actions">
           <div className="top-bar-group" aria-label="Navigation actions">
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"

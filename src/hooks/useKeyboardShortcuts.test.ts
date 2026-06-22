@@ -158,6 +158,22 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.deleteCurrentImage).toHaveBeenCalledTimes(1);
   });
 
+  it('does not delete from the shared handler while grid view is active', () => {
+    useViewerStore.setState({ viewMode: 'grid' });
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Delete',
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(handlers.deleteCurrentImage).not.toHaveBeenCalled();
+  });
+
   it('nudges crop rect and previews it with keyboard while crop mode is active', () => {
     const image = document.createElement('img');
     image.className = 'image-canvas';

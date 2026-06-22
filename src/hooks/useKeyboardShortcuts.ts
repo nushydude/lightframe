@@ -265,15 +265,6 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         return;
       }
 
-      // Delete: move current image to trash
-      if (e.key === 'Delete') {
-        e.preventDefault();
-        if (currentImagePath) {
-          await handlers.deleteCurrentImage();
-        }
-        return;
-      }
-
       // G: Toggle grid view
       if ((e.key === 'g' || e.key === 'G') && currentImagePath) {
         e.preventDefault();
@@ -300,6 +291,15 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       }
 
       if (viewMode === 'grid') {
+        return;
+      }
+
+      // Delete: move current image to trash
+      if (e.key === 'Delete') {
+        e.preventDefault();
+        if (currentImagePath) {
+          await handlers.deleteCurrentImage();
+        }
         return;
       }
 

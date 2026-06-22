@@ -96,6 +96,64 @@ describe('useSlideshow', () => {
     expect(useViewerStore.getState().isSlideshowActive).toBe(true);
   });
 
+  it('preserves shuffle progress when new images are added mid-slideshow', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+      },
+    }));
+
+    const randomValues = [0.99, 0.1, 0.99];
+    const randomSpy = vi
+      .spyOn(Math, 'random')
+      .mockImplementation(() => randomValues.shift() ?? 0.5);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      act(() => {
+        useViewerStore.setState((state) => ({
+          images: [
+            ...state.images,
+            {
+              path: 'C:/images/4.jpg',
+              file_name: '4.jpg',
+              extension: 'jpg',
+              size_bytes: 1,
+              modified_at: '1',
+            },
+          ],
+        }));
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/3.jpg');
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/4.jpg');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('returns to window mode when stopping a fullscreen slideshow', async () => {
     useViewerStore.setState({ isFullscreen: true, isSlideshowActive: true });
     const mockWindow = getCurrentWindow();
