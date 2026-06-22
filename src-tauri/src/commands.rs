@@ -154,6 +154,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub quick_destinations: Vec<QuickDestination>,
     #[serde(default)]
+    pub pinned_toolbar_actions: Vec<String>,
+    #[serde(default)]
     pub external_editor_path: Option<String>,
     #[serde(default)]
     pub external_editor_label: Option<String>,
@@ -269,6 +271,7 @@ impl Default for AppSettings {
             saved_view_presets: default_saved_view_presets(),
             recent_folders: Vec::new(),
             quick_destinations: Vec::new(),
+            pinned_toolbar_actions: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
         }

@@ -23,6 +23,13 @@ export function useSlideshow() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shuffleOrderRef = useRef<number[]>([]);
   const shuffleIndexRef = useRef(0);
+  const currentIndexRef = useRef(currentIndex);
+  const previousImagePathsRef = useRef(images.map((image) => image.path));
+  const imageOrderSignature = images.map((image) => image.path).join('\n');
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
 
   const exitFullscreenForStop = useCallback(async () => {
     if (!useViewerStore.getState().isFullscreen) {
@@ -91,6 +98,67 @@ export function useSlideshow() {
     stopAndRestoreWindow,
   ]);
 
+  const reconcileShuffleOrder = useCallback(() => {
+    const currentPath = images[currentIndexRef.current]?.path ?? null;
+    if (!currentPath) {
+      generateShuffleOrder(Math.max(0, currentIndexRef.current));
+      previousImagePathsRef.current = images.map((image) => image.path);
+      return;
+    }
+
+    const previousImagePaths = previousImagePathsRef.current;
+    const nextImagePaths = images.map((image) => image.path);
+    const nextPathSet = new Set(nextImagePaths);
+    const previousOrderPaths = shuffleOrderRef.current
+      .map((index) => previousImagePaths[index])
+      .filter((path): path is string => typeof path === 'string' && path.length > 0);
+    const seenPaths = new Set(
+      previousOrderPaths
+        .slice(0, shuffleIndexRef.current + 1)
+        .filter((path) => nextPathSet.has(path))
+    );
+    seenPaths.add(currentPath);
+    const remainingPaths: string[] = [];
+
+    for (const path of previousOrderPaths.slice(shuffleIndexRef.current + 1)) {
+      if (!nextPathSet.has(path) || seenPaths.has(path)) {
+        continue;
+      }
+
+      seenPaths.add(path);
+      remainingPaths.push(path);
+    }
+
+    const newPaths = nextImagePaths.filter((path) => !seenPaths.has(path));
+    for (let i = newPaths.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [newPaths[i], newPaths[j]] = [newPaths[j], newPaths[i]];
+    }
+
+    const nextOrderPaths = [currentPath, ...remainingPaths, ...newPaths];
+    shuffleOrderRef.current = nextOrderPaths
+      .map((path) => nextImagePaths.indexOf(path))
+      .filter((index) => index >= 0);
+    shuffleIndexRef.current = 0;
+    previousImagePathsRef.current = nextImagePaths;
+  }, [generateShuffleOrder, images]);
+
+  useEffect(() => {
+    if (!isSlideshowActive || !settings.shuffleSlideshow || images.length < 2) {
+      previousImagePathsRef.current = images.map((image) => image.path);
+      return;
+    }
+
+    reconcileShuffleOrder();
+  }, [
+    imageOrderSignature,
+    images,
+    images.length,
+    isSlideshowActive,
+    reconcileShuffleOrder,
+    settings.shuffleSlideshow,
+  ]);
+
   // Timer management
   useEffect(() => {
     if (timerRef.current) {
@@ -123,6 +191,7 @@ export function useSlideshow() {
 
     if (settings.shuffleSlideshow) {
       generateShuffleOrder(currentIndex);
+      previousImagePathsRef.current = images.map((image) => image.path);
     }
 
     startSlideshow();
@@ -138,7 +207,7 @@ export function useSlideshow() {
       }
     }
   }, [
-    images.length,
+    images,
     currentIndex,
     isFullscreen,
     settings.autoFullscreenOnSlideshow,

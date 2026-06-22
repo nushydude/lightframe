@@ -1,4 +1,4 @@
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm, open } from '@tauri-apps/plugin-dialog';
 import {
   copyImageToClipboard,
   moveToTrash,
@@ -134,6 +134,79 @@ export async function copyCurrentImage(currentImagePath: string | null): Promise
       message: `Failed to copy image: ${err}`,
     });
   }
+}
+
+function fallbackCopyText(text: string): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.setAttribute('readonly', 'true');
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  textArea.style.pointerEvents = 'none';
+  document.body.appendChild(textArea);
+  textArea.select();
+
+  let didCopy = false;
+  try {
+    didCopy = document.execCommand('copy');
+  } catch (err) {
+    console.error('Failed to copy text with fallback clipboard path:', err);
+  } finally {
+    document.body.removeChild(textArea);
+  }
+
+  return didCopy;
+}
+
+export async function copyCurrentImagePath(currentImagePath: string | null): Promise<void> {
+  if (!currentImagePath) {
+    return;
+  }
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(currentImagePath);
+    } else if (!fallbackCopyText(currentImagePath)) {
+      throw new Error('Clipboard text copy is unavailable.');
+    }
+
+    useToastStore.getState().pushToast({
+      title: 'Image path copied',
+      kind: 'success',
+      message: currentImagePath,
+    });
+  } catch (err) {
+    console.error('Failed to copy image path:', err);
+    useToastStore.getState().pushToast({
+      title: 'Path copy failed',
+      kind: 'error',
+      message: `Failed to copy image path: ${err}`,
+    });
+  }
+}
+
+export async function chooseQuickDestinationFolder(): Promise<QuickDestination | null> {
+  const selected = await open({ directory: true, multiple: false });
+  if (!selected || typeof selected !== 'string') {
+    return null;
+  }
+
+  const normalizedPath = selected.trim();
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const label =
+    normalizedPath.replace(/\\/g, '/').split('/').filter(Boolean).pop() || normalizedPath;
+  return {
+    id: `adhoc-${Date.now()}`,
+    label,
+    path: normalizedPath,
+  };
 }
 
 export async function openCurrentImageInEditor(

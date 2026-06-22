@@ -631,11 +631,6 @@ body,
   font-weight: 500;
 }
 
-/* Update app-container to handle the strip */
-.app-container.with-thumbnails .image-canvas {
-  height: calc(100% - 90px);
-}
-
 /* ===== App Container ===== */
 .app-container {
   width: 100%;
@@ -644,6 +639,15 @@ body,
   flex-direction: column;
   position: relative;
   overflow: hidden;
+}
+
+.app-container.has-viewer-safe-areas {
+  padding-top: var(--top-bar-safe-height);
+  padding-bottom: var(--bottom-controls-safe-height);
+}
+
+.app-container.has-viewer-safe-areas.with-thumbnails {
+  padding-bottom: calc(var(--bottom-controls-safe-height) + var(--thumbnail-strip-height));
 }
 
 .projector-close-btn {
@@ -1125,6 +1129,50 @@ body,
   position: relative;
 }
 
+.top-bar-menu-entry--row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.top-bar-menu-entry--pinned {
+  display: flex;
+}
+
+.top-bar-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.top-bar-menu-section + .top-bar-menu-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.top-bar-menu-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 0 4px;
+}
+
+.top-bar-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  margin-top: 9px;
+}
+
+.top-bar-menu-action {
+  min-width: 0;
+}
+
 .top-bar-submenu {
   position: relative;
 }
@@ -1154,6 +1202,35 @@ body,
   color: var(--text-secondary);
   padding: 6px 8px;
   white-space: normal;
+}
+
+.top-bar-pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.top-bar-pin-toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.top-bar-pin-toggle.active {
+  color: var(--accent);
+  border-color: var(--border-hover);
+  background: rgba(88, 166, 255, 0.12);
 }
 
 .top-bar-separator {

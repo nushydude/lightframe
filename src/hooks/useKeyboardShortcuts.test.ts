@@ -7,11 +7,13 @@ describe('useKeyboardShortcuts', () => {
   const handlers = {
     openFilePicker: vi.fn(),
     openCurrentImageInEditor: vi.fn(),
+    copyCurrentImagePath: vi.fn(),
     goNext: vi.fn(() => true),
     goPrev: vi.fn(() => true),
     goFirst: vi.fn(),
     goLast: vi.fn(),
     refreshFolder: vi.fn(),
+    deleteCurrentImage: vi.fn(),
     startSlideshow: vi.fn(),
     stopSlideshow: vi.fn(),
     toggleSlideshowPause: vi.fn(),
@@ -120,6 +122,56 @@ describe('useKeyboardShortcuts', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(handlers.openCurrentImageInEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it('copies the current image path on Ctrl+Shift+C', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'C',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.copyCurrentImagePath).toHaveBeenCalledTimes(1);
+  });
+
+  it('deletes the current image on Delete', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Delete',
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.deleteCurrentImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not delete from the shared handler while grid view is active', () => {
+    useViewerStore.setState({ viewMode: 'grid' });
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Delete',
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(handlers.deleteCurrentImage).not.toHaveBeenCalled();
   });
 
   it('nudges crop rect and previews it with keyboard while crop mode is active', () => {

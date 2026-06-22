@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type UIEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type UIEvent,
+} from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
@@ -13,7 +21,9 @@ import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 import { useProjectorState } from '../hooks/useProjectorState';
 import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
 import {
+  chooseQuickDestinationFolder,
   copyCurrentImage,
+  copyCurrentImagePath,
   deleteCurrentImage,
   openCurrentImageInEditor,
   revealCurrentImage,
@@ -86,6 +96,7 @@ export function ContactSheet({
   const [bulkCurationPending, setBulkCurationPending] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
+  const contactSheetRootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
   const bulkCurationPendingRef = useRef(false);
@@ -267,6 +278,15 @@ export function ContactSheet({
     showTransferResultMessage(result, destination, mode);
   };
 
+  const handleChooseTransferFolder = async (mode: 'copy' | 'move') => {
+    const destination = await chooseQuickDestinationFolder();
+    if (!destination) {
+      return;
+    }
+
+    await handleBulkTransfer(destination, mode);
+  };
+
   const handleSelectAll = () => {
     setSelectedPaths(images.map((image) => image.path));
     setLastSelectedIndex(Math.max(0, currentIndex));
@@ -304,13 +324,17 @@ export function ContactSheet({
     await copyCurrentImage(currentImagePath);
   };
 
-  const handleDeleteCurrent = async () => {
+  const handleCopyCurrentPath = async () => {
+    await copyCurrentImagePath(currentImagePath);
+  };
+
+  const handleDeleteCurrent = useCallback(async () => {
     await deleteCurrentImage({
       currentImagePath,
       currentIndex,
       removeImage: useViewerStore.getState().removeImage,
     });
-  };
+  }, [currentImagePath, currentIndex]);
 
   const handleOpenInEditor = async () => {
     await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
@@ -367,14 +391,9 @@ export function ContactSheet({
   const renderQuickDestinationMenu = (mode: 'copy' | 'move') => (
     <div className="top-bar-submenu-panel">
       {quickDestinations.length === 0 ? (
-        <>
-          <span className="top-bar-menu-empty">
-            No destinations configured. Add folders in Settings {'>'} Quick Destinations.
-          </span>
-          <button className="top-bar-menu-item" onClick={() => setShowSettings(true)} type="button">
-            Open Settings
-          </button>
-        </>
+        <span className="top-bar-menu-empty">
+          No destinations configured yet. Use Choose Folder or add saved folders in Settings.
+        </span>
       ) : (
         quickDestinations.map((destination) => (
           <button
@@ -387,6 +406,16 @@ export function ContactSheet({
           </button>
         ))
       )}
+      <button
+        className="top-bar-menu-item"
+        onClick={() => void handleChooseTransferFolder(mode)}
+        type="button"
+      >
+        Choose Folder...
+      </button>
+      <button className="top-bar-menu-item" onClick={() => setShowSettings(true)} type="button">
+        Manage Saved Folders
+      </button>
     </div>
   );
 
@@ -421,6 +450,27 @@ export function ContactSheet({
   };
 
   useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+
+      const menuRoot = target.closest('.top-bar-menu, .top-bar-submenu');
+      if (menuRoot && contactSheetRootRef.current?.contains(menuRoot)) {
+        return;
+      }
+
+      contactSheetRootRef.current
+        ?.querySelectorAll('details[open]')
+        .forEach((menu) => ((menu as HTMLDetailsElement).open = false));
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, []);
+
+  useEffect(() => {
     // fallow-ignore-next-line complexity
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter') {
@@ -447,15 +497,18 @@ export function ContactSheet({
       } else if (e.key === 'End') {
         e.preventDefault();
         setCurrentIndex(images.length - 1);
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        void handleDeleteCurrent();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [columns, currentIndex, images.length, onExitGridView, setCurrentIndex]);
+  }, [columns, currentIndex, handleDeleteCurrent, images.length, onExitGridView, setCurrentIndex]);
 
   return (
-    <div className="contact-sheet-overlay">
+    <div className="contact-sheet-overlay" ref={contactSheetRootRef}>
       <div className="contact-sheet-header">
         <div className="header-left">
           <h2>Contact Sheet</h2>
@@ -618,6 +671,14 @@ export function ContactSheet({
                   disabled={!currentImagePath}
                 >
                   Copy
+                </button>
+                <button
+                  className="top-bar-menu-item"
+                  onClick={() => void handleCopyCurrentPath()}
+                  type="button"
+                  disabled={!currentImagePath}
+                >
+                  Copy Path
                 </button>
                 <details className="top-bar-submenu">
                   <summary className="top-bar-menu-item" aria-label="Copy image to destination">

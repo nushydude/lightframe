@@ -7,17 +7,20 @@ import { useSettingsStore } from '../state/settingsStore';
 
 const {
   copyCurrentImageMock,
+  copyCurrentImagePathMock,
   deleteCurrentImageMock,
   openCurrentImageInEditorMock,
   revealCurrentImageMock,
   showTransferResultMessageMock,
   transferImagesToDestinationMock,
+  chooseQuickDestinationFolderMock,
   openSecondaryWindowMock,
   refreshProjectorStateMock,
   writeImageCurationMock,
   writeImageCurationBatchMock,
 } = vi.hoisted(() => ({
   copyCurrentImageMock: vi.fn(async () => undefined),
+  copyCurrentImagePathMock: vi.fn(async () => undefined),
   deleteCurrentImageMock: vi.fn(async () => undefined),
   openCurrentImageInEditorMock: vi.fn(async () => undefined),
   revealCurrentImageMock: vi.fn(async () => undefined),
@@ -26,6 +29,7 @@ const {
     successes: [] as Array<{ sourcePath: string; targetPath: string }>,
     failures: [] as Array<{ sourcePath: string; error: string }>,
   })),
+  chooseQuickDestinationFolderMock: vi.fn(async () => null),
   openSecondaryWindowMock: vi.fn(async () => undefined),
   refreshProjectorStateMock: vi.fn(async () => undefined),
   writeImageCurationMock: vi.fn(async () => undefined),
@@ -71,7 +75,9 @@ vi.mock('../services/imageAssetCache', () => ({
 }));
 
 vi.mock('../services/viewerActions', () => ({
+  chooseQuickDestinationFolder: chooseQuickDestinationFolderMock,
   copyCurrentImage: copyCurrentImageMock,
+  copyCurrentImagePath: copyCurrentImagePathMock,
   deleteCurrentImage: deleteCurrentImageMock,
   openCurrentImageInEditor: openCurrentImageInEditorMock,
   revealCurrentImage: revealCurrentImageMock,
@@ -469,6 +475,54 @@ describe('ContactSheet', () => {
       expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
         'C:/images/next.jpg',
       ]);
+    });
+  });
+
+  it('closes the bulk quick-destination menu when clicking outside the overlay menus', async () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+    fireEvent.click(screen.getByText('next.jpg'), { ctrlKey: true });
+    const copySelectedSummary = screen.getByLabelText('Copy selected images');
+    const copySelectedMenu = copySelectedSummary.closest('details');
+    expect(copySelectedMenu).not.toBeNull();
+
+    fireEvent.click(copySelectedSummary);
+
+    expect(copySelectedMenu).toHaveAttribute('open');
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => {
+      expect(copySelectedMenu).not.toHaveAttribute('open');
     });
   });
 });

@@ -12,11 +12,13 @@ import { revealCurrentImage } from '../services/viewerActions';
 interface KeyboardHandlers {
   openFilePicker: () => void;
   openCurrentImageInEditor: () => void | Promise<void>;
+  copyCurrentImagePath: () => void | Promise<void>;
   goNext: (loop?: boolean) => boolean;
   goPrev: (loop?: boolean) => boolean;
   goFirst: () => void;
   goLast: () => void;
   refreshFolder: () => void;
+  deleteCurrentImage: () => void | Promise<void>;
   startSlideshow: () => void;
   stopSlideshow: () => void | Promise<void>;
   toggleSlideshowPause: () => void;
@@ -89,6 +91,15 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.ctrlKey && e.shiftKey && e.key === 'O') {
         e.preventDefault();
         void revealCurrentImage(currentImagePath);
+        return;
+      }
+
+      // Ctrl + Shift + C: Copy the current image path
+      if (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        if (currentImagePath) {
+          void handlers.copyCurrentImagePath();
+        }
         return;
       }
 
@@ -280,6 +291,15 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       }
 
       if (viewMode === 'grid') {
+        return;
+      }
+
+      // Delete: move current image to trash
+      if (e.key === 'Delete') {
+        e.preventDefault();
+        if (currentImagePath) {
+          await handlers.deleteCurrentImage();
+        }
         return;
       }
 

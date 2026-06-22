@@ -25,6 +25,7 @@ interface CreateViewerCommandsOptions {
   revealCurrentImage: () => Promise<void>;
   openCurrentImageInEditor: () => Promise<void>;
   copyCurrentImage: () => Promise<void>;
+  copyCurrentImagePath: () => Promise<void>;
   deleteCurrentImage: () => Promise<void>;
   toggleProjector: () => Promise<void>;
   enterCropMode: () => void;
@@ -206,9 +207,18 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       run: () => options.copyCurrentImage(),
     },
     {
+      id: 'copy-image-path',
+      label: 'Copy Image Path',
+      keywords: ['copy', 'path', 'clipboard', 'file'],
+      shortcut: 'Ctrl+Shift+C',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => options.copyCurrentImagePath(),
+    },
+    {
       id: 'delete-image',
       label: 'Delete Image',
       keywords: ['delete', 'trash', 'recycle'],
+      shortcut: 'Delete',
       isEnabled: (state) => Boolean(state.currentImagePath),
       run: () => options.deleteCurrentImage(),
     },

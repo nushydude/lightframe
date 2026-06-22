@@ -40,6 +40,7 @@ import { configureImageAssetCache } from './services/imageAssetCache';
 import { configureThumbnailCache } from './services/thumbnailCache';
 import { getPerformanceModeProfile } from './services/performanceMode';
 import {
+  copyCurrentImagePath,
   copyCurrentImage,
   deleteCurrentImage,
   openCurrentImageInEditor,
@@ -531,6 +532,8 @@ function App() {
         openCurrentImageInEditor: () =>
           openCurrentImageInEditor(useViewerStore.getState().currentImagePath),
         copyCurrentImage: () => copyCurrentImage(useViewerStore.getState().currentImagePath),
+        copyCurrentImagePath: () =>
+          copyCurrentImagePath(useViewerStore.getState().currentImagePath),
         deleteCurrentImage: () =>
           deleteCurrentImage({
             currentImagePath: useViewerStore.getState().currentImagePath,
@@ -602,11 +605,18 @@ function App() {
     openFilePicker,
     openCurrentImageInEditor: () =>
       openCurrentImageInEditor(useViewerStore.getState().currentImagePath),
+    copyCurrentImagePath: () => copyCurrentImagePath(useViewerStore.getState().currentImagePath),
     goNext,
     goPrev,
     goFirst,
     goLast,
     refreshFolder,
+    deleteCurrentImage: () =>
+      deleteCurrentImage({
+        currentImagePath: useViewerStore.getState().currentImagePath,
+        currentIndex: useViewerStore.getState().currentIndex,
+        removeImage: useViewerStore.getState().removeImage,
+      }),
     startSlideshow: handleStartSlideshow,
     stopSlideshow,
     toggleSlideshowPause,
@@ -746,6 +756,7 @@ function App() {
     !isSlideshowActive
       ? 'with-thumbnails'
       : '',
+    currentImagePath && viewMode === 'viewer' && !isSecondary ? 'has-viewer-safe-areas' : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
     viewMode === 'compare' && !isSecondary ? 'compare-mode' : '',
     isSecondary ? 'secondary-window' : '',
