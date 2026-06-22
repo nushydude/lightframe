@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
@@ -14,6 +14,8 @@ import {
 } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
 import {
+  chooseQuickDestinationFolder,
+  copyCurrentImagePath,
   canSaveRotationForPath,
   copyCurrentImage,
   deleteCurrentImage,
@@ -31,7 +33,7 @@ import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
 import { getCurationFilterLabel, type CurationFilter } from '../services/curationFilter';
-import type { QuickDestination } from '../types/settings';
+import type { PinnableToolbarActionId, QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
 import { EditQueuePanel } from './EditQueuePanel';
 import { ToolbarIcon } from './ToolbarIcon';
@@ -51,6 +53,7 @@ interface ViewerChromeProps {
 
 type SecondaryToolbarActionId =
   | 'copy'
+  | 'copy-path'
   | 'copy-to'
   | 'crop'
   | 'delete'
@@ -62,8 +65,6 @@ type SecondaryToolbarActionId =
   | 'recent-folders'
   | 'reveal'
   | 'settings';
-
-const TOOLBAR_USAGE_STORAGE_KEY = 'lightframe.toolbar-usage.v1';
 const SCALE_EXPORT_MAX_DIMENSION = 65_535;
 const SCALE_EXPORT_MAX_PIXELS = 50_000_000;
 const SCALE_EXPORT_MAX_MEGAPIXELS = SCALE_EXPORT_MAX_PIXELS / 1_000_000;
@@ -105,6 +106,8 @@ const SCALE_EXPORT_SAVE_FILTERS = [
   { name: 'GIF image', extensions: ['gif'] },
 ];
 
+type SecondaryActionGroup = 'file' | 'organize' | 'workspace' | 'view';
+
 interface PreparedScaledCopy {
   outputPath: string;
   width: number;
@@ -114,33 +117,6 @@ interface PreparedScaledCopy {
 interface PreparedCroppedCopy {
   outputPath: string;
   cropRect: CropRect;
-}
-
-function readToolbarUsage(): Partial<Record<SecondaryToolbarActionId, number>> {
-  if (typeof window === 'undefined') {
-    return {};
-  }
-
-  try {
-    const raw = window.localStorage.getItem(TOOLBAR_USAGE_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const usage: Partial<Record<SecondaryToolbarActionId, number>> = {};
-
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-        usage[key as SecondaryToolbarActionId] = value;
-      }
-    }
-
-    return usage;
-  } catch (err) {
-    console.error('Failed to read toolbar usage:', err);
-    return {};
-  }
 }
 
 function parseScaleDimension(value: string): number | null {
@@ -203,6 +179,48 @@ function useMediaQuery(query: string): boolean {
   }, [query]);
 
   return matches;
+}
+
+interface SecondaryActionDefinition {
+  id: SecondaryToolbarActionId;
+  label: string;
+  icon: Parameters<typeof ToolbarIcon>[0]['name'];
+  group: SecondaryActionGroup;
+  menuNode: ReactNode;
+  pinnedNode: ReactNode;
+}
+
+interface SecondaryActionGroupDefinition {
+  id: SecondaryActionGroup;
+  label: string;
+}
+
+const SECONDARY_ACTION_GROUPS: SecondaryActionGroupDefinition[] = [
+  { id: 'file', label: 'File' },
+  { id: 'organize', label: 'Organize' },
+  { id: 'workspace', label: 'Workspace' },
+  { id: 'view', label: 'View' },
+];
+
+const PINNABLE_ACTION_IDS: readonly PinnableToolbarActionId[] = [
+  'refresh',
+  'recent-folders',
+  'reveal',
+  'copy',
+  'copy-path',
+  'copy-to',
+  'move-to',
+  'edit',
+  'delete',
+  'projector',
+  'info',
+  'settings',
+] as const;
+
+function isPinnableActionId(
+  actionId: SecondaryToolbarActionId
+): actionId is PinnableToolbarActionId {
+  return (PINNABLE_ACTION_IDS as readonly string[]).includes(actionId);
 }
 
 function RatingControls({
@@ -438,6 +456,7 @@ export function ViewerChrome({
   const savedViewPresets = useSettingsStore((state) => state.settings.savedViewPresets);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
+  const pinnedToolbarActions = useSettingsStore((state) => state.settings.pinnedToolbarActions);
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
   const promptProjectorGridOnOpen = useSettingsStore(
     (state) => state.settings.promptProjectorGridOnOpen
@@ -450,9 +469,6 @@ export function ViewerChrome({
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
-  const [toolbarUsage, setToolbarUsage] = useState<
-    Partial<Record<SecondaryToolbarActionId, number>>
-  >(() => readToolbarUsage());
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
   const [scaleWidth, setScaleWidth] = useState('');
@@ -461,9 +477,12 @@ export function ViewerChrome({
   const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
+  const chromeRootRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
-  const copyToMenuRef = useRef<HTMLDetailsElement | null>(null);
-  const moveToMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const qualityMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const editQueueMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const cropActionsMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const compactBottomMenuRef = useRef<HTMLDetailsElement | null>(null);
   const shouldUseCompactBottomControls = useMediaQuery(COMPACT_BOTTOM_CONTROLS_QUERY);
   const shouldMoveRotateControls = useMediaQuery(COMPACT_ROTATE_CONTROLS_QUERY);
 
@@ -483,32 +502,48 @@ export function ViewerChrome({
   }, [currentImagePath]);
 
   const closeOverflowMenus = () => {
-    if (copyToMenuRef.current) {
-      copyToMenuRef.current.open = false;
-    }
-    if (moveToMenuRef.current) {
-      moveToMenuRef.current.open = false;
-    }
-    if (moreMenuRef.current) {
-      moreMenuRef.current.open = false;
-    }
+    chromeRootRef.current
+      ?.querySelectorAll('details[open]')
+      .forEach((menu) => ((menu as HTMLDetailsElement).open = false));
   };
 
-  const recordToolbarActionUsage = (actionId: SecondaryToolbarActionId) => {
-    setToolbarUsage((current) => {
-      const next = {
-        ...current,
-        [actionId]: (current[actionId] ?? 0) + 1,
-      };
-
-      try {
-        window.localStorage.setItem(TOOLBAR_USAGE_STORAGE_KEY, JSON.stringify(next));
-      } catch (err) {
-        console.error('Failed to persist toolbar usage:', err);
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
       }
 
-      return next;
-    });
+      const menuRoot = target.closest(
+        '.top-bar-menu, .top-bar-submenu, .quality-menu, .edit-queue-menu, .crop-actions-menu, .bottom-controls-menu'
+      );
+      if (menuRoot && chromeRootRef.current?.contains(menuRoot)) {
+        return;
+      }
+
+      closeOverflowMenus();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeOverflowMenus();
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, []);
+
+  const togglePinnedAction = async (actionId: PinnableToolbarActionId) => {
+    const nextPinnedActions = pinnedToolbarActions.includes(actionId)
+      ? pinnedToolbarActions.filter((value) => value !== actionId)
+      : [...pinnedToolbarActions, actionId];
+
+    await updateSettings({ pinnedToolbarActions: nextPinnedActions });
   };
 
   const persistProjectorPromptPreference = async (nextOpenProjectorInGridView: boolean) => {
@@ -551,37 +586,36 @@ export function ViewerChrome({
 
   const handleDelete = async () => {
     await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
-    recordToolbarActionUsage('delete');
     closeOverflowMenus();
   };
 
   const handleCopy = async () => {
     await copyCurrentImage(currentImagePath);
-    recordToolbarActionUsage('copy');
+    closeOverflowMenus();
+  };
+
+  const handleCopyPath = async () => {
+    await copyCurrentImagePath(currentImagePath);
     closeOverflowMenus();
   };
 
   const handleOpenInEditor = async () => {
     await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
-    recordToolbarActionUsage('edit');
     closeOverflowMenus();
   };
 
   const handleReveal = async () => {
     await revealCurrentImage(currentImagePath);
-    recordToolbarActionUsage('reveal');
     closeOverflowMenus();
   };
 
   const handleRefresh = () => {
     onRefreshFolder();
-    recordToolbarActionUsage('refresh');
     closeOverflowMenus();
   };
 
   const handleOpenRecentFolder = async (folderPath: string, filter?: CurationFilter) => {
     await onOpenRecentFolder(folderPath, filter);
-    recordToolbarActionUsage('recent-folders');
     closeOverflowMenus();
   };
 
@@ -597,8 +631,16 @@ export function ViewerChrome({
         .removeImagesByPaths(result.successes.map((success) => success.sourcePath));
     }
     showTransferResultMessage(result, destination, mode);
-    recordToolbarActionUsage(mode === 'copy' ? 'copy-to' : 'move-to');
     closeOverflowMenus();
+  };
+
+  const handleChooseTransferFolder = async (mode: 'copy' | 'move') => {
+    const destination = await chooseQuickDestinationFolder();
+    if (!destination) {
+      return;
+    }
+
+    await handleQuickTransfer(destination, mode);
   };
 
   const handleToggleFavorite = async () => {
@@ -776,13 +818,11 @@ export function ViewerChrome({
 
   const handleToggleInfo = () => {
     setShowExif((value) => !value);
-    recordToolbarActionUsage('info');
     closeOverflowMenus();
   };
 
   const handleOpenSettings = () => {
     setShowSettings(true);
-    recordToolbarActionUsage('settings');
     closeOverflowMenus();
   };
 
@@ -817,7 +857,6 @@ export function ViewerChrome({
         }
       }
       await refreshProjectorState();
-      recordToolbarActionUsage('projector');
       closeOverflowMenus();
     } catch (err) {
       console.error('Failed to toggle projector mode:', err);
@@ -834,7 +873,6 @@ export function ViewerChrome({
   const handleToggleCrop = () => {
     if (isCropMode) {
       exitCropMode();
-      recordToolbarActionUsage('crop');
       closeOverflowMenus();
       return;
     }
@@ -843,7 +881,6 @@ export function ViewerChrome({
       clearCropPreview();
     }
     enterCropMode();
-    recordToolbarActionUsage('crop');
     closeOverflowMenus();
   };
 
@@ -998,25 +1035,139 @@ export function ViewerChrome({
 
   if (!currentImagePath) return null;
 
-  const secondaryActionSortOrder: Record<SecondaryToolbarActionId, number> = {
-    refresh: 0,
-    'recent-folders': 1,
-    reveal: 2,
-    copy: 3,
-    'copy-to': 4,
-    'move-to': 5,
-    edit: 6,
-    delete: 7,
-    projector: 8,
-    info: 9,
-    settings: 10,
-    crop: 11,
-  };
+  const renderPinnedButton = (
+    actionId: SecondaryToolbarActionId,
+    label: string,
+    icon: Parameters<typeof ToolbarIcon>[0]['name'],
+    onClick: () => void | Promise<void>,
+    options?: {
+      ariaLabel?: string;
+      disabled?: boolean;
+      active?: boolean;
+      title?: string;
+    }
+  ) => (
+    <button
+      className={`top-bar-btn top-bar-btn--labeled has-tooltip ${options?.active ? 'active' : ''}`.trim()}
+      onClick={() => void onClick()}
+      data-tooltip={options?.title ?? label}
+      title={options?.title ?? label}
+      aria-label={options?.ariaLabel ?? label}
+      id={`btn-pinned-${actionId}`}
+      disabled={options?.disabled}
+      type="button"
+    >
+      <span className="top-bar-btn-icon">
+        <ToolbarIcon name={icon} />
+      </span>
+      <span className="top-bar-btn-label">{label}</span>
+    </button>
+  );
 
-  const secondaryActions = [
+  const renderTransferSubmenu = (mode: 'copy' | 'move', summaryClassName: string) => (
+    <details className="top-bar-submenu">
+      <summary
+        className={summaryClassName}
+        aria-label={mode === 'copy' ? 'Copy image to destination' : 'Move image to destination'}
+      >
+        {summaryClassName.includes('top-bar-btn') ? (
+          <>
+            <span className="top-bar-btn-icon">
+              <ToolbarIcon name={mode === 'copy' ? 'copy' : 'move'} />
+            </span>
+            <span className="top-bar-btn-label">{mode === 'copy' ? 'Copy To' : 'Move To'}</span>
+          </>
+        ) : (
+          `${mode === 'copy' ? 'Copy To' : 'Move To'}`
+        )}
+      </summary>
+      <div className="top-bar-submenu-panel">
+        {quickDestinations.length === 0 ? (
+          <span className="top-bar-menu-empty">
+            No destinations configured yet. Use Choose Folder or add saved folders in Settings.
+          </span>
+        ) : (
+          quickDestinations.map((destination) => (
+            <button
+              key={destination.id}
+              className="top-bar-menu-item"
+              onClick={() => void handleQuickTransfer(destination, mode)}
+              type="button"
+            >
+              {destination.label}
+            </button>
+          ))
+        )}
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleChooseTransferFolder(mode)}
+          type="button"
+        >
+          Choose Folder...
+        </button>
+        <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">
+          Manage Saved Folders
+        </button>
+      </div>
+    </details>
+  );
+
+  const renderRecentFoldersSubmenu = (summaryClassName: string) => (
+    <details className="top-bar-submenu">
+      <summary className={summaryClassName} aria-label="Open recent folder">
+        {summaryClassName.includes('top-bar-btn') ? (
+          <>
+            <span className="top-bar-btn-icon">
+              <ToolbarIcon name="folder" />
+            </span>
+            <span className="top-bar-btn-label">Recents</span>
+          </>
+        ) : (
+          'Recent Folders'
+        )}
+      </summary>
+      <div className="top-bar-submenu-panel">
+        {recentFolders.length === 0 ? (
+          <span className="top-bar-menu-empty">No recent folders yet.</span>
+        ) : (
+          recentFolders.map((folder) => (
+            <div key={folder.path} className="top-bar-menu-entry">
+              <button
+                className="top-bar-menu-item top-bar-menu-item--truncate"
+                onClick={() => void handleOpenRecentFolder(folder.path)}
+                title={folder.path}
+                type="button"
+              >
+                {folder.label}
+              </button>
+              {savedViewPresets.length > 0 && (
+                <div className="top-bar-preset-row">
+                  {savedViewPresets.map((preset) => (
+                    <button
+                      key={`${folder.path}:${preset}`}
+                      className="top-bar-preset-chip"
+                      onClick={() => void handleOpenRecentFolder(folder.path, preset)}
+                      type="button"
+                    >
+                      {getCurationFilterLabel(preset)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </details>
+  );
+
+  const secondaryActionDefinitions: SecondaryActionDefinition[] = [
     {
-      id: 'refresh' as const,
-      node: (
+      id: 'refresh',
+      label: 'Refresh',
+      icon: 'refresh',
+      group: 'file',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={handleRefresh}
@@ -1027,52 +1178,25 @@ export function ViewerChrome({
           Refresh
         </button>
       ),
+      pinnedNode: renderPinnedButton('refresh', 'Refresh', 'refresh', handleRefresh, {
+        ariaLabel: 'Refresh folder',
+        disabled: !folderPath,
+      }),
     },
     {
-      id: 'recent-folders' as const,
-      node: (
-        <details className="top-bar-submenu">
-          <summary className="top-bar-menu-item" aria-label="Open recent folder">
-            Recent Folders
-          </summary>
-          <div className="top-bar-submenu-panel">
-            {recentFolders.length === 0 ? (
-              <span className="top-bar-menu-empty">No recent folders yet.</span>
-            ) : (
-              recentFolders.map((folder) => (
-                <div key={folder.path} className="top-bar-menu-entry">
-                  <button
-                    className="top-bar-menu-item top-bar-menu-item--truncate"
-                    onClick={() => void handleOpenRecentFolder(folder.path)}
-                    title={folder.path}
-                    type="button"
-                  >
-                    {folder.label}
-                  </button>
-                  {savedViewPresets.length > 0 && (
-                    <div className="top-bar-preset-row">
-                      {savedViewPresets.map((preset) => (
-                        <button
-                          key={`${folder.path}:${preset}`}
-                          className="top-bar-preset-chip"
-                          onClick={() => void handleOpenRecentFolder(folder.path, preset)}
-                          type="button"
-                        >
-                          {getCurationFilterLabel(preset)}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </details>
-      ),
+      id: 'recent-folders',
+      label: 'Recent Folders',
+      icon: 'folder',
+      group: 'file',
+      menuNode: renderRecentFoldersSubmenu('top-bar-menu-item'),
+      pinnedNode: renderRecentFoldersSubmenu('top-bar-btn top-bar-btn--labeled has-tooltip'),
     },
     {
-      id: 'reveal' as const,
-      node: (
+      id: 'reveal',
+      label: 'Reveal',
+      icon: 'reveal',
+      group: 'file',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={() => void handleReveal()}
@@ -1082,89 +1206,70 @@ export function ViewerChrome({
           Reveal
         </button>
       ),
+      pinnedNode: renderPinnedButton('reveal', 'Reveal', 'reveal', handleReveal, {
+        ariaLabel: 'Show in folder',
+      }),
     },
     {
-      id: 'copy' as const,
-      node: (
+      id: 'copy',
+      label: 'Copy Image',
+      icon: 'copy',
+      group: 'organize',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={() => void handleCopy()}
           type="button"
-          aria-label="Copy to Clipboard"
+          aria-label="Copy image to clipboard"
         >
-          Copy
+          Copy Image
         </button>
       ),
+      pinnedNode: renderPinnedButton('copy', 'Copy', 'copy', handleCopy, {
+        ariaLabel: 'Copy image to clipboard',
+      }),
     },
     {
-      id: 'copy-to' as const,
-      node: (
-        <details className="top-bar-submenu" ref={copyToMenuRef}>
-          <summary className="top-bar-menu-item" aria-label="Copy image to destination">
-            Copy To
-          </summary>
-          <div className="top-bar-submenu-panel">
-            {quickDestinations.length === 0 ? (
-              <>
-                <span className="top-bar-menu-empty">
-                  No destinations configured. Add folders in Settings {'>'} Quick Destinations.
-                </span>
-                <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">
-                  Open Settings
-                </button>
-              </>
-            ) : (
-              quickDestinations.map((destination) => (
-                <button
-                  key={destination.id}
-                  className="top-bar-menu-item"
-                  onClick={() => void handleQuickTransfer(destination, 'copy')}
-                  type="button"
-                >
-                  {destination.label}
-                </button>
-              ))
-            )}
-          </div>
-        </details>
+      id: 'copy-path',
+      label: 'Copy Path',
+      icon: 'copy',
+      group: 'organize',
+      menuNode: (
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleCopyPath()}
+          type="button"
+          aria-label="Copy image path"
+        >
+          Copy Path
+        </button>
       ),
+      pinnedNode: renderPinnedButton('copy-path', 'Path', 'copy', handleCopyPath, {
+        ariaLabel: 'Copy image path',
+      }),
     },
     {
-      id: 'move-to' as const,
-      node: (
-        <details className="top-bar-submenu" ref={moveToMenuRef}>
-          <summary className="top-bar-menu-item" aria-label="Move image to destination">
-            Move To
-          </summary>
-          <div className="top-bar-submenu-panel">
-            {quickDestinations.length === 0 ? (
-              <>
-                <span className="top-bar-menu-empty">
-                  No destinations configured. Add folders in Settings {'>'} Quick Destinations.
-                </span>
-                <button className="top-bar-menu-item" onClick={handleOpenSettings} type="button">
-                  Open Settings
-                </button>
-              </>
-            ) : (
-              quickDestinations.map((destination) => (
-                <button
-                  key={destination.id}
-                  className="top-bar-menu-item"
-                  onClick={() => void handleQuickTransfer(destination, 'move')}
-                  type="button"
-                >
-                  {destination.label}
-                </button>
-              ))
-            )}
-          </div>
-        </details>
-      ),
+      id: 'copy-to',
+      label: 'Copy To',
+      icon: 'copy',
+      group: 'organize',
+      menuNode: renderTransferSubmenu('copy', 'top-bar-menu-item'),
+      pinnedNode: renderTransferSubmenu('copy', 'top-bar-btn top-bar-btn--labeled has-tooltip'),
     },
     {
-      id: 'edit' as const,
-      node: (
+      id: 'move-to',
+      label: 'Move To',
+      icon: 'move',
+      group: 'organize',
+      menuNode: renderTransferSubmenu('move', 'top-bar-menu-item'),
+      pinnedNode: renderTransferSubmenu('move', 'top-bar-btn top-bar-btn--labeled has-tooltip'),
+    },
+    {
+      id: 'edit',
+      label: externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit',
+      icon: 'edit',
+      group: 'organize',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={() => void handleOpenInEditor()}
@@ -1174,10 +1279,16 @@ export function ViewerChrome({
           {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
         </button>
       ),
+      pinnedNode: renderPinnedButton('edit', 'Edit', 'edit', handleOpenInEditor, {
+        ariaLabel: 'Open in external editor',
+      }),
     },
     {
-      id: 'delete' as const,
-      node: (
+      id: 'delete',
+      label: 'Delete',
+      icon: 'delete',
+      group: 'organize',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={() => void handleDelete()}
@@ -1187,10 +1298,16 @@ export function ViewerChrome({
           Delete
         </button>
       ),
+      pinnedNode: renderPinnedButton('delete', 'Delete', 'delete', handleDelete, {
+        ariaLabel: 'Delete image',
+      }),
     },
     {
-      id: 'projector' as const,
-      node: (
+      id: 'projector',
+      label: isProjectorOpen ? 'Projector Off' : 'Projector',
+      icon: 'projector',
+      group: 'workspace',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={() => void handleToggleProjector()}
@@ -1200,10 +1317,23 @@ export function ViewerChrome({
           {isProjectorOpen ? 'Projector Off' : 'Projector'}
         </button>
       ),
+      pinnedNode: renderPinnedButton(
+        'projector',
+        isProjectorOpen ? 'Projector Off' : 'Projector',
+        'projector',
+        handleToggleProjector,
+        {
+          ariaLabel: isProjectorOpen ? 'Close projector mode' : 'Open projector mode',
+          active: isProjectorOpen,
+        }
+      ),
     },
     {
-      id: 'info' as const,
-      node: (
+      id: 'info',
+      label: showExif ? 'Hide Info' : 'Info',
+      icon: 'info',
+      group: 'view',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={handleToggleInfo}
@@ -1213,10 +1343,17 @@ export function ViewerChrome({
           {showExif ? 'Hide Info' : 'Info'}
         </button>
       ),
+      pinnedNode: renderPinnedButton('info', 'Info', 'info', handleToggleInfo, {
+        ariaLabel: 'Toggle image info panel',
+        active: showExif,
+      }),
     },
     {
-      id: 'settings' as const,
-      node: (
+      id: 'settings',
+      label: 'Settings',
+      icon: 'settings',
+      group: 'view',
+      menuNode: (
         <button
           className="top-bar-menu-item"
           onClick={handleOpenSettings}
@@ -1226,19 +1363,22 @@ export function ViewerChrome({
           Settings
         </button>
       ),
+      pinnedNode: renderPinnedButton('settings', 'Settings', 'settings', handleOpenSettings, {
+        ariaLabel: 'Open settings',
+      }),
     },
-  ].sort((a, b) => {
-    const usageDelta = (toolbarUsage[b.id] ?? 0) - (toolbarUsage[a.id] ?? 0);
-    if (usageDelta !== 0) {
-      return usageDelta;
-    }
+  ];
 
-    return secondaryActionSortOrder[a.id] - secondaryActionSortOrder[b.id];
-  });
+  const secondaryActionsById = new Map(
+    secondaryActionDefinitions.map((action) => [action.id, action] as const)
+  );
+  const pinnedSecondaryActions = pinnedToolbarActions
+    .map((actionId) => secondaryActionsById.get(actionId))
+    .filter((action): action is SecondaryActionDefinition => Boolean(action));
 
   return (
     <>
-      <div className="top-bar" role="toolbar" aria-label="Image information">
+      <div className="top-bar" role="toolbar" aria-label="Image information" ref={chromeRootRef}>
         <div className="top-bar-left">
           <span className="file-name" title={fileName}>
             {fileName}
@@ -1398,6 +1538,11 @@ export function ViewerChrome({
               <span className="top-bar-btn-icon">✂</span>
               <span className="top-bar-btn-label">Crop</span>
             </button>
+            {pinnedSecondaryActions.map((action) => (
+              <div key={action.id} className="top-bar-menu-entry top-bar-menu-entry--pinned">
+                {action.pinnedNode}
+              </div>
+            ))}
             <details className="top-bar-menu" ref={moreMenuRef}>
               <summary
                 className="top-bar-btn top-bar-btn--labeled has-tooltip"
@@ -1410,11 +1555,50 @@ export function ViewerChrome({
                 <span className="top-bar-btn-label">More</span>
               </summary>
               <div className="top-bar-menu-panel top-bar-menu-panel--stacked">
-                {secondaryActions.map((action) => (
-                  <div key={action.id} className="top-bar-menu-entry">
-                    {action.node}
-                  </div>
-                ))}
+                {SECONDARY_ACTION_GROUPS.map((group) => {
+                  const groupedActions = secondaryActionDefinitions.filter(
+                    (action) => action.group === group.id
+                  );
+                  if (groupedActions.length === 0) {
+                    return null;
+                  }
+
+                  return (
+                    <section key={group.id} className="top-bar-menu-section">
+                      <div className="top-bar-menu-section-label">{group.label}</div>
+                      {groupedActions.map((action) => {
+                        const pinnableActionId = isPinnableActionId(action.id) ? action.id : null;
+                        const isPinned = pinnableActionId
+                          ? pinnedToolbarActions.includes(pinnableActionId)
+                          : false;
+                        return (
+                          <div
+                            key={action.id}
+                            className="top-bar-menu-entry top-bar-menu-entry--row"
+                          >
+                            <span className="top-bar-menu-icon" aria-hidden="true">
+                              <ToolbarIcon name={action.icon} />
+                            </span>
+                            <div className="top-bar-menu-action">{action.menuNode}</div>
+                            {pinnableActionId && (
+                              <button
+                                className={`top-bar-pin-toggle ${isPinned ? 'active' : ''}`}
+                                onClick={() => void togglePinnedAction(pinnableActionId)}
+                                type="button"
+                                aria-label={
+                                  isPinned ? `Unpin ${action.label}` : `Pin ${action.label}`
+                                }
+                                title={isPinned ? `Unpin ${action.label}` : `Pin ${action.label}`}
+                              >
+                                <ToolbarIcon name="pin" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </section>
+                  );
+                })}
               </div>
             </details>
           </div>
@@ -1682,6 +1866,7 @@ export function ViewerChrome({
 
         <details
           className="quality-menu"
+          ref={qualityMenuRef}
           onToggle={(event) => {
             const isOpen = event.currentTarget.open;
             setIsQualityPanelOpen(isOpen);
@@ -1800,6 +1985,7 @@ export function ViewerChrome({
 
         <details
           className="edit-queue-menu"
+          ref={editQueueMenuRef}
           open={isEditQueuePanelOpen}
           onToggle={(event) => setIsEditQueuePanelOpen(event.currentTarget.open)}
         >
@@ -1827,7 +2013,7 @@ export function ViewerChrome({
         {(isCropMode || pendingCropPreview) && (
           <>
             <div className="control-divider" />
-            <details className="crop-actions-menu">
+            <details className="crop-actions-menu" ref={cropActionsMenuRef}>
               <summary
                 className={`control-btn control-btn--text has-tooltip ${isCropMode ? 'active' : ''}`}
                 data-tooltip="Crop actions"
@@ -1933,7 +2119,10 @@ export function ViewerChrome({
         )}
 
         {shouldUseCompactBottomControls ? (
-          <details className="bottom-controls-menu bottom-controls-menu--compact">
+          <details
+            className="bottom-controls-menu bottom-controls-menu--compact"
+            ref={compactBottomMenuRef}
+          >
             <summary
               className="control-btn has-tooltip"
               data-tooltip="More controls"

@@ -23,6 +23,12 @@ export function useSlideshow() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shuffleOrderRef = useRef<number[]>([]);
   const shuffleIndexRef = useRef(0);
+  const currentIndexRef = useRef(currentIndex);
+  const imageOrderSignature = images.map((image) => image.path).join('\n');
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
 
   const exitFullscreenForStop = useCallback(async () => {
     if (!useViewerStore.getState().isFullscreen) {
@@ -89,6 +95,20 @@ export function useSlideshow() {
     navigateNext,
     setCurrentIndex,
     stopAndRestoreWindow,
+  ]);
+
+  useEffect(() => {
+    if (!isSlideshowActive || !settings.shuffleSlideshow || images.length < 2) {
+      return;
+    }
+
+    generateShuffleOrder(Math.max(0, currentIndexRef.current));
+  }, [
+    generateShuffleOrder,
+    imageOrderSignature,
+    images.length,
+    isSlideshowActive,
+    settings.shuffleSlideshow,
   ]);
 
   // Timer management

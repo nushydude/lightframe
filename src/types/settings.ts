@@ -7,6 +7,20 @@ export interface QuickDestination {
   path: string;
 }
 
+export type PinnableToolbarActionId =
+  | 'refresh'
+  | 'recent-folders'
+  | 'reveal'
+  | 'copy'
+  | 'copy-path'
+  | 'copy-to'
+  | 'move-to'
+  | 'edit'
+  | 'delete'
+  | 'projector'
+  | 'info'
+  | 'settings';
+
 export interface RecentFolder {
   path: string;
   label: string;
@@ -45,6 +59,7 @@ export interface AppSettings {
   savedViewPresets: CurationFilter[];
   recentFolders: RecentFolder[];
   quickDestinations: QuickDestination[];
+  pinnedToolbarActions: PinnableToolbarActionId[];
   externalEditorPath?: string;
   externalEditorLabel?: string;
 }
@@ -68,6 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   savedViewPresets: ['favorites', 'rated4', 'unreviewed'],
   recentFolders: [],
   quickDestinations: [],
+  pinnedToolbarActions: [],
 };
 
 const MAX_RECENT_FOLDERS = 12;
@@ -105,6 +121,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
       label: destination.label,
       path: destination.path,
     })),
+    pinned_toolbar_actions: settings.pinnedToolbarActions,
     external_editor_path: settings.externalEditorPath,
     external_editor_label: settings.externalEditorLabel,
   };
@@ -155,6 +172,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     savedViewPresets: parseSavedViewPresets(raw.saved_view_presets),
     recentFolders: parseRecentFolders(raw.recent_folders),
     quickDestinations: parseQuickDestinations(raw.quick_destinations),
+    pinnedToolbarActions: parsePinnedToolbarActions(raw.pinned_toolbar_actions),
     externalEditorPath: optionalTrimmedString(raw.external_editor_path),
     externalEditorLabel: optionalTrimmedString(raw.external_editor_label),
   };
@@ -193,6 +211,42 @@ function parseQuickDestinations(raw: unknown): QuickDestination[] {
       return { id, label, path };
     })
     .filter((value): value is QuickDestination => value !== null);
+}
+
+function isPinnableToolbarActionId(value: unknown): value is PinnableToolbarActionId {
+  return (
+    value === 'refresh' ||
+    value === 'recent-folders' ||
+    value === 'reveal' ||
+    value === 'copy' ||
+    value === 'copy-path' ||
+    value === 'copy-to' ||
+    value === 'move-to' ||
+    value === 'edit' ||
+    value === 'delete' ||
+    value === 'projector' ||
+    value === 'info' ||
+    value === 'settings'
+  );
+}
+
+function parsePinnedToolbarActions(raw: unknown): PinnableToolbarActionId[] {
+  if (!Array.isArray(raw)) {
+    return DEFAULT_SETTINGS.pinnedToolbarActions;
+  }
+
+  const seen = new Set<PinnableToolbarActionId>();
+  const pinnedActions: PinnableToolbarActionId[] = [];
+  for (const value of raw) {
+    if (!isPinnableToolbarActionId(value) || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    pinnedActions.push(value);
+  }
+
+  return pinnedActions;
 }
 
 function parseWindowBoundsByDisplay(raw: unknown): Record<string, WindowBounds> {

@@ -297,17 +297,19 @@ describe('ViewerChrome', () => {
     expect(defaultProps.onOpenRecentFolder).toHaveBeenCalledWith('D:/Shoots/May', 'rated4');
   });
 
-  it('stores overflow action usage so the menu can learn over time', async () => {
+  it('pins overflow actions into the top bar', async () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
 
-    render(<ViewerChrome {...defaultProps} />);
+    const { container } = render(<ViewerChrome {...defaultProps} />);
 
     fireEvent.click(screen.getByLabelText('More actions'));
-    fireEvent.click(screen.getByLabelText('Refresh folder'));
+    fireEvent.click(screen.getByLabelText('Pin Refresh'));
 
     await waitFor(() => {
-      expect(window.localStorage.getItem('lightframe.toolbar-usage.v1')).toContain('"refresh":1');
+      expect(useSettingsStore.getState().settings.pinnedToolbarActions).toContain('refresh');
     });
+
+    expect(container.querySelector('#btn-pinned-refresh')).toBeTruthy();
   });
 
   it('shows a disabled compare button when fewer than two images are loaded', () => {

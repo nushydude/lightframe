@@ -636,35 +636,19 @@ function CodecHealthSettings() {
 
 function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport | null }) {
   const settings = useSettingsStore((state) => state.settings);
-  const {
-    currentImagePath,
-    folderPath,
-    currentIndex,
-    images,
-    allImages,
-    viewMode,
-    zoomMode,
-    zoomLevel,
-    isFullscreen,
-    isSlideshowActive,
-    isFolderScanning,
-    curationFilter,
-    showPerformanceTelemetry,
-  } = useViewerStore((state) => ({
-    currentImagePath: state.currentImagePath,
-    folderPath: state.folderPath,
-    currentIndex: state.currentIndex,
-    images: state.images,
-    allImages: state.allImages,
-    viewMode: state.viewMode,
-    zoomMode: state.zoomMode,
-    zoomLevel: state.zoomLevel,
-    isFullscreen: state.isFullscreen,
-    isSlideshowActive: state.isSlideshowActive,
-    isFolderScanning: state.isFolderScanning,
-    curationFilter: state.curationFilter,
-    showPerformanceTelemetry: state.showPerformanceTelemetry,
-  }));
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const folderPath = useViewerStore((state) => state.folderPath);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const images = useViewerStore((state) => state.images);
+  const allImages = useViewerStore((state) => state.allImages);
+  const viewMode = useViewerStore((state) => state.viewMode);
+  const zoomMode = useViewerStore((state) => state.zoomMode);
+  const zoomLevel = useViewerStore((state) => state.zoomLevel);
+  const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
+  const isFolderScanning = useViewerStore((state) => state.isFolderScanning);
+  const curationFilter = useViewerStore((state) => state.curationFilter);
+  const showPerformanceTelemetry = useViewerStore((state) => state.showPerformanceTelemetry);
   const [status, setStatus] = React.useState<string | null>(null);
   const [isBusy, setIsBusy] = React.useState(false);
 
