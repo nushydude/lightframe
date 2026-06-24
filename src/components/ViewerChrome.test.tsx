@@ -52,6 +52,12 @@ describe('ViewerChrome', () => {
     projectorState.isProjectorOpen = false;
     projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
+    vi.spyOn(tauriCommands, 'getImageMetadata').mockResolvedValue({
+      width: 1200,
+      height: 800,
+      file_size_bytes: 1000,
+      format: 'JPEG',
+    });
     useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
@@ -482,6 +488,58 @@ describe('ViewerChrome', () => {
     expect(screen.getByText('Unsaved edits')).toBeInTheDocument();
     expect(screen.getByLabelText('Reset pending edits')).toBeInTheDocument();
     expect(screen.getByLabelText('Save pending edits')).toBeInTheDocument();
+  });
+
+  it('toggles the marked state from the top bar', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Mark current image'));
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
+
+    fireEvent.click(screen.getByLabelText('Unmark current image'));
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+  });
+
+  it('opens a context menu with shortcut hints on right click', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const imageCanvas = document.createElement('div');
+    imageCanvas.className = 'image-canvas';
+    container.appendChild(imageCanvas);
+
+    fireEvent.contextMenu(imageCanvas);
+
+    const menu = await screen.findByRole('menu', { name: 'Image actions' });
+    expect(menu).toBeInTheDocument();
+    expect(menu).toHaveTextContent('Ctrl+Shift+C');
+    expect(menu).toHaveTextContent('Delete');
   });
 
   it('does nothing when save cropped copy dialog is canceled', async () => {
@@ -952,7 +1010,55 @@ describe('ViewerChrome', () => {
     ]);
   });
 
+  it('saves pending crop edits as a new file when copy mode is configured', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'copy',
+      },
+    }));
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      pendingEditsByPath: {
+        'C:/Images/photo.jpg': {
+          rotationDegrees: 0,
+          cropRect: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+          pendingCropPreview: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+          updatedAt: 1,
+          history: [],
+        },
+      },
+      cropRect: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+      pendingCropPreview: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-cropped.jpg');
+    const saveCopySpy = vi.spyOn(tauriCommands, 'saveCroppedCopy').mockResolvedValue(undefined);
+    const overwriteSpy = vi.spyOn(tauriCommands, 'overwriteWithCrop').mockResolvedValue(undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Save pending edits'));
+    });
+
+    expect(saveCopySpy).toHaveBeenCalledWith(
+      'C:/Images/photo.jpg',
+      { x: 120, y: 160, width: 480, height: 240 },
+      'C:/Images/photo-cropped.jpg',
+      0
+    );
+    expect(overwriteSpy).not.toHaveBeenCalled();
+  });
+
   it('refreshes the metadata panel after a successful crop overwrite', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'overwrite',
+      },
+    }));
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       isCropMode: true,
@@ -994,12 +1100,19 @@ describe('ViewerChrome', () => {
 
     await waitFor(() => {
       expect(tauriCommands.overwriteWithCrop).toHaveBeenCalledTimes(1);
-      expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(2);
+      expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(3);
       expect(tauriCommands.getExifMetadata).toHaveBeenCalledTimes(2);
     });
   });
 
   it('keeps pending crop edits when save pending edits is canceled at confirmation', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'overwrite',
+      },
+    }));
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       pendingEditsByPath: {
@@ -1043,6 +1156,13 @@ describe('ViewerChrome', () => {
   });
 
   it('commits pending crop edits after confirmation', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'overwrite',
+      },
+    }));
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       pendingEditsByPath: {

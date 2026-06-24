@@ -8,6 +8,7 @@ import { useSettingsStore } from '../state/settingsStore';
 const {
   copyCurrentImageMock,
   copyCurrentImagePathMock,
+  deleteImagesMock,
   deleteCurrentImageMock,
   openCurrentImageInEditorMock,
   revealCurrentImageMock,
@@ -21,6 +22,7 @@ const {
 } = vi.hoisted(() => ({
   copyCurrentImageMock: vi.fn(async () => undefined),
   copyCurrentImagePathMock: vi.fn(async () => undefined),
+  deleteImagesMock: vi.fn(async () => undefined),
   deleteCurrentImageMock: vi.fn(async () => undefined),
   openCurrentImageInEditorMock: vi.fn(async () => undefined),
   revealCurrentImageMock: vi.fn(async () => undefined),
@@ -78,6 +80,7 @@ vi.mock('../services/viewerActions', () => ({
   chooseQuickDestinationFolder: chooseQuickDestinationFolderMock,
   copyCurrentImage: copyCurrentImageMock,
   copyCurrentImagePath: copyCurrentImagePathMock,
+  deleteImages: deleteImagesMock,
   deleteCurrentImage: deleteCurrentImageMock,
   openCurrentImageInEditor: openCurrentImageInEditorMock,
   revealCurrentImage: revealCurrentImageMock,
@@ -475,6 +478,50 @@ describe('ContactSheet', () => {
       expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
         'C:/images/next.jpg',
       ]);
+    });
+  });
+
+  it('deletes selected grid images from the bulk bar', async () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+    fireEvent.click(screen.getByText('next.jpg'), { ctrlKey: true });
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Selected image actions' });
+    fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(deleteImagesMock).toHaveBeenCalledWith({
+        imagePaths: ['C:/images/current.jpg', 'C:/images/next.jpg'],
+        removeImagesByPaths: expect.any(Function),
+      });
     });
   });
 

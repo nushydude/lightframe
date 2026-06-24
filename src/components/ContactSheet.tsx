@@ -24,6 +24,7 @@ import {
   chooseQuickDestinationFolder,
   copyCurrentImage,
   copyCurrentImagePath,
+  deleteImages,
   deleteCurrentImage,
   openCurrentImageInEditor,
   revealCurrentImage,
@@ -335,6 +336,22 @@ export function ContactSheet({
       removeImage: useViewerStore.getState().removeImage,
     });
   }, [currentImagePath, currentIndex]);
+
+  const handleDeleteSelected = async () => {
+    if (!hasSelection) {
+      return;
+    }
+
+    await deleteImages({
+      imagePaths: selectedPaths,
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    setSelectedPaths((current) =>
+      current.filter((path) =>
+        useViewerStore.getState().images.some((image) => image.path === path)
+      )
+    );
+  };
 
   const handleOpenInEditor = async () => {
     await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
@@ -777,6 +794,13 @@ export function ContactSheet({
           <span className="contact-sheet-bulk-divider" aria-hidden="true" />
           {renderBulkQuickDestinationMenu('copy')}
           {renderBulkQuickDestinationMenu('move')}
+          <button
+            className="top-bar-menu-item"
+            type="button"
+            onClick={() => void handleDeleteSelected()}
+          >
+            Delete
+          </button>
         </div>
       )}
       <div className="contact-sheet-content" ref={contentRef} onScroll={handleScroll}>

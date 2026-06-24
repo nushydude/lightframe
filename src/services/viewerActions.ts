@@ -16,6 +16,11 @@ interface DeleteCurrentImageOptions {
   removeImage: (index: number) => void;
 }
 
+interface DeleteImagesOptions {
+  imagePaths: string[];
+  removeImagesByPaths: (paths: string[]) => void;
+}
+
 export function canSaveRotationForPath(filePath: string | null): boolean {
   if (!filePath) {
     return false;
@@ -282,4 +287,76 @@ export async function deleteCurrentImage({
       message: `Failed to delete: ${err}`,
     });
   }
+}
+
+export async function deleteImages({
+  imagePaths,
+  removeImagesByPaths,
+}: DeleteImagesOptions): Promise<void> {
+  const normalizedPaths = Array.from(
+    new Set(imagePaths.map((path) => path.trim()).filter(Boolean))
+  );
+  if (normalizedPaths.length === 0) {
+    return;
+  }
+
+  const firstFileName =
+    normalizedPaths[0]?.replace(/\\/g, '/').split('/').pop() ?? normalizedPaths[0] ?? 'image';
+  const confirmed = await confirm(
+    normalizedPaths.length === 1
+      ? `Are you sure you want to move this image to the Recycle Bin?\n\n${firstFileName}`
+      : `Are you sure you want to move ${normalizedPaths.length} images to the Recycle Bin?\n\nFirst item: ${firstFileName}`,
+    {
+      title: normalizedPaths.length === 1 ? 'Delete Image' : 'Delete Images',
+      kind: 'warning',
+    }
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  const successes: string[] = [];
+  const failures: Array<{ path: string; error: string }> = [];
+
+  for (const path of normalizedPaths) {
+    try {
+      await moveToTrash(path);
+      successes.push(path);
+    } catch (err) {
+      console.error('Failed to move to trash:', err);
+      failures.push({
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (successes.length > 0) {
+    removeImagesByPaths(successes);
+  }
+
+  const pushToast = useToastStore.getState().pushToast;
+  if (failures.length === 0) {
+    pushToast({
+      title: successes.length === 1 ? 'Image deleted' : 'Images deleted',
+      kind: 'success',
+      message:
+        successes.length === 1
+          ? 'Moved image to the Recycle Bin.'
+          : `Moved ${successes.length} images to the Recycle Bin.`,
+    });
+    return;
+  }
+
+  pushToast({
+    title: successes.length > 0 ? 'Delete issues' : 'Delete failed',
+    kind: successes.length > 0 ? 'warning' : 'error',
+    message:
+      successes.length > 0
+        ? `Deleted ${successes.length} images, but ${failures.length} failed.`
+        : 'Could not delete the selected images.',
+    detail: `${failures[0]?.path ?? ''}\n${failures[0]?.error ?? ''}`.trim(),
+    duration: 8000,
+  });
 }

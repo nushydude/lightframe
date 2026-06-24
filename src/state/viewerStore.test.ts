@@ -3,12 +3,14 @@ import { useViewerStore } from './viewerStore';
 
 const {
   confirmMock,
+  getImageMetadataMock,
   saveRotatedImageMock,
   overwriteWithCropMock,
   invalidateImageAssetMock,
   invalidateThumbnailMock,
 } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
+  getImageMetadataMock: vi.fn(),
   saveRotatedImageMock: vi.fn(),
   overwriteWithCropMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
@@ -20,6 +22,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 }));
 
 vi.mock('../services/tauriCommands', () => ({
+  getImageMetadata: getImageMetadataMock,
   saveRotatedImage: saveRotatedImageMock,
   overwriteWithCrop: overwriteWithCropMock,
 }));
@@ -38,6 +41,7 @@ describe('viewerStore', () => {
     useViewerStore.getState().setDefaultZoomMode('fit');
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
+    getImageMetadataMock.mockResolvedValue({ width: 1200, height: 800 });
   });
 
   it('should set current image and reset display state', () => {
@@ -472,6 +476,28 @@ describe('viewerStore', () => {
     });
   });
 
+  it('tracks marked images independently from navigation state', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+    });
+
+    useViewerStore.getState().toggleMarkedPath('1.jpg');
+    useViewerStore.getState().toggleMarkedPath('2.jpg');
+    expect(useViewerStore.getState().markedPaths).toEqual(['1.jpg', '2.jpg']);
+
+    useViewerStore.getState().toggleMarkedPath('1.jpg');
+    expect(useViewerStore.getState().markedPaths).toEqual(['2.jpg']);
+
+    useViewerStore.getState().markAllVisibleImages();
+    expect(useViewerStore.getState().markedPaths).toEqual(['1.jpg', '2.jpg']);
+
+    useViewerStore.getState().clearMarkedPaths();
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+  });
+
   it('restores per-image pending edits when navigating away and back', () => {
     useViewerStore.setState({
       images: [
@@ -579,6 +605,41 @@ describe('viewerStore', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('uses source image metadata dimensions when committing a crop', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'test.jpg',
+      currentIndex: 0,
+      images: [
+        { path: 'test.jpg', file_name: 'test', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      pendingEditsByPath: {
+        'test.jpg': {
+          rotationDegrees: 0,
+          cropRect: { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
+          pendingCropPreview: { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
+          updatedAt: 1,
+          history: [],
+        },
+      },
+      cropRect: { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
+      pendingCropPreview: { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
+    });
+
+    await useViewerStore.getState().commitPendingEdits('test.jpg');
+
+    expect(getImageMetadataMock).toHaveBeenCalledWith('test.jpg');
+    expect(overwriteWithCropMock).toHaveBeenCalledWith(
+      'test.jpg',
+      {
+        x: 120,
+        y: 160,
+        width: 600,
+        height: 200,
+      },
+      0
+    );
   });
 
   it('enters compare mode using current image as primary and adjacent image as secondary', () => {

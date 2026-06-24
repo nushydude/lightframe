@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   copyCurrentImage,
+  deleteImages,
   deleteCurrentImage,
   openCurrentImageInEditor,
   revealCurrentImage,
@@ -42,6 +43,7 @@ describe('viewerActions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
+    moveToTrashMock.mockResolvedValue(undefined);
     useToastStore.getState().clearToasts();
     useSettingsStore.getState().updateSettings = vi.fn().mockResolvedValue(undefined);
     useSettingsStore.setState((state) => ({
@@ -142,6 +144,28 @@ describe('viewerActions', () => {
       })
     );
     expect(removeImage).not.toHaveBeenCalled();
+  });
+
+  it('deletes multiple images and removes successful paths in one pass', async () => {
+    const removeImagesByPaths = vi.fn();
+
+    await expect(
+      deleteImages({
+        imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+        removeImagesByPaths,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/one.jpg');
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/two.jpg');
+    expect(removeImagesByPaths).toHaveBeenCalledWith(['c:/images/one.jpg', 'c:/images/two.jpg']);
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Images deleted',
+        kind: 'success',
+      })
+    );
   });
 
   it('transfers images to a quick destination and reports partial failures', async () => {

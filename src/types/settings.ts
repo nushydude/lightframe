@@ -42,6 +42,7 @@ export interface AppSettings {
   loopSlideshow: boolean;
   shuffleSlideshow: boolean;
   autoFullscreenOnSlideshow: boolean;
+  cropSaveMode: 'copy' | 'overwrite';
   mouseWheelBehavior: 'zoom' | 'navigate';
   defaultFitMode: 'fit' | 'fill' | 'actual';
   rememberWindowBounds: boolean;
@@ -70,6 +71,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   loopSlideshow: false,
   shuffleSlideshow: false,
   autoFullscreenOnSlideshow: true,
+  cropSaveMode: 'copy',
   mouseWheelBehavior: 'zoom',
   defaultFitMode: 'fit',
   rememberWindowBounds: true,
@@ -96,6 +98,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     loop_slideshow: settings.loopSlideshow,
     shuffle_slideshow: settings.shuffleSlideshow,
     auto_fullscreen_on_slideshow: settings.autoFullscreenOnSlideshow,
+    crop_save_mode: settings.cropSaveMode,
     mouse_wheel_behavior: settings.mouseWheelBehavior,
     default_fit_mode: settings.defaultFitMode,
     remember_window_bounds: settings.rememberWindowBounds,
@@ -141,6 +144,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       raw.auto_fullscreen_on_slideshow,
       DEFAULT_SETTINGS.autoFullscreenOnSlideshow
     ),
+    cropSaveMode: raw.crop_save_mode === 'overwrite' ? 'overwrite' : DEFAULT_SETTINGS.cropSaveMode,
     mouseWheelBehavior: stringSetting(
       raw.mouse_wheel_behavior,
       DEFAULT_SETTINGS.mouseWheelBehavior

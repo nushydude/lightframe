@@ -18,12 +18,14 @@ import {
   copyCurrentImagePath,
   canSaveRotationForPath,
   copyCurrentImage,
+  deleteImages,
   deleteCurrentImage,
   openCurrentImageInEditor,
   revealCurrentImage,
   showTransferResultMessage,
   transferImagesToDestination,
 } from '../services/viewerActions';
+import { getCropSourceDimensions } from '../services/cropSourceDimensions';
 import { normalizedToIntegerPixelRect } from '../services/cropMath';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
@@ -117,6 +119,26 @@ interface PreparedScaledCopy {
 interface PreparedCroppedCopy {
   outputPath: string;
   cropRect: CropRect;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  open: boolean;
+}
+
+interface MenuShortcutAction {
+  label: string;
+  shortcut?: string;
+}
+
+function MenuLabel({ label, shortcut }: MenuShortcutAction) {
+  return (
+    <span className="menu-shortcut-row">
+      <span>{label}</span>
+      {shortcut ? <span className="shortcut-key menu-shortcut-key">{shortcut}</span> : null}
+    </span>
+  );
 }
 
 function parseScaleDimension(value: string): number | null {
@@ -414,6 +436,7 @@ export function ViewerChrome({
     imageSharpening,
     isFolderScanning,
     curationFilter,
+    markedPaths,
     setFullscreen,
     setShowSettings,
     setZoomMode,
@@ -443,6 +466,10 @@ export function ViewerChrome({
     clearCropPreview,
     clearPendingEdits,
     commitPendingEdits,
+    toggleMarkedPath,
+    clearMarkedPaths,
+    markAllVisibleImages,
+    removeImagesByPaths,
   } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
@@ -456,6 +483,7 @@ export function ViewerChrome({
   const savedViewPresets = useSettingsStore((state) => state.settings.savedViewPresets);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
+  const cropSaveMode = useSettingsStore((state) => state.settings.cropSaveMode);
   const pinnedToolbarActions = useSettingsStore((state) => state.settings.pinnedToolbarActions);
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
   const promptProjectorGridOnOpen = useSettingsStore(
@@ -476,6 +504,7 @@ export function ViewerChrome({
   const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
   const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({ x: 0, y: 0, open: false });
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const chromeRootRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -530,6 +559,10 @@ export function ViewerChrome({
     }
   }, [menuRefs]);
 
+  const closeContextMenu = useCallback(() => {
+    setContextMenu((current) => (current.open ? { ...current, open: false } : current));
+  }, []);
+
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
@@ -542,11 +575,13 @@ export function ViewerChrome({
       }
 
       closeOverflowMenus();
+      closeContextMenu();
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         closeOverflowMenus();
+        closeContextMenu();
       }
     };
 
@@ -556,7 +591,50 @@ export function ViewerChrome({
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [closeOverflowMenus, menuRefs]);
+  }, [closeContextMenu, closeOverflowMenus, menuRefs]);
+
+  useEffect(() => {
+    const handleContextMenu = (event: MouseEvent) => {
+      if (!currentImagePath || viewMode !== 'viewer') {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (
+        !target ||
+        target.closest('input, textarea, select, button, summary, .settings-panel, .context-menu')
+      ) {
+        return;
+      }
+
+      if (
+        !target.closest(
+          '.image-canvas, .top-bar, .bottom-controls, .thumbnail-strip, .nav-arrow, .slideshow-indicator'
+        )
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      closeOverflowMenus();
+      const menuWidth = 240;
+      const menuHeight = 260;
+      setContextMenu({
+        x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
+        y: Math.min(event.clientY, window.innerHeight - menuHeight - 12),
+        open: true,
+      });
+    };
+
+    const handleScroll = () => closeContextMenu();
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [closeContextMenu, closeOverflowMenus, currentImagePath, viewMode]);
 
   const togglePinnedAction = async (actionId: PinnableToolbarActionId) => {
     const nextPinnedActions = pinnedToolbarActions.includes(actionId)
@@ -588,6 +666,8 @@ export function ViewerChrome({
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const currentRating = currentCuration?.rating ?? 0;
+  const markedPathSet = useMemo(() => new Set(markedPaths), [markedPaths]);
+  const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
   const parsedScaleWidth = parseScaleDimension(scaleWidth);
   const parsedScaleHeight = parseScaleDimension(scaleHeight);
   const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
@@ -607,26 +687,31 @@ export function ViewerChrome({
   const handleDelete = async () => {
     await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
     closeOverflowMenus();
+    closeContextMenu();
   };
 
   const handleCopy = async () => {
     await copyCurrentImage(currentImagePath);
     closeOverflowMenus();
+    closeContextMenu();
   };
 
   const handleCopyPath = async () => {
     await copyCurrentImagePath(currentImagePath);
     closeOverflowMenus();
+    closeContextMenu();
   };
 
   const handleOpenInEditor = async () => {
     await openCurrentImageInEditor(currentImagePath, externalEditorPath, externalEditorLabel);
     closeOverflowMenus();
+    closeContextMenu();
   };
 
   const handleReveal = async () => {
     await revealCurrentImage(currentImagePath);
     closeOverflowMenus();
+    closeContextMenu();
   };
 
   const handleRefresh = () => {
@@ -909,11 +994,8 @@ export function ViewerChrome({
       return null;
     }
 
-    const activeImage = getActiveCanvasImageElement();
-    const imageWidth = activeImage?.naturalWidth ?? 0;
-    const imageHeight = activeImage?.naturalHeight ?? 0;
-
-    if (imageWidth <= 0 || imageHeight <= 0) {
+    const dimensions = await getCropSourceDimensions(currentImagePath);
+    if (!dimensions) {
       pushToast({
         title: 'Crop Copy',
         kind: 'error',
@@ -922,6 +1004,7 @@ export function ViewerChrome({
       return null;
     }
 
+    const { width: imageWidth, height: imageHeight } = dimensions;
     const pixelCropRect = normalizedToIntegerPixelRect(cropRect, imageWidth, imageHeight);
     const originalName = getFileName(currentImagePath);
     const dotIndex = originalName.lastIndexOf('.');
@@ -996,10 +1079,8 @@ export function ViewerChrome({
       return;
     }
 
-    const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
-    const imageWidth = activeImage?.naturalWidth ?? 0;
-    const imageHeight = activeImage?.naturalHeight ?? 0;
-    if (imageWidth <= 0 || imageHeight <= 0) {
+    const dimensions = await getCropSourceDimensions(currentImagePath);
+    if (!dimensions) {
       pushToast({
         title: 'Crop Overwrite',
         kind: 'error',
@@ -1007,6 +1088,8 @@ export function ViewerChrome({
       });
       return;
     }
+
+    const { width: imageWidth, height: imageHeight } = dimensions;
 
     const confirmed = await confirm(
       `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
@@ -1043,6 +1126,60 @@ export function ViewerChrome({
         kind: 'error',
         message: `Failed to overwrite cropped image: ${err}`,
       });
+    }
+  };
+
+  const handleDeleteMarked = async () => {
+    if (markedPaths.length === 0) {
+      return;
+    }
+
+    await deleteImages({
+      imagePaths: markedPaths,
+      removeImagesByPaths,
+    });
+    clearMarkedPaths();
+    closeContextMenu();
+    closeOverflowMenus();
+  };
+
+  const handleBulkTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
+    if (markedPaths.length === 0) {
+      return;
+    }
+
+    const result = await transferImagesToDestination(markedPaths, destination, mode);
+    if (mode === 'move') {
+      const movedPaths = new Set(result.successes.map((success) => success.sourcePath));
+      if (movedPaths.size > 0) {
+        removeImagesByPaths([...movedPaths]);
+        useViewerStore.setState((state) => ({
+          markedPaths: state.markedPaths.filter((path) => !movedPaths.has(path)),
+        }));
+      }
+    }
+    showTransferResultMessage(result, destination, mode);
+    closeContextMenu();
+    closeOverflowMenus();
+  };
+
+  const handleChooseBulkTransferFolder = async (mode: 'copy' | 'move') => {
+    const destination = await chooseQuickDestinationFolder();
+    if (!destination) {
+      return;
+    }
+
+    await handleBulkTransfer(destination, mode);
+  };
+
+  const handleSaveCurrentEdits = async () => {
+    if (currentImagePath && currentPendingEdit?.cropRect && cropSaveMode === 'copy') {
+      await handleSaveCroppedCopy();
+      return;
+    }
+
+    if (currentImagePath) {
+      await commitPendingEdits(currentImagePath);
     }
   };
 
@@ -1181,6 +1318,42 @@ export function ViewerChrome({
     </details>
   );
 
+  const renderMarkedTransferSubmenu = (mode: 'copy' | 'move') => (
+    <details className="top-bar-submenu">
+      <summary
+        className="top-bar-menu-item"
+        aria-label={mode === 'copy' ? 'Copy marked images' : 'Move marked images'}
+      >
+        {mode === 'copy' ? 'Copy To' : 'Move To'}
+      </summary>
+      <div className="top-bar-submenu-panel">
+        {quickDestinations.length === 0 ? (
+          <span className="top-bar-menu-empty">
+            No destinations configured yet. Use Choose Folder or add saved folders in Settings.
+          </span>
+        ) : (
+          quickDestinations.map((destination) => (
+            <button
+              key={`${mode}:${destination.id}`}
+              className="top-bar-menu-item"
+              onClick={() => void handleBulkTransfer(destination, mode)}
+              type="button"
+            >
+              {destination.label}
+            </button>
+          ))
+        )}
+        <button
+          className="top-bar-menu-item"
+          onClick={() => void handleChooseBulkTransferFolder(mode)}
+          type="button"
+        >
+          Choose Folder...
+        </button>
+      </div>
+    </details>
+  );
+
   const secondaryActionDefinitions: SecondaryActionDefinition[] = [
     {
       id: 'refresh',
@@ -1195,7 +1368,7 @@ export function ViewerChrome({
           aria-label="Refresh folder"
           disabled={!folderPath}
         >
-          Refresh
+          <MenuLabel label="Refresh" shortcut="Ctrl+R" />
         </button>
       ),
       pinnedNode: renderPinnedButton('refresh', 'Refresh', 'refresh', handleRefresh, {
@@ -1223,7 +1396,7 @@ export function ViewerChrome({
           type="button"
           aria-label="Show in folder"
         >
-          Reveal
+          <MenuLabel label="Reveal" shortcut="Ctrl+Shift+O" />
         </button>
       ),
       pinnedNode: renderPinnedButton('reveal', 'Reveal', 'reveal', handleReveal, {
@@ -1242,7 +1415,7 @@ export function ViewerChrome({
           type="button"
           aria-label="Copy image to clipboard"
         >
-          Copy Image
+          <MenuLabel label="Copy Image" />
         </button>
       ),
       pinnedNode: renderPinnedButton('copy', 'Copy', 'copy', handleCopy, {
@@ -1261,7 +1434,7 @@ export function ViewerChrome({
           type="button"
           aria-label="Copy image path"
         >
-          Copy Path
+          <MenuLabel label="Copy Path" shortcut="Ctrl+Shift+C" />
         </button>
       ),
       pinnedNode: renderPinnedButton('copy-path', 'Path', 'copy', handleCopyPath, {
@@ -1296,7 +1469,10 @@ export function ViewerChrome({
           type="button"
           aria-label="Open in external editor"
         >
-          {externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+          <MenuLabel
+            label={externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+            shortcut="Ctrl+E"
+          />
         </button>
       ),
       pinnedNode: renderPinnedButton('edit', 'Edit', 'edit', handleOpenInEditor, {
@@ -1315,7 +1491,7 @@ export function ViewerChrome({
           type="button"
           aria-label="Delete image"
         >
-          Delete
+          <MenuLabel label="Delete" shortcut="Delete" />
         </button>
       ),
       pinnedNode: renderPinnedButton('delete', 'Delete', 'delete', handleDelete, {
@@ -1334,7 +1510,7 @@ export function ViewerChrome({
           type="button"
           aria-label={isProjectorOpen ? 'Close projector mode' : 'Open projector mode'}
         >
-          {isProjectorOpen ? 'Projector Off' : 'Projector'}
+          <MenuLabel label={isProjectorOpen ? 'Projector Off' : 'Projector'} />
         </button>
       ),
       pinnedNode: renderPinnedButton(
@@ -1360,7 +1536,7 @@ export function ViewerChrome({
           type="button"
           aria-label="Toggle image info panel"
         >
-          {showExif ? 'Hide Info' : 'Info'}
+          <MenuLabel label={showExif ? 'Hide Info' : 'Info'} shortcut="I" />
         </button>
       ),
       pinnedNode: renderPinnedButton('info', 'Info', 'info', handleToggleInfo, {
@@ -1380,7 +1556,7 @@ export function ViewerChrome({
           type="button"
           aria-label="Open settings"
         >
-          Settings
+          <MenuLabel label="Settings" shortcut="Ctrl+," />
         </button>
       ),
       pinnedNode: renderPinnedButton('settings', 'Settings', 'settings', handleOpenSettings, {
@@ -1411,6 +1587,12 @@ export function ViewerChrome({
           )}
           {isFavorite && <span className="image-counter">★</span>}
           {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
+          {markedPaths.length > 0 && (
+            <span className="image-counter">
+              {markedPaths.length} marked
+              {isCurrentMarked ? ' • current' : ''}
+            </span>
+          )}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
@@ -1558,6 +1740,17 @@ export function ViewerChrome({
               <span className="top-bar-btn-icon">✂</span>
               <span className="top-bar-btn-label">Crop</span>
             </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCurrentMarked ? 'active' : ''}`}
+              onClick={() => currentImagePath && toggleMarkedPath(currentImagePath)}
+              data-tooltip={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
+              title={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
+              aria-label={isCurrentMarked ? 'Unmark current image' : 'Mark current image'}
+              id="btn-mark-current"
+            >
+              <span className="top-bar-btn-icon">+</span>
+              <span className="top-bar-btn-label">{isCurrentMarked ? 'Marked' : 'Mark'}</span>
+            </button>
             {pinnedSecondaryActions.map((action) => (
               <div key={action.id} className="top-bar-menu-entry top-bar-menu-entry--pinned">
                 {action.pinnedNode}
@@ -1624,6 +1817,97 @@ export function ViewerChrome({
           </div>
         </div>
       </div>
+
+      {markedPaths.length > 0 && (
+        <div className="viewer-bulk-bar" role="toolbar" aria-label="Marked image actions">
+          <span className="viewer-bulk-count">{markedPaths.length} marked</span>
+          <button className="top-bar-menu-item" onClick={markAllVisibleImages} type="button">
+            Mark All
+          </button>
+          <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
+            Clear
+          </button>
+          <span className="contact-sheet-bulk-divider" aria-hidden="true" />
+          {renderMarkedTransferSubmenu('copy')}
+          {renderMarkedTransferSubmenu('move')}
+          <button
+            className="top-bar-menu-item"
+            onClick={() => void handleDeleteMarked()}
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+
+      {contextMenu.open && (
+        <div
+          className="context-menu"
+          role="menu"
+          aria-label="Image actions"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="top-bar-menu-item context-menu-item"
+            onClick={() => {
+              if (currentImagePath) {
+                toggleMarkedPath(currentImagePath);
+              }
+              closeContextMenu();
+            }}
+            role="menuitem"
+            type="button"
+          >
+            <MenuLabel
+              label={isCurrentMarked ? 'Unmark Current Image' : 'Mark Current Image'}
+              shortcut="M"
+            />
+          </button>
+          <button
+            className="top-bar-menu-item context-menu-item"
+            onClick={() => void handleCopy()}
+            role="menuitem"
+            type="button"
+          >
+            <MenuLabel label="Copy Image" />
+          </button>
+          <button
+            className="top-bar-menu-item context-menu-item"
+            onClick={() => void handleCopyPath()}
+            role="menuitem"
+            type="button"
+          >
+            <MenuLabel label="Copy Path" shortcut="Ctrl+Shift+C" />
+          </button>
+          <button
+            className="top-bar-menu-item context-menu-item"
+            onClick={() => void handleReveal()}
+            role="menuitem"
+            type="button"
+          >
+            <MenuLabel label="Reveal" shortcut="Ctrl+Shift+O" />
+          </button>
+          <button
+            className="top-bar-menu-item context-menu-item"
+            onClick={() => void handleOpenInEditor()}
+            role="menuitem"
+            type="button"
+          >
+            <MenuLabel
+              label={externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+              shortcut="Ctrl+E"
+            />
+          </button>
+          <button
+            className="top-bar-menu-item context-menu-item context-menu-item-danger"
+            onClick={() => void handleDelete()}
+            role="menuitem"
+            type="button"
+          >
+            <MenuLabel label="Delete" shortcut="Delete" />
+          </button>
+        </div>
+      )}
 
       {showProjectorGridPrompt && (
         <div className="projector-grid-prompt-overlay" role="presentation">
@@ -1846,9 +2130,7 @@ export function ViewerChrome({
           <button
             className="control-btn active has-tooltip"
             onClick={() => {
-              if (currentImagePath) {
-                void commitPendingEdits(currentImagePath);
-              }
+              void handleSaveCurrentEdits();
             }}
             title="Save pending edits"
             aria-label="Save pending edits"

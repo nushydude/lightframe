@@ -19,6 +19,7 @@ import {
   type NormalizedCropRect,
   normalizedToIntegerPixelRect,
 } from '../services/cropMath';
+import { getCropSourceDimensions } from '../services/cropSourceDimensions';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
 type ViewMode = 'viewer' | 'grid' | 'compare';
@@ -226,6 +227,7 @@ interface ViewerState {
   showOnlyFavorites: boolean;
   curationFilter: CurationFilter;
   favoritePaths: FavoritePathMap;
+  markedPaths: string[];
   curationStateByPath: Record<string, CurationStateSnapshot>;
   favoriteFilterReturnPath: string | null;
   curationFilterReturnPath: string | null;
@@ -237,6 +239,9 @@ interface ViewerState {
   setCurrentImage: (path: string, index: number) => void;
   setImages: (images: ImageFile[]) => void;
   setShowOnlyFavorites: (showOnlyFavorites: boolean) => void;
+  toggleMarkedPath: (path: string) => void;
+  clearMarkedPaths: () => void;
+  markAllVisibleImages: () => void;
   setCurationFilter: (filter: CurationFilter) => void;
   prepareCurationFilter: (filter: CurationFilter) => void;
   syncFavoriteFilter: (curationByPath: Record<string, CurationStateSnapshot>) => void;
@@ -329,6 +334,7 @@ const initialState = {
   showOnlyFavorites: false,
   curationFilter: 'all' as CurationFilter,
   favoritePaths: {},
+  markedPaths: [],
   curationStateByPath: {},
   favoriteFilterReturnPath: null,
   curationFilterReturnPath: null,
@@ -384,25 +390,18 @@ async function overwritePendingCrop(
   );
   if (!confirmed) return false;
 
-  const { width, height } = getActiveImageDimensions();
+  const dimensions = await getCropSourceDimensions(targetPath);
+  if (!dimensions) {
+    throw new Error('Unable to determine image dimensions for pending crop save.');
+  }
+
+  const { width, height } = dimensions;
   await overwriteWithCrop(
     targetPath,
     normalizedToIntegerPixelRect(cropRect, width, height),
     rotationDegrees
   );
   return true;
-}
-
-function getActiveImageDimensions(): { width: number; height: number } {
-  const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
-  const width = activeImage?.naturalWidth ?? activeImage?.width ?? 0;
-  const height = activeImage?.naturalHeight ?? activeImage?.height ?? 0;
-
-  if (width <= 0 || height <= 0) {
-    throw new Error('Unable to determine image dimensions for pending crop save.');
-  }
-
-  return { width, height };
 }
 
 function getCommittedEditState(
@@ -597,6 +596,20 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
     setShowOnlyFavorites: (showOnlyFavorites) =>
       get().setCurationFilter(showOnlyFavorites ? 'favorites' : 'all'),
+
+    toggleMarkedPath: (path) =>
+      set((state) => ({
+        markedPaths: state.markedPaths.includes(path)
+          ? state.markedPaths.filter((value) => value !== path)
+          : [...state.markedPaths, path],
+      })),
+
+    clearMarkedPaths: () => set({ markedPaths: [] }),
+
+    markAllVisibleImages: () =>
+      set((state) => ({
+        markedPaths: state.images.map((image) => image.path),
+      })),
 
     prepareCurationFilter: (filter) =>
       set({
@@ -800,6 +813,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
         return {
           ...getFavoriteSafeImagesState(currentState, newAllImages, currentState.curationFilter),
+          markedPaths: currentState.markedPaths.filter((path) => !removedPaths.has(path)),
           pendingEditsByPath: nextPendingEdits,
         };
       });
