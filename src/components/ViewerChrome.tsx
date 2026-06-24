@@ -50,6 +50,7 @@ interface ViewerChromeProps {
   onNext: () => void;
   onPrev: () => void;
   onStartSlideshow: () => void | Promise<void>;
+  onStopSlideshow: () => void | Promise<void>;
   onTogglePause: () => void;
 }
 
@@ -421,6 +422,7 @@ export function ViewerChrome({
   onNext,
   onPrev,
   onStartSlideshow,
+  onStopSlideshow,
   onTogglePause,
 }: ViewerChromeProps) {
   const {
@@ -1699,8 +1701,26 @@ export function ViewerChrome({
                   name={isSlideshowActive && !isSlideshowPaused ? 'pause' : 'slideshow'}
                 />
               </span>
-              <span className="top-bar-btn-label">Slideshow</span>
+              <span className="top-bar-btn-label">
+                {isSlideshowActive ? (isSlideshowPaused ? 'Resume' : 'Pause') : 'Slideshow'}
+              </span>
             </button>
+            {isSlideshowActive && (
+              <button
+                className="top-bar-btn top-bar-btn--labeled has-tooltip"
+                onClick={() => void onStopSlideshow()}
+                data-tooltip="Stop slideshow (Esc)"
+                title="Stop slideshow (Esc)"
+                aria-label="Stop slideshow"
+                id="btn-top-stop-slideshow"
+                type="button"
+              >
+                <span className="top-bar-btn-icon">
+                  <ToolbarIcon name="stop" />
+                </span>
+                <span className="top-bar-btn-label">Stop</span>
+              </button>
+            )}
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
               onClick={toggleFullscreen}
@@ -2082,16 +2102,29 @@ export function ViewerChrome({
             <ToolbarIcon name="slideshow" />
           </button>
         ) : (
-          <button
-            className={`control-btn has-tooltip ${isSlideshowPaused ? '' : 'active'}`}
-            onClick={onTogglePause}
-            data-tooltip="Pause or resume slideshow (Space)"
-            title="Pause/Resume slideshow (Space)"
-            aria-label="Toggle slideshow pause"
-            id="btn-toggle-slideshow"
-          >
-            <ToolbarIcon name={isSlideshowPaused ? 'slideshow' : 'pause'} />
-          </button>
+          <>
+            <button
+              className={`control-btn has-tooltip ${isSlideshowPaused ? '' : 'active'}`}
+              onClick={onTogglePause}
+              data-tooltip="Pause or resume slideshow (Space)"
+              title="Pause/Resume slideshow (Space)"
+              aria-label="Toggle slideshow pause"
+              id="btn-toggle-slideshow"
+            >
+              <ToolbarIcon name={isSlideshowPaused ? 'slideshow' : 'pause'} />
+            </button>
+            <button
+              className="control-btn has-tooltip"
+              onClick={() => void onStopSlideshow()}
+              data-tooltip="Stop slideshow (Esc)"
+              title="Stop slideshow (Esc)"
+              aria-label="Stop slideshow"
+              id="btn-stop-slideshow"
+              type="button"
+            >
+              <ToolbarIcon name="stop" />
+            </button>
+          </>
         )}
 
         <div className="control-divider" />

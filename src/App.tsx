@@ -369,18 +369,18 @@ function App() {
     };
   }, [openFolder, openImage]);
 
-  // Auto-hide controls in fullscreen and slideshow mode
+  // Auto-hide controls only while slideshow mode is running.
   const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimerRef.current) {
       clearTimeout(controlsTimerRef.current);
     }
-    if (isFullscreen || isSlideshowActive) {
+    if (isSlideshowActive) {
       controlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
       }, 3000);
     }
-  }, [isFullscreen, isSlideshowActive, setShowControls]);
+  }, [isSlideshowActive, setShowControls]);
 
   useEffect(() => {
     if (controlsTimerRef.current) {
@@ -388,7 +388,7 @@ function App() {
       controlsTimerRef.current = null;
     }
 
-    if (isFullscreen || isSlideshowActive) {
+    if (isSlideshowActive) {
       setShowControls(true);
       controlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
@@ -397,7 +397,7 @@ function App() {
     }
 
     setShowControls(true);
-  }, [isFullscreen, isSlideshowActive, setShowControls]);
+  }, [isSlideshowActive, setShowControls]);
 
   useEffect(() => {
     return () => {
@@ -793,7 +793,9 @@ function App() {
     !isSlideshowActive
       ? 'with-thumbnails'
       : '',
-    currentImagePath && viewMode === 'viewer' && !isSecondary ? 'has-viewer-safe-areas' : '',
+    currentImagePath && viewMode === 'viewer' && !isSecondary && !isSlideshowActive
+      ? 'has-viewer-safe-areas'
+      : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
     viewMode === 'compare' && !isSecondary ? 'compare-mode' : '',
     isSlideshowActive ? 'slideshow-active' : '',
@@ -836,6 +838,7 @@ function App() {
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}
+                onStopSlideshow={stopSlideshow}
                 onTogglePause={toggleSlideshowPause}
               />
               {settings.showThumbnails && !isSlideshowActive && <ThumbnailStrip />}
@@ -853,6 +856,7 @@ function App() {
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}
+                onStopSlideshow={stopSlideshow}
                 onTogglePause={toggleSlideshowPause}
               />
             </>

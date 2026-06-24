@@ -34,6 +34,7 @@ describe('ViewerChrome', () => {
     onNext: vi.fn(),
     onPrev: vi.fn(),
     onStartSlideshow: vi.fn(),
+    onStopSlideshow: vi.fn(),
     onTogglePause: vi.fn(),
   };
 
@@ -364,6 +365,38 @@ describe('ViewerChrome', () => {
     render(<ViewerChrome {...defaultProps} />);
 
     expect(screen.getByText(/▶ Slideshow/i)).toBeInTheDocument();
+  });
+
+  it('shows stop slideshow controls when slideshow is active', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo1.jpg',
+      isSlideshowActive: true,
+      isSlideshowPaused: false,
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(container.querySelector('#btn-stop-slideshow') as HTMLButtonElement);
+
+    expect(defaultProps.onStopSlideshow).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByLabelText('Stop slideshow')).toHaveLength(2);
   });
 
   it('shows a top-bar slideshow button', () => {
