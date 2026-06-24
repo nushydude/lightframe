@@ -69,13 +69,13 @@ export async function transferImagesToDestination(
     };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+    const failures = imagePaths.length
+      ? imagePaths.map((sourcePath) => ({ sourcePath, error }))
+      : [{ sourcePath: destination.path, error }];
     return {
       successes: [],
-      failures:
-        imagePaths.length > 0
-          ? [{ sourcePath: imagePaths[0], error }]
-          : [{ sourcePath: destination.path, error }],
-      failureCount: imagePaths.length,
+      failures,
+      failureCount: failures.length,
     };
   }
 }
@@ -184,7 +184,13 @@ export async function copyCurrentImagePath(currentImagePath: string | null): Pro
 
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(currentImagePath);
+      try {
+        await navigator.clipboard.writeText(currentImagePath);
+      } catch {
+        if (!fallbackCopyText(currentImagePath)) {
+          throw new Error('Clipboard text copy is unavailable.');
+        }
+      }
     } else if (!fallbackCopyText(currentImagePath)) {
       throw new Error('Clipboard text copy is unavailable.');
     }

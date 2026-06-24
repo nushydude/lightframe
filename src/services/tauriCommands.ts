@@ -499,11 +499,33 @@ export function generatedImageAssetToUrl(asset: GeneratedImageAsset): string {
 
 /** Extract the parent directory from a file path */
 export function getParentFolder(filePath: string): string {
-  // Handle both forward and backslash separators
   const normalized = filePath.replace(/\\/g, '/');
+  const uncRootMatch = normalized.match(/^\/\/[^/]+\/[^/]+(?=\/|$)/);
+  if (uncRootMatch) {
+    if (normalized === uncRootMatch[0]) {
+      return filePath;
+    }
+
+    const remainder = normalized.slice(uncRootMatch[0].length);
+    const remainderSlash = remainder.lastIndexOf('/');
+    if (remainderSlash <= 0) {
+      return filePath.slice(0, uncRootMatch[0].length);
+    }
+
+    return filePath.slice(0, uncRootMatch[0].length + remainderSlash);
+  }
+
+  if (/^[A-Za-z]:\/$/.test(normalized) || normalized === '/') {
+    return filePath;
+  }
+
   const lastSlash = normalized.lastIndexOf('/');
   if (lastSlash === -1) return '.';
-  return filePath.substring(0, lastSlash);
+  if (lastSlash === 0) return filePath.slice(0, 1);
+  if (lastSlash === 2 && normalized[1] === ':') {
+    return filePath.slice(0, 3);
+  }
+  return filePath.slice(0, lastSlash);
 }
 
 /** Get just the filename from a full path */

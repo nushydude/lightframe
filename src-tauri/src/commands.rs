@@ -1035,12 +1035,20 @@ fn curation_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 static CURATION_METADATA_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static SETTINGS_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn lock_curation_metadata() -> Result<MutexGuard<'static, ()>, String> {
     CURATION_METADATA_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| "Curation metadata lock poisoned".to_string())
+}
+
+fn lock_settings_io() -> Result<MutexGuard<'static, ()>, String> {
+    SETTINGS_IO_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Settings I/O lock poisoned".to_string())
 }
 
 fn clamp_rating(rating: i32) -> u8 {
@@ -1167,6 +1175,7 @@ fn apply_curation_updates(
 /// Read application settings
 #[tauri::command]
 pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
+    let _lock = lock_settings_io()?;
     let path = settings_path(&app)?;
     if !path.exists() {
         return Ok(AppSettings::default());
@@ -1180,10 +1189,11 @@ pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
 /// Write application settings
 #[tauri::command]
 pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+    let _lock = lock_settings_io()?;
     let path = settings_path(&app)?;
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&path, content).map_err(|e| format!("Failed to write settings: {}", e))
+    write_text_file_atomically(&path, &content, "settings")
 }
 
 fn diagnostics_export_path(path: &str) -> Result<PathBuf, String> {
@@ -2091,6 +2101,26 @@ fn build_unique_sibling_path(source_path: &Path, label: &str) -> Result<PathBuf,
             return Ok(candidate);
         }
         attempt = attempt.saturating_add(1);
+    }
+}
+
+fn write_text_file_atomically(path: &Path, content: &str, label: &str) -> Result<(), String> {
+    let parent_dir =
+        path.parent().ok_or_else(|| format!("{} path must include a parent directory", label))?;
+    fs::create_dir_all(parent_dir)
+        .map_err(|e| format!("Failed to create {} directory: {}", label, e))?;
+
+    let temp_path = build_unique_sibling_path(path, &format!("lightframe-{}", label))?;
+    fs::write(&temp_path, content)
+        .map_err(|e| format!("Failed to write temporary {} file: {}", label, e))?;
+
+    if path.exists() {
+        replace_file_safely(&temp_path, path)
+    } else {
+        fs::rename(&temp_path, path).map_err(|e| {
+            let _ = fs::remove_file(&temp_path);
+            format!("Failed to finalize {} file: {}", label, e)
+        })
     }
 }
 

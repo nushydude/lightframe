@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  copyCurrentImagePath,
   copyCurrentImage,
   deleteImages,
   deleteCurrentImage,
@@ -213,7 +214,7 @@ describe('viewerActions', () => {
     );
   });
 
-  it('collapses thrown bulk transfer failures to the first failing path while preserving the count', async () => {
+  it('expands thrown bulk transfer failures across the full selection', async () => {
     transferImagesToFolderMock.mockRejectedValue(new Error('share offline'));
 
     const result = await transferImagesToDestination(
@@ -223,7 +224,38 @@ describe('viewerActions', () => {
     );
 
     expect(result.successes).toEqual([]);
-    expect(result.failures).toEqual([{ sourcePath: 'c:/images/one.jpg', error: 'share offline' }]);
+    expect(result.failures).toEqual([
+      { sourcePath: 'c:/images/one.jpg', error: 'share offline' },
+      { sourcePath: 'c:/images/two.jpg', error: 'share offline' },
+      { sourcePath: 'c:/images/three.jpg', error: 'share offline' },
+    ]);
     expect(result.failureCount).toBe(3);
+  });
+
+  it('falls back to the legacy clipboard path when navigator.clipboard rejects', async () => {
+    const clipboardWriteText = vi.fn().mockRejectedValue(new Error('denied'));
+    const execCommandMock = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommandMock,
+    });
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: clipboardWriteText,
+      },
+    });
+
+    await expect(copyCurrentImagePath('c:/images/test.jpg')).resolves.toBeUndefined();
+
+    expect(clipboardWriteText).toHaveBeenCalledWith('c:/images/test.jpg');
+    expect(execCommandMock).toHaveBeenCalledWith('copy');
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Image path copied',
+        kind: 'success',
+        message: 'c:/images/test.jpg',
+      })
+    );
   });
 });

@@ -125,7 +125,7 @@ function App() {
   const isProjectorWindow = appWindowRef.current.label === 'secondary';
 
   const showMainWindowOnce = useCallback(async () => {
-    if (startupShowAttemptedRef.current) return;
+    if (!isMainWindowRef.current || startupShowAttemptedRef.current) return;
     startupShowAttemptedRef.current = true;
     setStartupShowAttempted(true);
 
@@ -202,15 +202,17 @@ function App() {
       }
 
       try {
-        const cliResolveStartedAt = performance.now();
-        const matches = await getMatches();
-        const startupDecision = resolveStartupDecision(matches.args.file);
-        recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
+        if (isMainWindowRef.current) {
+          const cliResolveStartedAt = performance.now();
+          const matches = await getMatches();
+          const startupDecision = resolveStartupDecision(matches.args.file);
+          recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
-        if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
-          const startupImageOpenStartedAt = performance.now();
-          await openImageForStartup(startupDecision.filePath);
-          recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
+          if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
+            const startupImageOpenStartedAt = performance.now();
+            await openImageForStartup(startupDecision.filePath);
+            recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
+          }
         }
       } catch (err) {
         console.error('Failed to parse CLI args on startup:', err);
@@ -224,14 +226,16 @@ function App() {
 
     void init();
 
-    // Still listen in case another instance sends a message (future single-instance support)
-    void listen<string>('open-file', async (event) => {
-      await openImage(event.payload);
-    })
-      .then((fn) => {
-        unlisten = fn;
+    if (isMainWindowRef.current) {
+      // Still listen in case another instance sends a message (future single-instance support)
+      void listen<string>('open-file', async (event) => {
+        await openImage(event.payload);
       })
-      .catch((err) => console.error('Failed to listen for open-file:', err));
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch((err) => console.error('Failed to listen for open-file:', err));
+    }
 
     return () => {
       isCancelled = true;
@@ -240,7 +244,7 @@ function App() {
   }, [isProjectorWindow, loadCuration, loadSettings, openImage, openImageForStartup, setError]);
 
   useEffect(() => {
-    if (!hasStartupResolved || startupShowAttempted) return;
+    if (!isMainWindowRef.current || !hasStartupResolved || startupShowAttempted) return;
     void showMainWindowOnce();
   }, [hasStartupResolved, showMainWindowOnce, startupShowAttempted]);
 
