@@ -21,6 +21,7 @@ describe('useKeyboardShortcuts', () => {
     toggleGridView: vi.fn(),
     togglePerformanceTelemetry: vi.fn(),
     toggleFavoriteCurrent: vi.fn(),
+    toggleMarkedCurrent: vi.fn(),
     setRatingCurrent: vi.fn(),
   };
 
@@ -237,6 +238,22 @@ describe('useKeyboardShortcuts', () => {
     });
     expect(ratingEvent.defaultPrevented).toBe(true);
     expect(handlers.setRatingCurrent).toHaveBeenCalledWith(4);
+  });
+
+  it('toggles the current mark with M', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'm',
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.toggleMarkedCurrent).toHaveBeenCalledTimes(1);
   });
 
   it('handles compare mode keyboard controls', () => {

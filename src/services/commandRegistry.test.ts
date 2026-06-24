@@ -40,6 +40,7 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry: vi.fn(),
       resetPerformanceTelemetry: vi.fn(),
     });
@@ -96,6 +97,7 @@ describe('createViewerCommands', () => {
       enterCropMode,
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry: vi.fn(),
       resetPerformanceTelemetry: vi.fn(),
     });
@@ -131,6 +133,7 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry: vi.fn(),
       resetPerformanceTelemetry: vi.fn(),
     });
@@ -160,6 +163,7 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode,
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry: vi.fn(),
       resetPerformanceTelemetry: vi.fn(),
     });
@@ -229,6 +233,7 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry: vi.fn(),
       resetPerformanceTelemetry: vi.fn(),
     });
@@ -239,6 +244,43 @@ describe('createViewerCommands', () => {
 
     await editCommand?.run();
     expect(openCurrentImageInEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes a mark-current command with the expected shortcut', () => {
+    const toggleMarkedCurrent = vi.fn();
+    useViewerStore.setState({
+      currentImagePath: 'c:/images/test.jpg',
+    });
+
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImagePath: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent,
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
+    });
+
+    const markCommand = commands.find((command) => command.id === 'toggle-mark-current');
+    expect(markCommand?.shortcut).toBe('M');
+    expect(markCommand?.isEnabled(useViewerStore.getState())).toBe(true);
+
+    void markCommand?.run();
+    expect(toggleMarkedCurrent).toHaveBeenCalledTimes(1);
   });
 
   it('exposes performance telemetry commands', () => {
@@ -263,6 +305,7 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry,
       resetPerformanceTelemetry,
     });
@@ -303,6 +346,7 @@ describe('createViewerCommands', () => {
       enterCropMode: vi.fn(),
       startSlideshow: vi.fn(),
       toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
       togglePerformanceTelemetry: vi.fn(),
       resetPerformanceTelemetry: vi.fn(),
     });

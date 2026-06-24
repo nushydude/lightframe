@@ -347,6 +347,29 @@ export function SettingsPanel() {
             </div>
           </div>
 
+          <div className="settings-group">
+            <div className="settings-group-title">Editing</div>
+
+            <div className="setting-row">
+              <span className="setting-label">Crop save behavior</span>
+              <select
+                className="setting-select"
+                value={settings.cropSaveMode}
+                onChange={(e) =>
+                  handleChange('cropSaveMode', e.target.value as AppSettings['cropSaveMode'])
+                }
+                id="setting-crop-save-mode"
+              >
+                <option value="copy">Create a new file</option>
+                <option value="overwrite">Replace the original</option>
+              </select>
+            </div>
+            <p className="setting-help">
+              Creating a new cropped file is the default. Replacing the original stays available as
+              an opt-in behavior.
+            </p>
+          </div>
+
           {/* Navigation */}
           <div className="settings-group">
             <div className="settings-group-title">Navigation</div>

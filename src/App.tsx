@@ -369,18 +369,43 @@ function App() {
     };
   }, [openFolder, openImage]);
 
-  // Auto-hide controls in fullscreen
+  // Auto-hide controls in fullscreen and slideshow mode
   const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimerRef.current) {
       clearTimeout(controlsTimerRef.current);
     }
-    if (isFullscreen) {
+    if (isFullscreen || isSlideshowActive) {
       controlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
       }, 3000);
     }
-  }, [isFullscreen, setShowControls]);
+  }, [isFullscreen, isSlideshowActive, setShowControls]);
+
+  useEffect(() => {
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+
+    if (isFullscreen || isSlideshowActive) {
+      setShowControls(true);
+      controlsTimerRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+      return;
+    }
+
+    setShowControls(true);
+  }, [isFullscreen, isSlideshowActive, setShowControls]);
+
+  useEffect(() => {
+    return () => {
+      if (controlsTimerRef.current) {
+        clearTimeout(controlsTimerRef.current);
+      }
+    };
+  }, []);
 
   // Double-click to toggle fullscreen
   const handleDoubleClick = useCallback(
@@ -557,6 +582,12 @@ function App() {
           }
           state.enterCompareMode();
         },
+        toggleMarkedCurrent: () => {
+          const path = useViewerStore.getState().currentImagePath;
+          if (path) {
+            useViewerStore.getState().toggleMarkedPath(path);
+          }
+        },
         togglePerformanceTelemetry: handleTogglePerformanceTelemetry,
         resetPerformanceTelemetry: handleResetPerformanceTelemetry,
       }),
@@ -635,6 +666,12 @@ function App() {
       const path = useViewerStore.getState().currentImagePath;
       if (path) {
         void toggleFavorite(path);
+      }
+    },
+    toggleMarkedCurrent: () => {
+      const path = useViewerStore.getState().currentImagePath;
+      if (path) {
+        useViewerStore.getState().toggleMarkedPath(path);
       }
     },
     setRatingCurrent: (rating) => {
@@ -759,6 +796,7 @@ function App() {
     currentImagePath && viewMode === 'viewer' && !isSecondary ? 'has-viewer-safe-areas' : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
     viewMode === 'compare' && !isSecondary ? 'compare-mode' : '',
+    isSlideshowActive ? 'slideshow-active' : '',
     isSecondary ? 'secondary-window' : '',
   ]
     .filter(Boolean)

@@ -26,6 +26,7 @@ interface KeyboardHandlers {
   toggleGridView: () => void;
   togglePerformanceTelemetry: () => void;
   toggleFavoriteCurrent: () => void;
+  toggleMarkedCurrent: () => void;
   setRatingCurrent: (rating: number) => void;
 }
 
@@ -277,6 +278,14 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         e.preventDefault();
         if (currentImagePath) {
           handlers.toggleFavoriteCurrent();
+        }
+        return;
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault();
+        if (currentImagePath) {
+          handlers.toggleMarkedCurrent();
         }
         return;
       }

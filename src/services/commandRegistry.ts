@@ -31,6 +31,7 @@ interface CreateViewerCommandsOptions {
   enterCropMode: () => void;
   startSlideshow: () => void;
   toggleCompareMode: () => void;
+  toggleMarkedCurrent: () => void;
   togglePerformanceTelemetry: () => void;
   resetPerformanceTelemetry: () => void;
 }
@@ -244,6 +245,14 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       shortcut: 'F5',
       isEnabled: (state) => Boolean(state.currentImagePath) && !state.isSlideshowActive,
       run: () => options.startSlideshow(),
+    },
+    {
+      id: 'toggle-mark-current',
+      label: 'Mark Current Image',
+      keywords: ['mark', 'select', 'bulk', 'batch'],
+      shortcut: 'M',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => options.toggleMarkedCurrent(),
     },
     {
       id: 'toggle-performance-telemetry',

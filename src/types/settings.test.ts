@@ -104,6 +104,17 @@ describe('settingsToRust', () => {
     });
   });
 
+  it('maps crop save mode to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      cropSaveMode: 'overwrite',
+    });
+
+    expect(rust).toMatchObject({
+      crop_save_mode: 'overwrite',
+    });
+  });
+
   it('maps auto-refresh folder preference to rust payloads', () => {
     const rust = settingsToRust({
       ...DEFAULT_SETTINGS,
@@ -225,6 +236,12 @@ describe('settingsFromRust', () => {
   it('parses auto-refresh folder preference with a default enabled fallback', () => {
     expect(settingsFromRust({ auto_refresh_folder: false }).autoRefreshFolder).toBe(false);
     expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
+  });
+
+  it('parses crop save mode from rust payloads and defaults to copy', () => {
+    expect(settingsFromRust({ crop_save_mode: 'overwrite' }).cropSaveMode).toBe('overwrite');
+    expect(settingsFromRust({ crop_save_mode: 'mystery' }).cropSaveMode).toBe('copy');
+    expect(settingsFromRust({}).cropSaveMode).toBe('copy');
   });
 
   it('parses saved view presets and filters invalid values', () => {

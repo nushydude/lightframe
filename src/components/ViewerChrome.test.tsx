@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { ViewerChrome } from './ViewerChrome';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
@@ -52,6 +52,12 @@ describe('ViewerChrome', () => {
     projectorState.isProjectorOpen = false;
     projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
+    vi.spyOn(tauriCommands, 'getImageMetadata').mockResolvedValue({
+      width: 1200,
+      height: 800,
+      file_size_bytes: 1000,
+      format: 'JPEG',
+    });
     useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
@@ -482,6 +488,280 @@ describe('ViewerChrome', () => {
     expect(screen.getByText('Unsaved edits')).toBeInTheDocument();
     expect(screen.getByLabelText('Reset pending edits')).toBeInTheDocument();
     expect(screen.getByLabelText('Save pending edits')).toBeInTheDocument();
+  });
+
+  it('toggles the marked state from the top bar', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Mark current image'));
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
+
+    fireEvent.click(screen.getByLabelText('Unmark current image'));
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+  });
+
+  it('preserves marked paths when bulk delete is canceled', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/one.jpg',
+      images: [
+        {
+          path: 'C:/Images/one.jpg',
+          file_name: 'one.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/two.jpg',
+          file_name: 'two.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/one.jpg', 'C:/Images/two.jpg'],
+    });
+    vi.mocked(confirm).mockResolvedValue(false);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    await act(async () => {
+      fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
+    });
+
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/Images/one.jpg',
+      'C:/Images/two.jpg',
+    ]);
+  });
+
+  it('keeps failed marked items selected after a partial bulk delete failure', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/one.jpg',
+      images: [
+        {
+          path: 'C:/Images/one.jpg',
+          file_name: 'one.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/two.jpg',
+          file_name: 'two.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/one.jpg', 'C:/Images/two.jpg'],
+    });
+    vi.mocked(confirm).mockResolvedValue(true);
+    vi.spyOn(tauriCommands, 'moveToTrash')
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('locked'));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    await act(async () => {
+      fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+        'C:/Images/two.jpg',
+      ]);
+    });
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/two.jpg']);
+  });
+
+  it('opens a context menu with shortcut hints on right click', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const imageCanvas = document.createElement('div');
+    imageCanvas.className = 'image-canvas';
+    container.appendChild(imageCanvas);
+
+    fireEvent.contextMenu(imageCanvas);
+
+    const menu = await screen.findByRole('menu', { name: 'Image actions' });
+    expect(menu).toBeInTheDocument();
+    expect(menu).toHaveTextContent('Ctrl+Shift+C');
+    expect(menu).toHaveTextContent('Delete');
+  });
+
+  it('keeps the context menu action clickable through pointerdown', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const imageCanvas = document.createElement('div');
+    imageCanvas.className = 'image-canvas';
+    container.appendChild(imageCanvas);
+
+    fireEvent.contextMenu(imageCanvas);
+
+    const menu = await screen.findByRole('menu', { name: 'Image actions' });
+    const markAction = within(menu).getByRole('menuitem', { name: /Mark Current Image/i });
+
+    fireEvent.pointerDown(markAction);
+    fireEvent.click(markAction);
+
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
+    await waitFor(() => {
+      expect(screen.queryByRole('menu', { name: 'Image actions' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps context menu actions pinned to the image that was right-clicked', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const imageCanvas = document.createElement('div');
+    imageCanvas.className = 'image-canvas';
+    container.appendChild(imageCanvas);
+
+    fireEvent.contextMenu(imageCanvas);
+
+    const menu = await screen.findByRole('menu', { name: 'Image actions' });
+    useViewerStore.getState().setCurrentIndex(1);
+
+    const markAction = within(menu).getByRole('menuitem', { name: /Mark Current Image/i });
+    fireEvent.click(markAction);
+
+    expect(useViewerStore.getState().currentImagePath).toBe('C:/Images/next.jpg');
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
+  });
+
+  it('binds thumbnail-strip context menu actions to the clicked thumbnail path', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const thumbnailStrip = document.createElement('div');
+    thumbnailStrip.className = 'thumbnail-strip';
+    const thumbnailItem = document.createElement('div');
+    thumbnailItem.className = 'thumbnail-item';
+    thumbnailItem.setAttribute('data-image-path', 'C:/Images/next.jpg');
+    thumbnailStrip.appendChild(thumbnailItem);
+    container.appendChild(thumbnailStrip);
+
+    fireEvent.contextMenu(thumbnailItem);
+
+    const menu = await screen.findByRole('menu', { name: 'Image actions' });
+    const markAction = within(menu).getByRole('menuitem', { name: /Mark Current Image/i });
+    fireEvent.click(markAction);
+
+    expect(useViewerStore.getState().currentImagePath).toBe('C:/Images/photo.jpg');
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/next.jpg']);
+  });
+
+  it('closes the viewer bulk transfer menu when clicking outside', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/photo.jpg'],
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    const bulkCopyMenu = bulkToolbar.querySelector('details') as HTMLDetailsElement;
+    const bulkCopySummary = bulkCopyMenu.querySelector('summary') as HTMLElement;
+
+    fireEvent.click(bulkCopySummary);
+    expect(bulkCopyMenu.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+    expect(bulkCopyMenu.open).toBe(false);
   });
 
   it('does nothing when save cropped copy dialog is canceled', async () => {
@@ -952,7 +1232,60 @@ describe('ViewerChrome', () => {
     ]);
   });
 
+  it('saves pending crop edits as a new file when copy mode is configured', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'copy',
+      },
+    }));
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      pendingEditsByPath: {
+        'C:/Images/photo.jpg': {
+          rotationDegrees: 0,
+          cropRect: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+          pendingCropPreview: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+          updatedAt: 1,
+          history: [],
+        },
+      },
+      cropRect: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+      pendingCropPreview: { x: 0.1, y: 0.2, width: 0.4, height: 0.3 },
+    });
+    vi.mocked(save).mockResolvedValue('C:/Images/photo-cropped.jpg');
+    const saveCopySpy = vi.spyOn(tauriCommands, 'saveCroppedCopy').mockResolvedValue(undefined);
+    const overwriteSpy = vi.spyOn(tauriCommands, 'overwriteWithCrop').mockResolvedValue(undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Save pending edits'));
+    });
+
+    expect(saveCopySpy).toHaveBeenCalledWith(
+      'C:/Images/photo.jpg',
+      { x: 120, y: 160, width: 480, height: 240 },
+      'C:/Images/photo-cropped.jpg',
+      0
+    );
+    expect(overwriteSpy).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(useViewerStore.getState().pendingEditsByPath['C:/Images/photo.jpg']).toBeUndefined();
+    });
+    expect(useViewerStore.getState().cropRect).toBeNull();
+    expect(useViewerStore.getState().pendingCropPreview).toBeNull();
+  });
+
   it('refreshes the metadata panel after a successful crop overwrite', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'overwrite',
+      },
+    }));
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       isCropMode: true,
@@ -994,12 +1327,19 @@ describe('ViewerChrome', () => {
 
     await waitFor(() => {
       expect(tauriCommands.overwriteWithCrop).toHaveBeenCalledTimes(1);
-      expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(2);
+      expect(tauriCommands.getImageMetadata).toHaveBeenCalledTimes(3);
       expect(tauriCommands.getExifMetadata).toHaveBeenCalledTimes(2);
     });
   });
 
   it('keeps pending crop edits when save pending edits is canceled at confirmation', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'overwrite',
+      },
+    }));
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       pendingEditsByPath: {
@@ -1043,6 +1383,13 @@ describe('ViewerChrome', () => {
   });
 
   it('commits pending crop edits after confirmation', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        cropSaveMode: 'overwrite',
+      },
+    }));
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       pendingEditsByPath: {

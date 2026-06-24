@@ -284,6 +284,7 @@ export function ThumbnailStrip() {
             <div
               key={image.path}
               className={`thumbnail-item ${isActive ? 'active' : ''}`}
+              data-image-path={image.path}
               onClick={() => setCurrentIndex(index)}
               style={{ left: THUMBNAIL_STRIP_PADDING + index * THUMBNAIL_ITEM_PITCH }}
               title={image.file_name}

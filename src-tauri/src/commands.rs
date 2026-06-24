@@ -123,6 +123,8 @@ pub struct AppSettings {
     pub loop_slideshow: bool,
     pub shuffle_slideshow: bool,
     pub auto_fullscreen_on_slideshow: bool,
+    #[serde(default = "default_crop_save_mode")]
+    pub crop_save_mode: String,
     pub mouse_wheel_behavior: String,
     pub default_fit_mode: String,
     pub remember_window_bounds: bool,
@@ -238,6 +240,10 @@ fn default_performance_mode() -> String {
     "balanced".to_string()
 }
 
+fn default_crop_save_mode() -> String {
+    "copy".to_string()
+}
+
 fn default_auto_refresh_folder() -> bool {
     true
 }
@@ -254,6 +260,7 @@ impl Default for AppSettings {
             loop_slideshow: false,
             shuffle_slideshow: false,
             auto_fullscreen_on_slideshow: true,
+            crop_save_mode: default_crop_save_mode(),
             mouse_wheel_behavior: "zoom".to_string(),
             default_fit_mode: "fit".to_string(),
             remember_window_bounds: true,

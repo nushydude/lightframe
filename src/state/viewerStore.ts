@@ -19,6 +19,7 @@ import {
   type NormalizedCropRect,
   normalizedToIntegerPixelRect,
 } from '../services/cropMath';
+import { getCropSourceDimensions } from '../services/cropSourceDimensions';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
 type ViewMode = 'viewer' | 'grid' | 'compare';
@@ -138,6 +139,30 @@ function cloneCropRect(rect: NormalizedCropRect | null): NormalizedCropRect | nu
   return rect ? { ...rect } : null;
 }
 
+function normalizePathKey(path: string): string {
+  return path.replace(/\\/g, '/').toLowerCase();
+}
+
+function reconcileMarkedPaths(markedPaths: string[], images: ImageFile[]): string[] {
+  if (markedPaths.length === 0) {
+    return markedPaths;
+  }
+
+  const activePathsByKey = new Map(
+    images.map((image) => [normalizePathKey(image.path), image.path])
+  );
+  const reconciledPaths: string[] = [];
+
+  for (const path of markedPaths) {
+    const canonicalPath = activePathsByKey.get(normalizePathKey(path));
+    if (canonicalPath && !reconciledPaths.includes(canonicalPath)) {
+      reconciledPaths.push(canonicalPath);
+    }
+  }
+
+  return reconciledPaths;
+}
+
 function clonePendingSnapshot(snapshot: PendingImageEditSnapshot): PendingImageEditSnapshot {
   return {
     rotationDegrees: snapshot.rotationDegrees,
@@ -226,6 +251,7 @@ interface ViewerState {
   showOnlyFavorites: boolean;
   curationFilter: CurationFilter;
   favoritePaths: FavoritePathMap;
+  markedPaths: string[];
   curationStateByPath: Record<string, CurationStateSnapshot>;
   favoriteFilterReturnPath: string | null;
   curationFilterReturnPath: string | null;
@@ -237,6 +263,9 @@ interface ViewerState {
   setCurrentImage: (path: string, index: number) => void;
   setImages: (images: ImageFile[]) => void;
   setShowOnlyFavorites: (showOnlyFavorites: boolean) => void;
+  toggleMarkedPath: (path: string) => void;
+  clearMarkedPaths: () => void;
+  markAllVisibleImages: () => void;
   setCurationFilter: (filter: CurationFilter) => void;
   prepareCurationFilter: (filter: CurationFilter) => void;
   syncFavoriteFilter: (curationByPath: Record<string, CurationStateSnapshot>) => void;
@@ -329,6 +358,7 @@ const initialState = {
   showOnlyFavorites: false,
   curationFilter: 'all' as CurationFilter,
   favoritePaths: {},
+  markedPaths: [],
   curationStateByPath: {},
   favoriteFilterReturnPath: null,
   curationFilterReturnPath: null,
@@ -384,25 +414,18 @@ async function overwritePendingCrop(
   );
   if (!confirmed) return false;
 
-  const { width, height } = getActiveImageDimensions();
+  const dimensions = await getCropSourceDimensions(targetPath);
+  if (!dimensions) {
+    throw new Error('Unable to determine image dimensions for pending crop save.');
+  }
+
+  const { width, height } = dimensions;
   await overwriteWithCrop(
     targetPath,
     normalizedToIntegerPixelRect(cropRect, width, height),
     rotationDegrees
   );
   return true;
-}
-
-function getActiveImageDimensions(): { width: number; height: number } {
-  const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
-  const width = activeImage?.naturalWidth ?? activeImage?.width ?? 0;
-  const height = activeImage?.naturalHeight ?? activeImage?.height ?? 0;
-
-  if (width <= 0 || height <= 0) {
-    throw new Error('Unable to determine image dimensions for pending crop save.');
-  }
-
-  return { width, height };
 }
 
 function getCommittedEditState(
@@ -450,6 +473,7 @@ function getFilteredImagesState(
     showOnlyFavorites: nextCurationFilter === 'favorites',
     curationFilter: nextCurationFilter,
     favoritePaths: nextFavoritePaths,
+    markedPaths: reconcileMarkedPaths(state.markedPaths, nextAllImages),
     curationStateByPath: nextCurationStateByPath,
     comparePrimaryIndex: compareState.comparePrimaryIndex,
     compareSecondaryIndex: compareState.compareSecondaryIndex,
@@ -597,6 +621,28 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
     setShowOnlyFavorites: (showOnlyFavorites) =>
       get().setCurationFilter(showOnlyFavorites ? 'favorites' : 'all'),
+
+    toggleMarkedPath: (path) =>
+      set((state) => {
+        const normalizedPath = normalizePathKey(path);
+        const existingIndex = state.markedPaths.findIndex(
+          (value) => normalizePathKey(value) === normalizedPath
+        );
+
+        return {
+          markedPaths:
+            existingIndex >= 0
+              ? state.markedPaths.filter((_, index) => index !== existingIndex)
+              : [...state.markedPaths, path],
+        };
+      }),
+
+    clearMarkedPaths: () => set({ markedPaths: [] }),
+
+    markAllVisibleImages: () =>
+      set((state) => ({
+        markedPaths: state.images.map((image) => image.path),
+      })),
 
     prepareCurationFilter: (filter) =>
       set({
@@ -770,21 +816,33 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     },
 
     removeImagesByPaths: (paths) => {
-      const removedPaths = new Set(paths.map((path) => path.trim()).filter(Boolean));
-      if (removedPaths.size === 0) {
+      const normalizedRemovedPaths = new Set(
+        paths
+          .map((path) => path.trim())
+          .filter(Boolean)
+          .map(normalizePathKey)
+      );
+      if (normalizedRemovedPaths.size === 0) {
         return;
       }
 
       const state = get();
       const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
-      const newAllImages = sourceImages.filter((image) => !removedPaths.has(image.path));
+      const newAllImages = sourceImages.filter(
+        (image) => !normalizedRemovedPaths.has(normalizePathKey(image.path))
+      );
       if (newAllImages.length === sourceImages.length) {
         return;
       }
 
-      for (const path of removedPaths) {
-        invalidateImageAsset(path);
-        invalidateThumbnail(path);
+      for (const path of paths) {
+        const trimmedPath = path.trim();
+        if (!trimmedPath) {
+          continue;
+        }
+
+        invalidateImageAsset(trimmedPath);
+        invalidateThumbnail(trimmedPath);
       }
 
       if (newAllImages.length === 0) {
@@ -794,12 +852,17 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
       set((currentState) => {
         const nextPendingEdits = { ...currentState.pendingEditsByPath };
-        for (const path of removedPaths) {
-          delete nextPendingEdits[path];
+        for (const path of Object.keys(nextPendingEdits)) {
+          if (normalizedRemovedPaths.has(normalizePathKey(path))) {
+            delete nextPendingEdits[path];
+          }
         }
 
         return {
           ...getFavoriteSafeImagesState(currentState, newAllImages, currentState.curationFilter),
+          markedPaths: currentState.markedPaths.filter(
+            (path) => !normalizedRemovedPaths.has(normalizePathKey(path))
+          ),
           pendingEditsByPath: nextPendingEdits,
         };
       });

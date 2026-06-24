@@ -1173,6 +1173,18 @@ body,
   min-width: 0;
 }
 
+.menu-shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.menu-shortcut-key {
+  flex: 0 0 auto;
+}
+
 .top-bar-submenu {
   position: relative;
 }
@@ -1377,6 +1389,20 @@ body,
 
 .app-container:hover .bottom-controls,
 .app-container.controls-visible .bottom-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.app-container.slideshow-active:hover .top-bar,
+.app-container.slideshow-active:hover .nav-arrow,
+.app-container.slideshow-active:hover .bottom-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-container.slideshow-active.controls-visible .top-bar,
+.app-container.slideshow-active.controls-visible .nav-arrow,
+.app-container.slideshow-active.controls-visible .bottom-controls {
   opacity: 1;
   pointer-events: auto;
 }
@@ -2664,6 +2690,55 @@ body,
 .slideshow-indicator.paused {
   background: var(--bg-control);
   color: var(--text-secondary);
+}
+
+.viewer-bulk-bar {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: calc(var(--z-controls) + 2);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  background: var(--bg-control);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.viewer-bulk-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.context-menu {
+  position: fixed;
+  z-index: calc(var(--z-controls) + 4);
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+
+.context-menu-item {
+  width: 100%;
+  text-align: left;
+}
+
+.context-menu-item-danger {
+  color: #ffb4b4;
 }
 
 /* ===== Drag & Drop Overlay ===== */
