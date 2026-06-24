@@ -498,6 +498,96 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().markedPaths).toEqual([]);
   });
 
+  it('reconciles marked paths against the active folder image list', () => {
+    useViewerStore.setState({
+      markedPaths: ['c:/folder/keep.jpg', 'c:/folder/stale.jpg'],
+      images: [
+        {
+          path: 'c:/folder/keep.jpg',
+          file_name: 'keep.jpg',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+        {
+          path: 'c:/folder/stale.jpg',
+          file_name: 'stale.jpg',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+      ],
+    });
+
+    useViewerStore.getState().setImages([
+      {
+        path: 'c:/folder/keep.jpg',
+        file_name: 'keep.jpg',
+        extension: 'jpg',
+        size_bytes: 0,
+        modified_at: null,
+      },
+      {
+        path: 'c:/folder/new.jpg',
+        file_name: 'new.jpg',
+        extension: 'jpg',
+        size_bytes: 0,
+        modified_at: null,
+      },
+    ]);
+
+    expect(useViewerStore.getState().markedPaths).toEqual(['c:/folder/keep.jpg']);
+  });
+
+  it('canonicalizes retained marked paths to the current image path format', () => {
+    useViewerStore.setState({
+      markedPaths: ['C:\\Folder\\KEEP.JPG'],
+      images: [
+        {
+          path: 'C:\\Folder\\KEEP.JPG',
+          file_name: 'KEEP.JPG',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+      ],
+    });
+
+    useViewerStore.getState().setImages([
+      {
+        path: 'c:/folder/keep.jpg',
+        file_name: 'keep.jpg',
+        extension: 'jpg',
+        size_bytes: 0,
+        modified_at: null,
+      },
+    ]);
+
+    expect(useViewerStore.getState().markedPaths).toEqual(['c:/folder/keep.jpg']);
+  });
+
+  it('toggles and removes marked paths using normalized path matching', () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'c:/folder/keep.jpg',
+          file_name: 'keep.jpg',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+      ],
+      markedPaths: ['C:\\Folder\\KEEP.JPG'],
+    });
+
+    useViewerStore.getState().toggleMarkedPath('c:/folder/keep.jpg');
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+
+    useViewerStore.setState({ markedPaths: ['C:\\Folder\\KEEP.JPG'] });
+    useViewerStore.getState().removeImagesByPaths(['c:/folder/keep.jpg']);
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+  });
+
   it('restores per-image pending edits when navigating away and back', () => {
     useViewerStore.setState({
       images: [

@@ -139,6 +139,30 @@ function cloneCropRect(rect: NormalizedCropRect | null): NormalizedCropRect | nu
   return rect ? { ...rect } : null;
 }
 
+function normalizePathKey(path: string): string {
+  return path.replace(/\\/g, '/').toLowerCase();
+}
+
+function reconcileMarkedPaths(markedPaths: string[], images: ImageFile[]): string[] {
+  if (markedPaths.length === 0) {
+    return markedPaths;
+  }
+
+  const activePathsByKey = new Map(
+    images.map((image) => [normalizePathKey(image.path), image.path])
+  );
+  const reconciledPaths: string[] = [];
+
+  for (const path of markedPaths) {
+    const canonicalPath = activePathsByKey.get(normalizePathKey(path));
+    if (canonicalPath && !reconciledPaths.includes(canonicalPath)) {
+      reconciledPaths.push(canonicalPath);
+    }
+  }
+
+  return reconciledPaths;
+}
+
 function clonePendingSnapshot(snapshot: PendingImageEditSnapshot): PendingImageEditSnapshot {
   return {
     rotationDegrees: snapshot.rotationDegrees,
@@ -449,6 +473,7 @@ function getFilteredImagesState(
     showOnlyFavorites: nextCurationFilter === 'favorites',
     curationFilter: nextCurationFilter,
     favoritePaths: nextFavoritePaths,
+    markedPaths: reconcileMarkedPaths(state.markedPaths, nextAllImages),
     curationStateByPath: nextCurationStateByPath,
     comparePrimaryIndex: compareState.comparePrimaryIndex,
     compareSecondaryIndex: compareState.compareSecondaryIndex,
@@ -598,11 +623,19 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       get().setCurationFilter(showOnlyFavorites ? 'favorites' : 'all'),
 
     toggleMarkedPath: (path) =>
-      set((state) => ({
-        markedPaths: state.markedPaths.includes(path)
-          ? state.markedPaths.filter((value) => value !== path)
-          : [...state.markedPaths, path],
-      })),
+      set((state) => {
+        const normalizedPath = normalizePathKey(path);
+        const existingIndex = state.markedPaths.findIndex(
+          (value) => normalizePathKey(value) === normalizedPath
+        );
+
+        return {
+          markedPaths:
+            existingIndex >= 0
+              ? state.markedPaths.filter((_, index) => index !== existingIndex)
+              : [...state.markedPaths, path],
+        };
+      }),
 
     clearMarkedPaths: () => set({ markedPaths: [] }),
 
@@ -783,21 +816,33 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     },
 
     removeImagesByPaths: (paths) => {
-      const removedPaths = new Set(paths.map((path) => path.trim()).filter(Boolean));
-      if (removedPaths.size === 0) {
+      const normalizedRemovedPaths = new Set(
+        paths
+          .map((path) => path.trim())
+          .filter(Boolean)
+          .map(normalizePathKey)
+      );
+      if (normalizedRemovedPaths.size === 0) {
         return;
       }
 
       const state = get();
       const sourceImages = state.allImages.length > 0 ? state.allImages : state.images;
-      const newAllImages = sourceImages.filter((image) => !removedPaths.has(image.path));
+      const newAllImages = sourceImages.filter(
+        (image) => !normalizedRemovedPaths.has(normalizePathKey(image.path))
+      );
       if (newAllImages.length === sourceImages.length) {
         return;
       }
 
-      for (const path of removedPaths) {
-        invalidateImageAsset(path);
-        invalidateThumbnail(path);
+      for (const path of paths) {
+        const trimmedPath = path.trim();
+        if (!trimmedPath) {
+          continue;
+        }
+
+        invalidateImageAsset(trimmedPath);
+        invalidateThumbnail(trimmedPath);
       }
 
       if (newAllImages.length === 0) {
@@ -807,13 +852,17 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
       set((currentState) => {
         const nextPendingEdits = { ...currentState.pendingEditsByPath };
-        for (const path of removedPaths) {
-          delete nextPendingEdits[path];
+        for (const path of Object.keys(nextPendingEdits)) {
+          if (normalizedRemovedPaths.has(normalizePathKey(path))) {
+            delete nextPendingEdits[path];
+          }
         }
 
         return {
           ...getFavoriteSafeImagesState(currentState, newAllImages, currentState.curationFilter),
-          markedPaths: currentState.markedPaths.filter((path) => !removedPaths.has(path)),
+          markedPaths: currentState.markedPaths.filter(
+            (path) => !normalizedRemovedPaths.has(normalizePathKey(path))
+          ),
           pendingEditsByPath: nextPendingEdits,
         };
       });

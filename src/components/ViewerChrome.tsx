@@ -125,6 +125,7 @@ interface ContextMenuState {
   x: number;
   y: number;
   open: boolean;
+  path: string | null;
 }
 
 interface MenuShortcutAction {
@@ -504,9 +505,16 @@ export function ViewerChrome({
   const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
   const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>({ x: 0, y: 0, open: false });
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    x: 0,
+    y: 0,
+    open: false,
+    path: null,
+  });
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const chromeRootRef = useRef<HTMLDivElement | null>(null);
+  const viewerBulkBarRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
   const qualityMenuRef = useRef<HTMLDetailsElement | null>(null);
   const editQueueMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -533,6 +541,8 @@ export function ViewerChrome({
   const menuRefs = useMemo(
     () => [
       chromeRootRef,
+      viewerBulkBarRef,
+      contextMenuRef,
       moreMenuRef,
       qualityMenuRef,
       editQueueMenuRef,
@@ -560,7 +570,7 @@ export function ViewerChrome({
   }, [menuRefs]);
 
   const closeContextMenu = useCallback(() => {
-    setContextMenu((current) => (current.open ? { ...current, open: false } : current));
+    setContextMenu((current) => (current.open ? { ...current, open: false, path: null } : current));
   }, []);
 
   useEffect(() => {
@@ -619,10 +629,12 @@ export function ViewerChrome({
       closeOverflowMenus();
       const menuWidth = 240;
       const menuHeight = 260;
+      const thumbnailPath = target.closest('.thumbnail-item')?.getAttribute('data-image-path');
       setContextMenu({
         x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
         y: Math.min(event.clientY, window.innerHeight - menuHeight - 12),
         open: true,
+        path: thumbnailPath || currentImagePath,
       });
     };
 
@@ -668,6 +680,8 @@ export function ViewerChrome({
   const currentRating = currentCuration?.rating ?? 0;
   const markedPathSet = useMemo(() => new Set(markedPaths), [markedPaths]);
   const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
+  const contextMenuPath = contextMenu.path;
+  const isContextMenuPathMarked = contextMenuPath ? markedPathSet.has(contextMenuPath) : false;
   const parsedScaleWidth = parseScaleDimension(scaleWidth);
   const parsedScaleHeight = parseScaleDimension(scaleHeight);
   const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
@@ -688,6 +702,19 @@ export function ViewerChrome({
     await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
     closeOverflowMenus();
     closeContextMenu();
+  };
+
+  const handleContextMenuDelete = async () => {
+    if (!contextMenuPath) {
+      return;
+    }
+
+    await deleteImages({
+      imagePaths: [contextMenuPath],
+      removeImagesByPaths,
+    });
+    closeContextMenu();
+    closeOverflowMenus();
   };
 
   const handleCopy = async () => {
@@ -1046,7 +1073,7 @@ export function ViewerChrome({
     setIsEditQueuePanelOpen(true);
   };
 
-  const handleSaveCroppedCopy = async () => {
+  const handleSaveCroppedCopy = async (options?: { clearPendingEditsOnSuccess?: boolean }) => {
     const preparedCopy = await prepareCroppedCopy();
     if (!preparedCopy || !currentImagePath) {
       return;
@@ -1059,6 +1086,9 @@ export function ViewerChrome({
         preparedCopy.outputPath,
         rotation
       );
+      if (options?.clearPendingEditsOnSuccess) {
+        clearPendingEdits(currentImagePath);
+      }
       pushToast({
         title: 'Cropped Copy Saved',
         kind: 'success',
@@ -1138,7 +1168,6 @@ export function ViewerChrome({
       imagePaths: markedPaths,
       removeImagesByPaths,
     });
-    clearMarkedPaths();
     closeContextMenu();
     closeOverflowMenus();
   };
@@ -1174,7 +1203,7 @@ export function ViewerChrome({
 
   const handleSaveCurrentEdits = async () => {
     if (currentImagePath && currentPendingEdit?.cropRect && cropSaveMode === 'copy') {
-      await handleSaveCroppedCopy();
+      await handleSaveCroppedCopy({ clearPendingEditsOnSuccess: true });
       return;
     }
 
@@ -1368,7 +1397,7 @@ export function ViewerChrome({
           aria-label="Refresh folder"
           disabled={!folderPath}
         >
-          <MenuLabel label="Refresh" shortcut="Ctrl+R" />
+          <MenuLabel label="Refresh" shortcut="Ctrl+R / F6" />
         </button>
       ),
       pinnedNode: renderPinnedButton('refresh', 'Refresh', 'refresh', handleRefresh, {
@@ -1819,7 +1848,12 @@ export function ViewerChrome({
       </div>
 
       {markedPaths.length > 0 && (
-        <div className="viewer-bulk-bar" role="toolbar" aria-label="Marked image actions">
+        <div
+          className="viewer-bulk-bar"
+          role="toolbar"
+          aria-label="Marked image actions"
+          ref={viewerBulkBarRef}
+        >
           <span className="viewer-bulk-count">{markedPaths.length} marked</span>
           <button className="top-bar-menu-item" onClick={markAllVisibleImages} type="button">
             Mark All
@@ -1845,13 +1879,14 @@ export function ViewerChrome({
           className="context-menu"
           role="menu"
           aria-label="Image actions"
+          ref={contextMenuRef}
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
             className="top-bar-menu-item context-menu-item"
             onClick={() => {
               if (currentImagePath) {
-                toggleMarkedPath(currentImagePath);
+                toggleMarkedPath(contextMenuPath ?? currentImagePath);
               }
               closeContextMenu();
             }}
@@ -1859,13 +1894,16 @@ export function ViewerChrome({
             type="button"
           >
             <MenuLabel
-              label={isCurrentMarked ? 'Unmark Current Image' : 'Mark Current Image'}
+              label={isContextMenuPathMarked ? 'Unmark Current Image' : 'Mark Current Image'}
               shortcut="M"
             />
           </button>
           <button
             className="top-bar-menu-item context-menu-item"
-            onClick={() => void handleCopy()}
+            onClick={async () => {
+              await copyCurrentImage(contextMenuPath);
+              closeContextMenu();
+            }}
             role="menuitem"
             type="button"
           >
@@ -1873,7 +1911,10 @@ export function ViewerChrome({
           </button>
           <button
             className="top-bar-menu-item context-menu-item"
-            onClick={() => void handleCopyPath()}
+            onClick={async () => {
+              await copyCurrentImagePath(contextMenuPath);
+              closeContextMenu();
+            }}
             role="menuitem"
             type="button"
           >
@@ -1881,7 +1922,10 @@ export function ViewerChrome({
           </button>
           <button
             className="top-bar-menu-item context-menu-item"
-            onClick={() => void handleReveal()}
+            onClick={async () => {
+              await revealCurrentImage(contextMenuPath);
+              closeContextMenu();
+            }}
             role="menuitem"
             type="button"
           >
@@ -1889,7 +1933,14 @@ export function ViewerChrome({
           </button>
           <button
             className="top-bar-menu-item context-menu-item"
-            onClick={() => void handleOpenInEditor()}
+            onClick={async () => {
+              await openCurrentImageInEditor(
+                contextMenuPath,
+                externalEditorPath,
+                externalEditorLabel
+              );
+              closeContextMenu();
+            }}
             role="menuitem"
             type="button"
           >
@@ -1900,7 +1951,7 @@ export function ViewerChrome({
           </button>
           <button
             className="top-bar-menu-item context-menu-item context-menu-item-danger"
-            onClick={() => void handleDelete()}
+            onClick={() => void handleContextMenuDelete()}
             role="menuitem"
             type="button"
           >
