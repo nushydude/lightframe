@@ -399,6 +399,40 @@ describe('ViewerChrome', () => {
     expect(screen.getAllByLabelText('Stop slideshow')).toHaveLength(2);
   });
 
+  it('announces the current slideshow pause or resume action', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo1.jpg',
+      isSlideshowActive: true,
+      isSlideshowPaused: false,
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { rerender } = render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getAllByLabelText('Pause slideshow')).toHaveLength(2);
+
+    useViewerStore.setState({ isSlideshowPaused: true });
+    rerender(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getAllByLabelText('Resume slideshow')).toHaveLength(2);
+  });
+
   it('shows a top-bar slideshow button', () => {
     useViewerStore.setState({
       currentImagePath: 'C:/photo.jpg',

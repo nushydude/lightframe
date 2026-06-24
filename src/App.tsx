@@ -369,18 +369,18 @@ function App() {
     };
   }, [openFolder, openImage]);
 
-  // Auto-hide controls only while slideshow mode is running.
+  // Auto-hide controls while chrome is floating over the image.
   const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimerRef.current) {
       clearTimeout(controlsTimerRef.current);
     }
-    if (isSlideshowActive) {
+    if (isFullscreen || isSlideshowActive) {
       controlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
       }, 3000);
     }
-  }, [isSlideshowActive, setShowControls]);
+  }, [isFullscreen, isSlideshowActive, setShowControls]);
 
   useEffect(() => {
     if (controlsTimerRef.current) {
@@ -388,7 +388,7 @@ function App() {
       controlsTimerRef.current = null;
     }
 
-    if (isSlideshowActive) {
+    if (isFullscreen || isSlideshowActive) {
       setShowControls(true);
       controlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
@@ -397,7 +397,7 @@ function App() {
     }
 
     setShowControls(true);
-  }, [isSlideshowActive, setShowControls]);
+  }, [isFullscreen, isSlideshowActive, setShowControls]);
 
   useEffect(() => {
     return () => {

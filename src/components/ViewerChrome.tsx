@@ -680,6 +680,7 @@ export function ViewerChrome({
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const currentRating = currentCuration?.rating ?? 0;
+  const slideshowToggleLabel = isSlideshowPaused ? 'Resume slideshow' : 'Pause slideshow';
   const markedPathSet = useMemo(() => new Set(markedPaths), [markedPaths]);
   const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
   const contextMenuPath = contextMenu.path;
@@ -1687,12 +1688,10 @@ export function ViewerChrome({
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isSlideshowActive ? 'active' : ''}`}
               onClick={isSlideshowActive ? onTogglePause : onStartSlideshow}
               data-tooltip={
-                isSlideshowActive ? 'Pause or resume slideshow (Space)' : 'Start slideshow (F5)'
+                isSlideshowActive ? `${slideshowToggleLabel} (Space)` : 'Start slideshow (F5)'
               }
-              title={
-                isSlideshowActive ? 'Pause or resume slideshow (Space)' : 'Start slideshow (F5)'
-              }
-              aria-label={isSlideshowActive ? 'Toggle slideshow pause' : 'Start slideshow'}
+              title={isSlideshowActive ? `${slideshowToggleLabel} (Space)` : 'Start slideshow (F5)'}
+              aria-label={isSlideshowActive ? slideshowToggleLabel : 'Start slideshow'}
               id="btn-top-slideshow"
               disabled={!canStartSlideshow}
             >
@@ -2106,9 +2105,9 @@ export function ViewerChrome({
             <button
               className={`control-btn has-tooltip ${isSlideshowPaused ? '' : 'active'}`}
               onClick={onTogglePause}
-              data-tooltip="Pause or resume slideshow (Space)"
-              title="Pause/Resume slideshow (Space)"
-              aria-label="Toggle slideshow pause"
+              data-tooltip={`${slideshowToggleLabel} (Space)`}
+              title={`${slideshowToggleLabel} (Space)`}
+              aria-label={slideshowToggleLabel}
               id="btn-toggle-slideshow"
             >
               <ToolbarIcon name={isSlideshowPaused ? 'slideshow' : 'pause'} />
