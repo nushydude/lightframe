@@ -21,6 +21,16 @@ interface DeleteImagesOptions {
   removeImagesByPaths: (paths: string[]) => void;
 }
 
+interface DeleteFailure {
+  path: string;
+  error: string;
+}
+
+interface DeleteResult {
+  successes: string[];
+  failures: DeleteFailure[];
+}
+
 export function canSaveRotationForPath(filePath: string | null): boolean {
   if (!filePath) {
     return false;
@@ -289,37 +299,43 @@ export async function deleteCurrentImage({
   }
 }
 
-export async function deleteImages({
-  imagePaths,
-  removeImagesByPaths,
-}: DeleteImagesOptions): Promise<void> {
-  const normalizedPaths = Array.from(
-    new Set(imagePaths.map((path) => path.trim()).filter(Boolean))
-  );
-  if (normalizedPaths.length === 0) {
-    return;
-  }
+function normalizeDeletePaths(imagePaths: string[]): string[] {
+  return Array.from(new Set(imagePaths.map((path) => path.trim()).filter(Boolean)));
+}
 
+function getDeleteConfirmationOptions(imagePaths: string[]): {
+  message: string;
+  title: 'Delete Image' | 'Delete Images';
+} {
   const firstFileName =
-    normalizedPaths[0]?.replace(/\\/g, '/').split('/').pop() ?? normalizedPaths[0] ?? 'image';
-  const confirmed = await confirm(
-    normalizedPaths.length === 1
-      ? `Are you sure you want to move this image to the Recycle Bin?\n\n${firstFileName}`
-      : `Are you sure you want to move ${normalizedPaths.length} images to the Recycle Bin?\n\nFirst item: ${firstFileName}`,
-    {
-      title: normalizedPaths.length === 1 ? 'Delete Image' : 'Delete Images',
-      kind: 'warning',
-    }
-  );
+    imagePaths[0]?.replace(/\\/g, '/').split('/').pop() ?? imagePaths[0] ?? 'image';
 
-  if (!confirmed) {
-    return;
+  if (imagePaths.length === 1) {
+    return {
+      message: `Are you sure you want to move this image to the Recycle Bin?\n\n${firstFileName}`,
+      title: 'Delete Image',
+    };
   }
 
-  const successes: string[] = [];
-  const failures: Array<{ path: string; error: string }> = [];
+  return {
+    message: `Are you sure you want to move ${imagePaths.length} images to the Recycle Bin?\n\nFirst item: ${firstFileName}`,
+    title: 'Delete Images',
+  };
+}
 
-  for (const path of normalizedPaths) {
+async function confirmDeleteImages(imagePaths: string[]): Promise<boolean> {
+  const { message, title } = getDeleteConfirmationOptions(imagePaths);
+  return confirm(message, {
+    title,
+    kind: 'warning',
+  });
+}
+
+async function moveImagesToTrash(imagePaths: string[]): Promise<DeleteResult> {
+  const successes: string[] = [];
+  const failures: DeleteFailure[] = [];
+
+  for (const path of imagePaths) {
     try {
       await moveToTrash(path);
       successes.push(path);
@@ -332,11 +348,12 @@ export async function deleteImages({
     }
   }
 
-  if (successes.length > 0) {
-    removeImagesByPaths(successes);
-  }
+  return { successes, failures };
+}
 
+function showDeleteResultToast(successes: string[], failures: DeleteFailure[]): void {
   const pushToast = useToastStore.getState().pushToast;
+
   if (failures.length === 0) {
     pushToast({
       title: successes.length === 1 ? 'Image deleted' : 'Images deleted',
@@ -359,4 +376,27 @@ export async function deleteImages({
     detail: `${failures[0]?.path ?? ''}\n${failures[0]?.error ?? ''}`.trim(),
     duration: 8000,
   });
+}
+
+export async function deleteImages({
+  imagePaths,
+  removeImagesByPaths,
+}: DeleteImagesOptions): Promise<void> {
+  const normalizedPaths = normalizeDeletePaths(imagePaths);
+  if (normalizedPaths.length === 0) {
+    return;
+  }
+
+  const confirmed = await confirmDeleteImages(normalizedPaths);
+  if (!confirmed) {
+    return;
+  }
+
+  const { successes, failures } = await moveImagesToTrash(normalizedPaths);
+
+  if (successes.length > 0) {
+    removeImagesByPaths(successes);
+  }
+
+  showDeleteResultToast(successes, failures);
 }
