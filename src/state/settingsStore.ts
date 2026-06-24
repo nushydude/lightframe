@@ -10,6 +10,16 @@ interface SettingsState {
   updateSettings: (partial: Partial<AppSettings>) => Promise<void>;
 }
 
+let settingsWriteQueue: Promise<void> = Promise.resolve();
+
+function queueSettingsWrite(settings: AppSettings): Promise<void> {
+  const pendingWrite = settingsWriteQueue
+    .catch(() => undefined)
+    .then(() => writeSettings(settings));
+  settingsWriteQueue = pendingWrite;
+  return pendingWrite;
+}
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoaded: false,
@@ -25,11 +35,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   updateSettings: async (partial) => {
-    const current = get().settings;
-    const updated = { ...current, ...partial };
-    set({ settings: updated });
+    let updated = get().settings;
+    set((state) => {
+      updated = { ...state.settings, ...partial };
+      return { settings: updated };
+    });
     try {
-      await writeSettings(updated);
+      await queueSettingsWrite(updated);
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
