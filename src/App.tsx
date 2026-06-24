@@ -369,7 +369,7 @@ function App() {
     };
   }, [openFolder, openImage]);
 
-  // Auto-hide controls in fullscreen and slideshow mode
+  // Auto-hide controls while chrome is floating over the image.
   const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimerRef.current) {
@@ -793,7 +793,9 @@ function App() {
     !isSlideshowActive
       ? 'with-thumbnails'
       : '',
-    currentImagePath && viewMode === 'viewer' && !isSecondary ? 'has-viewer-safe-areas' : '',
+    currentImagePath && viewMode === 'viewer' && !isSecondary && !isSlideshowActive
+      ? 'has-viewer-safe-areas'
+      : '',
     viewMode === 'grid' && !isSecondary ? 'grid-mode' : '',
     viewMode === 'compare' && !isSecondary ? 'compare-mode' : '',
     isSlideshowActive ? 'slideshow-active' : '',
@@ -836,6 +838,7 @@ function App() {
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}
+                onStopSlideshow={stopSlideshow}
                 onTogglePause={toggleSlideshowPause}
               />
               {settings.showThumbnails && !isSlideshowActive && <ThumbnailStrip />}
@@ -853,6 +856,7 @@ function App() {
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}
+                onStopSlideshow={stopSlideshow}
                 onTogglePause={toggleSlideshowPause}
               />
             </>

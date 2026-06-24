@@ -98,6 +98,10 @@ body,
 
 /* Thumbnail Strip */
 .thumbnail-strip-container {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   height: 90px;
   background: var(--bg-secondary-translucent);
   backdrop-filter: blur(12px);
@@ -107,7 +111,7 @@ body,
   overflow-y: hidden;
   display: flex;
   align-items: center;
-  z-index: 100;
+  z-index: calc(var(--z-controls) - 1);
   scrollbar-width: thin;
   scrollbar-color: var(--accent) transparent;
 }

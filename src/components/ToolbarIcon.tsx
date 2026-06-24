@@ -22,6 +22,7 @@ type ToolbarIconName =
   | 'rotateCw'
   | 'settings'
   | 'slideshow'
+  | 'stop'
   | 'zoomIn'
   | 'zoomOut';
 
@@ -74,6 +75,7 @@ const ICON_PATHS: Record<ToolbarIconName, string[]> = {
     'M17 7l2.1-2.1',
   ],
   slideshow: ['M7 5v14l11-7L7 5Z', 'M3.5 6.5v11', 'M20.5 6.5v11'],
+  stop: ['M7 7h10v10H7z'],
   zoomIn: ['M11 5v12', 'M5 11h12'],
   zoomOut: ['M5 11h12'],
 };
