@@ -161,7 +161,7 @@ describe('diagnosticsSnapshot', () => {
     });
 
     expect(snapshot.schemaVersion).toBe(1);
-    expect(snapshot.app.version).toBe('8.1.0');
+    expect(snapshot.app.version).toBe('8.1.1');
     expect(snapshot.app.windowLabel).toBe('main');
     expect(snapshot.viewer.visibleImageCount).toBe(12);
     expect(snapshot.settings.performanceMode).toBe('fast');
