@@ -1114,7 +1114,7 @@ body,
   top: calc(100% + 8px);
   right: 0;
   min-width: 180px;
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 4px;
   padding: 8px;
@@ -1123,6 +1123,10 @@ body,
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
   z-index: calc(var(--z-controls) + 2);
+}
+
+.top-bar-menu[open] > .top-bar-menu-panel {
+  display: flex;
 }
 
 .top-bar-menu-panel--stacked {
@@ -1223,13 +1227,17 @@ body,
 }
 
 .top-bar-submenu-panel {
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 4px;
   margin-top: 4px;
   margin-left: 8px;
   padding-left: 8px;
   border-left: 1px solid var(--border);
+}
+
+.top-bar-submenu[open] > .top-bar-submenu-panel {
+  display: flex;
 }
 
 .top-bar-menu-empty,
@@ -2717,36 +2725,49 @@ body,
   color: var(--text-secondary);
 }
 
-.viewer-bulk-menu {
-  position: absolute;
-  top: 54px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: calc(var(--z-controls) + 2);
-  width: min(calc(100vw - 32px), max-content);
+.marked-actions-trigger {
+  z-index: 1;
 }
 
-.viewer-bulk-bar {
-  display: flex;
+.marked-actions-summary {
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--bg-control);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  min-height: 28px;
+  padding: 2px 8px;
+  transition:
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    background var(--transition-fast),
+    opacity var(--transition-fast);
+  opacity: 0.82;
 }
 
-.viewer-bulk-count {
-  font-size: 12px;
-  font-weight: 600;
+.marked-actions-summary:hover,
+.marked-actions-trigger[open] .marked-actions-summary {
+  opacity: 1;
+  border-color: var(--border);
+}
+
+.marked-actions-trigger[open] .marked-actions-summary {
+  background: color-mix(in srgb, var(--bg-control) 88%, transparent);
+}
+
+.marked-actions-summary::-webkit-details-marker {
+  display: none;
+}
+
+.marked-actions-panel {
+  right: 0;
+  min-width: 168px;
+}
+
+.marked-actions-panel-count {
+  padding: 2px 8px 6px;
   color: var(--text-secondary);
-  padding-right: 4px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .context-menu {
