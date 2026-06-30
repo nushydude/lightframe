@@ -1347,14 +1347,11 @@ fn paths_match(left: &Path, right: &Path) -> bool {
 }
 
 fn files_match_by_content(left: &Path, right: &Path) -> Result<bool, String> {
-    let left_metadata = fs::metadata(left)
-        .map_err(|error| format!("Failed to inspect source file '{}': {}", left.display(), error))?;
+    let left_metadata = fs::metadata(left).map_err(|error| {
+        format!("Failed to inspect source file '{}': {}", left.display(), error)
+    })?;
     let right_metadata = fs::metadata(right).map_err(|error| {
-        format!(
-            "Failed to inspect destination file '{}': {}",
-            right.display(),
-            error
-        )
+        format!("Failed to inspect destination file '{}': {}", right.display(), error)
     })?;
 
     if left_metadata.len() != right_metadata.len() {
@@ -1364,24 +1361,17 @@ fn files_match_by_content(left: &Path, right: &Path) -> Result<bool, String> {
     let mut left_file = fs::File::open(left)
         .map_err(|error| format!("Failed to open source file '{}': {}", left.display(), error))?;
     let mut right_file = fs::File::open(right).map_err(|error| {
-        format!(
-            "Failed to open destination file '{}': {}",
-            right.display(),
-            error
-        )
+        format!("Failed to open destination file '{}': {}", right.display(), error)
     })?;
 
     let mut left_buffer = [0_u8; 8192];
     let mut right_buffer = [0_u8; 8192];
     loop {
-        let left_read = io::Read::read(&mut left_file, &mut left_buffer)
-            .map_err(|error| format!("Failed to read source file '{}': {}", left.display(), error))?;
+        let left_read = io::Read::read(&mut left_file, &mut left_buffer).map_err(|error| {
+            format!("Failed to read source file '{}': {}", left.display(), error)
+        })?;
         let right_read = io::Read::read(&mut right_file, &mut right_buffer).map_err(|error| {
-            format!(
-                "Failed to read destination file '{}': {}",
-                right.display(),
-                error
-            )
+            format!("Failed to read destination file '{}': {}", right.display(), error)
         })?;
 
         if left_read != right_read {
@@ -1427,7 +1417,9 @@ fn existing_matching_destination(
         return Ok(None);
     }
 
-    if paths_match(source_path, &preferred_path) || files_match_by_content(source_path, &preferred_path)? {
+    if paths_match(source_path, &preferred_path)
+        || files_match_by_content(source_path, &preferred_path)?
+    {
         return Ok(Some(preferred_path));
     }
 
@@ -1583,8 +1575,9 @@ fn move_image_to_folder_blocking(
 
     if let Some(existing_path) = existing_matching_destination(source_path, destination_path)? {
         if !paths_match(source_path, &existing_path) {
-            fs::remove_file(source_path)
-                .map_err(|error| format!("Failed to remove source file after matched move: {}", error))?;
+            fs::remove_file(source_path).map_err(|error| {
+                format!("Failed to remove source file after matched move: {}", error)
+            })?;
         }
         return Ok(existing_path.to_string_lossy().to_string());
     }
