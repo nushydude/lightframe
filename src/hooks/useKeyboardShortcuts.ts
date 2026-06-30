@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -58,6 +58,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
   } = useViewerStore();
 
   const settings = useSettingsStore((s) => s.settings);
+  const lastUnhandledEscapeAtRef = useRef<number | null>(null);
 
   const handleKeyDown = useCallback(
     // fallow-ignore-next-line complexity
@@ -218,19 +219,42 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       // Escape: Close settings > stop slideshow > reset zoom > exit fullscreen
       if (e.key === 'Escape') {
         e.preventDefault();
+        const clearPendingEscapeQuit = () => {
+          lastUnhandledEscapeAtRef.current = null;
+        };
+
         if (showSettings) {
+          clearPendingEscapeQuit();
           setShowSettings(false);
         } else if (isSlideshowActive) {
+          clearPendingEscapeQuit();
           await handlers.stopSlideshow();
         } else if (zoomMode !== 'fit') {
+          clearPendingEscapeQuit();
           setZoomMode('fit');
         } else if (isFullscreen) {
+          clearPendingEscapeQuit();
           try {
             const appWindow = getCurrentWindow();
             await appWindow.setFullscreen(false);
             setFullscreen(false);
           } catch (err) {
             console.error('Failed to exit fullscreen:', err);
+          }
+        } else {
+          const now = Date.now();
+          if (
+            lastUnhandledEscapeAtRef.current !== null &&
+            now - lastUnhandledEscapeAtRef.current <= 500
+          ) {
+            clearPendingEscapeQuit();
+            try {
+              await getCurrentWindow().close();
+            } catch (err) {
+              console.error('Failed to close window after double Escape:', err);
+            }
+          } else {
+            lastUnhandledEscapeAtRef.current = now;
           }
         }
         return;

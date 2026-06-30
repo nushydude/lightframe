@@ -60,10 +60,6 @@ export function windowBoundsForDisplay(
     return settings.windowBoundsByDisplay[displayKey];
   }
 
-  if (Object.keys(settings.windowBoundsByDisplay).length > 0) {
-    return null;
-  }
-
   return windowBoundsFromLegacySettings(settings);
 }
 

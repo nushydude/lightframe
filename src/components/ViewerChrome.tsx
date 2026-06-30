@@ -507,6 +507,7 @@ export function ViewerChrome({
   const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
   const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
+  const [isMarkedPanelOpen, setIsMarkedPanelOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     x: 0,
     y: 0,
@@ -515,7 +516,7 @@ export function ViewerChrome({
   });
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const chromeRootRef = useRef<HTMLDivElement | null>(null);
-  const viewerBulkBarRef = useRef<HTMLDivElement | null>(null);
+  const viewerBulkBarRef = useRef<HTMLDetailsElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
   const qualityMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -524,6 +525,12 @@ export function ViewerChrome({
   const compactBottomMenuRef = useRef<HTMLDetailsElement | null>(null);
   const shouldUseCompactBottomControls = useMediaQuery(COMPACT_BOTTOM_CONTROLS_QUERY);
   const shouldMoveRotateControls = useMediaQuery(COMPACT_ROTATE_CONTROLS_QUERY);
+
+  useEffect(() => {
+    if (markedPaths.length === 0 && isMarkedPanelOpen) {
+      setIsMarkedPanelOpen(false);
+    }
+  }, [isMarkedPanelOpen, markedPaths.length]);
 
   useEffect(() => {
     const handler = () => setShowExif((value) => !value);
@@ -1867,30 +1874,42 @@ export function ViewerChrome({
       </div>
 
       {markedPaths.length > 0 && (
-        <div
-          className="viewer-bulk-bar"
-          role="toolbar"
-          aria-label="Marked image actions"
-          ref={viewerBulkBarRef}
-        >
-          <span className="viewer-bulk-count">{markedPaths.length} marked</span>
-          <button className="top-bar-menu-item" onClick={markAllVisibleImages} type="button">
-            Mark All
-          </button>
-          <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
-            Clear
-          </button>
-          <span className="contact-sheet-bulk-divider" aria-hidden="true" />
-          {renderMarkedTransferSubmenu('copy')}
-          {renderMarkedTransferSubmenu('move')}
-          <button
-            className="top-bar-menu-item"
-            onClick={() => void handleDeleteMarked()}
-            type="button"
+        <details className="viewer-bulk-menu" ref={viewerBulkBarRef} open={isMarkedPanelOpen}>
+          <summary
+            className="viewer-bulk-summary"
+            aria-label="Marked image actions"
+            role="button"
+            onClick={(event) => {
+              event.preventDefault();
+              setIsMarkedPanelOpen((value) => !value);
+            }}
           >
-            Delete
-          </button>
-        </div>
+            <span className="viewer-bulk-count">{markedPaths.length} marked</span>
+            <span className="viewer-bulk-summary-label">
+              {isMarkedPanelOpen ? 'Hide actions' : 'Show actions'}
+            </span>
+          </summary>
+          {isMarkedPanelOpen && (
+            <div className="viewer-bulk-bar" role="toolbar" aria-label="Marked image actions">
+              <button className="top-bar-menu-item" onClick={markAllVisibleImages} type="button">
+                Mark All
+              </button>
+              <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
+                Clear
+              </button>
+              <span className="contact-sheet-bulk-divider" aria-hidden="true" />
+              {renderMarkedTransferSubmenu('copy')}
+              {renderMarkedTransferSubmenu('move')}
+              <button
+                className="top-bar-menu-item"
+                onClick={() => void handleDeleteMarked()}
+                type="button"
+              >
+                Delete
+              </button>
+            </div>
+          )}
+        </details>
       )}
 
       {contextMenu.open && (

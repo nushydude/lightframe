@@ -2696,12 +2696,43 @@ body,
   color: var(--text-secondary);
 }
 
-.viewer-bulk-bar {
+.viewer-bulk-menu {
   position: absolute;
   top: 54px;
   left: 50%;
   transform: translateX(-50%);
   z-index: calc(var(--z-controls) + 2);
+}
+
+.viewer-bulk-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-control);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  list-style: none;
+}
+
+.viewer-bulk-summary::-webkit-details-marker {
+  display: none;
+}
+
+.viewer-bulk-summary-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.viewer-bulk-bar {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   flex-wrap: wrap;

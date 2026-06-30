@@ -607,6 +607,7 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
     await act(async () => {
       fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
@@ -647,6 +648,7 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
     await act(async () => {
       fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
@@ -802,6 +804,28 @@ describe('ViewerChrome', () => {
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/next.jpg']);
   });
 
+  it('keeps marked actions collapsed until opened', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/photo.jpg'],
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getByRole('button', { name: 'Marked image actions' })).toBeInTheDocument();
+    expect(screen.queryByRole('toolbar', { name: 'Marked image actions' })).not.toBeInTheDocument();
+  });
+
   it('closes the viewer bulk transfer menu when clicking outside', () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
@@ -820,6 +844,7 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
     const bulkCopyMenu = bulkToolbar.querySelector('details') as HTMLDetailsElement;
     const bulkCopySummary = bulkCopyMenu.querySelector('summary') as HTMLElement;

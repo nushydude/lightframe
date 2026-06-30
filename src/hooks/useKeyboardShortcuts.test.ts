@@ -327,4 +327,52 @@ describe('useKeyboardShortcuts', () => {
     expect(useViewerStore.getState().viewMode).toBe('viewer');
     expect(useViewerStore.getState().currentIndex).toBe(2);
   });
+
+  it('closes the window when Escape is pressed twice without another higher-priority action', async () => {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const closeSpy = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      setFullscreen: vi.fn(),
+      setTitle: vi.fn(),
+      close: closeSpy,
+    } as never);
+
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not close the window on the second Escape if the first one reset zoom', async () => {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const closeSpy = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      setFullscreen: vi.fn(),
+      setTitle: vi.fn(),
+      close: closeSpy,
+    } as never);
+    useViewerStore.setState({ zoomMode: 'actual' });
+
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(useViewerStore.getState().zoomMode).toBe('fit');
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
 });
