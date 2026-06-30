@@ -686,8 +686,58 @@ describe('ViewerChrome', () => {
 
     const menu = await screen.findByRole('menu', { name: 'Image actions' });
     expect(menu).toBeInTheDocument();
+    expect(menu).toHaveTextContent('Selection');
+    expect(menu).toHaveTextContent('Copy');
+    expect(menu).toHaveTextContent('Open');
+    expect(menu).toHaveTextContent('Danger');
+    expect(within(menu).getByRole('menuitem', { name: /Copy Filename/i })).toBeInTheDocument();
     expect(menu).toHaveTextContent('Ctrl+Shift+C');
     expect(menu).toHaveTextContent('Delete');
+  });
+
+  it('copies the filename from the context menu', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const imageCanvas = document.createElement('div');
+    imageCanvas.className = 'image-canvas';
+    container.appendChild(imageCanvas);
+
+    fireEvent.contextMenu(imageCanvas);
+
+    const menu = await screen.findByRole('menu', { name: 'Image actions' });
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole('menuitem', { name: /Copy Filename/i }));
+    });
+
+    expect(writeText).toHaveBeenCalledWith('photo.jpg');
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts).toContainEqual(
+        expect.objectContaining({
+          title: 'Filename copied',
+          kind: 'success',
+          message: 'photo.jpg',
+        })
+      );
+    });
   });
 
   it('keeps the context menu action clickable through pointerdown', async () => {

@@ -1,6 +1,7 @@
 import { confirm, open } from '@tauri-apps/plugin-dialog';
 import {
   copyImageToClipboard,
+  getFileName,
   moveToTrash,
   openInExternalApplication,
   revealInExplorer,
@@ -177,23 +178,31 @@ function fallbackCopyText(text: string): boolean {
   return didCopy;
 }
 
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      if (fallbackCopyText(text)) {
+        return;
+      }
+      throw new Error('Clipboard text copy is unavailable.');
+    }
+  }
+
+  if (!fallbackCopyText(text)) {
+    throw new Error('Clipboard text copy is unavailable.');
+  }
+}
+
 export async function copyCurrentImagePath(currentImagePath: string | null): Promise<void> {
   if (!currentImagePath) {
     return;
   }
 
   try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(currentImagePath);
-      } catch {
-        if (!fallbackCopyText(currentImagePath)) {
-          throw new Error('Clipboard text copy is unavailable.');
-        }
-      }
-    } else if (!fallbackCopyText(currentImagePath)) {
-      throw new Error('Clipboard text copy is unavailable.');
-    }
+    await copyTextToClipboard(currentImagePath);
 
     useToastStore.getState().pushToast({
       title: 'Image path copied',
@@ -206,6 +215,34 @@ export async function copyCurrentImagePath(currentImagePath: string | null): Pro
       title: 'Path copy failed',
       kind: 'error',
       message: `Failed to copy image path: ${err}`,
+    });
+  }
+}
+
+export async function copyCurrentImageFileName(currentImagePath: string | null): Promise<void> {
+  if (!currentImagePath) {
+    return;
+  }
+
+  const fileName = getFileName(currentImagePath);
+  if (!fileName) {
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(fileName);
+
+    useToastStore.getState().pushToast({
+      title: 'Filename copied',
+      kind: 'success',
+      message: fileName,
+    });
+  } catch (err) {
+    console.error('Failed to copy filename:', err);
+    useToastStore.getState().pushToast({
+      title: 'Filename copy failed',
+      kind: 'error',
+      message: `Failed to copy filename: ${err}`,
     });
   }
 }
