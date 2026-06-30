@@ -219,7 +219,7 @@ describe('windowBoundsForDisplay', () => {
     });
   });
 
-  it('does not reuse another display size when display-specific bounds exist', () => {
+  it('falls back to legacy bounds when the current display key does not match', () => {
     const settings = {
       ...DEFAULT_SETTINGS,
       windowX: 1,
@@ -237,7 +237,17 @@ describe('windowBoundsForDisplay', () => {
       width: 1440,
       height: 900,
     });
-    expect(windowBoundsForDisplay(settings, 'secondary')).toBeNull();
-    expect(windowBoundsForDisplay(settings, null)).toBeNull();
+    expect(windowBoundsForDisplay(settings, 'secondary')).toEqual({
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 4,
+    });
+    expect(windowBoundsForDisplay(settings, null)).toEqual({
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 4,
+    });
   });
 });

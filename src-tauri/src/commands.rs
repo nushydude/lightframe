@@ -1342,6 +1342,52 @@ fn destination_entry_exists(path: &Path) -> Result<bool, String> {
     }
 }
 
+fn paths_match(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+fn files_match_by_content(left: &Path, right: &Path) -> Result<bool, String> {
+    let left_metadata = fs::metadata(left).map_err(|error| {
+        format!("Failed to inspect source file '{}': {}", left.display(), error)
+    })?;
+    let right_metadata = fs::metadata(right).map_err(|error| {
+        format!("Failed to inspect destination file '{}': {}", right.display(), error)
+    })?;
+
+    if left_metadata.len() != right_metadata.len() {
+        return Ok(false);
+    }
+
+    let mut left_file = fs::File::open(left)
+        .map_err(|error| format!("Failed to open source file '{}': {}", left.display(), error))?;
+    let mut right_file = fs::File::open(right).map_err(|error| {
+        format!("Failed to open destination file '{}': {}", right.display(), error)
+    })?;
+
+    let mut left_buffer = [0_u8; 8192];
+    let mut right_buffer = [0_u8; 8192];
+    loop {
+        let left_read = io::Read::read(&mut left_file, &mut left_buffer).map_err(|error| {
+            format!("Failed to read source file '{}': {}", left.display(), error)
+        })?;
+        let right_read = io::Read::read(&mut right_file, &mut right_buffer).map_err(|error| {
+            format!("Failed to read destination file '{}': {}", right.display(), error)
+        })?;
+
+        if left_read != right_read {
+            return Ok(false);
+        }
+
+        if left_read == 0 {
+            return Ok(true);
+        }
+
+        if left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+    }
+}
+
 fn next_destination_candidate(
     source_path: &Path,
     destination_folder: &Path,
@@ -1360,6 +1406,24 @@ fn next_destination_candidate(
     }
 
     Err("Unable to resolve a unique destination file name".to_string())
+}
+
+fn existing_matching_destination(
+    source_path: &Path,
+    destination_folder: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let preferred_path = build_destination_candidate_path(source_path, destination_folder, None)?;
+    if !destination_entry_exists(&preferred_path)? {
+        return Ok(None);
+    }
+
+    if paths_match(source_path, &preferred_path)
+        || files_match_by_content(source_path, &preferred_path)?
+    {
+        return Ok(Some(preferred_path));
+    }
+
+    Ok(None)
 }
 
 enum ExclusiveWriteError {
@@ -1418,6 +1482,10 @@ fn copy_image_to_folder_blocking(
     let destination_path = Path::new(&destination_folder);
     if !destination_path.is_dir() {
         return Err(format!("'{}' is not a valid destination folder", destination_folder));
+    }
+
+    if let Some(existing_path) = existing_matching_destination(source_path, destination_path)? {
+        return Ok(existing_path.to_string_lossy().to_string());
     }
 
     for _ in 0..10_000 {
@@ -1503,6 +1571,15 @@ fn move_image_to_folder_blocking(
     let destination_path = Path::new(&destination_folder);
     if !destination_path.is_dir() {
         return Err(format!("'{}' is not a valid destination folder", destination_folder));
+    }
+
+    if let Some(existing_path) = existing_matching_destination(source_path, destination_path)? {
+        if !paths_match(source_path, &existing_path) {
+            fs::remove_file(source_path).map_err(|error| {
+                format!("Failed to remove source file after matched move: {}", error)
+            })?;
+        }
+        return Ok(existing_path.to_string_lossy().to_string());
     }
 
     for _ in 0..10_000 {
@@ -2775,6 +2852,25 @@ mod tests {
     }
 
     #[test]
+    fn test_copy_image_to_folder_blocking_reuses_matching_existing_destination() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        let destination_dir = dir.path().join("destination");
+        fs::create_dir(&destination_dir).unwrap();
+        fs::write(&source_path, b"same-bytes").unwrap();
+        fs::write(destination_dir.join("photo.jpg"), b"same-bytes").unwrap();
+
+        let copied_path = copy_image_to_folder_blocking(
+            source_path.to_string_lossy().to_string(),
+            destination_dir.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(Path::new(&copied_path), destination_dir.join("photo.jpg").as_path());
+        assert!(!destination_dir.join("photo copy.jpg").exists());
+    }
+
+    #[test]
     fn test_move_image_to_folder_blocking_moves_file() {
         let dir = tempdir().unwrap();
         let source_path = dir.path().join("photo.jpg");
@@ -2790,6 +2886,26 @@ mod tests {
 
         assert!(!source_path.exists());
         assert_eq!(fs::read(Path::new(&moved_path)).unwrap(), b"source");
+    }
+
+    #[test]
+    fn test_move_image_to_folder_blocking_reuses_matching_existing_destination() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("photo.jpg");
+        let destination_dir = dir.path().join("destination");
+        fs::create_dir(&destination_dir).unwrap();
+        fs::write(&source_path, b"same-bytes").unwrap();
+        fs::write(destination_dir.join("photo.jpg"), b"same-bytes").unwrap();
+
+        let moved_path = move_image_to_folder_blocking(
+            source_path.to_string_lossy().to_string(),
+            destination_dir.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(Path::new(&moved_path), destination_dir.join("photo.jpg").as_path());
+        assert!(!source_path.exists());
+        assert!(!destination_dir.join("photo copy.jpg").exists());
     }
 
     #[test]
