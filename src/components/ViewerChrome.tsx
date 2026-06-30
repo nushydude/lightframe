@@ -15,9 +15,10 @@ import {
 import { useViewerStore } from '../state/viewerStore';
 import {
   chooseQuickDestinationFolder,
-  copyCurrentImagePath,
   canSaveRotationForPath,
   copyCurrentImage,
+  copyCurrentImageFileName,
+  copyCurrentImagePath,
   deleteImages,
   deleteCurrentImage,
   openCurrentImageInEditor,
@@ -131,13 +132,21 @@ interface ContextMenuState {
 
 interface MenuShortcutAction {
   label: string;
+  icon?: Parameters<typeof ToolbarIcon>[0]['name'];
   shortcut?: string;
 }
 
-function MenuLabel({ label, shortcut }: MenuShortcutAction) {
+function MenuLabel({ label, icon, shortcut }: MenuShortcutAction) {
   return (
     <span className="menu-shortcut-row">
-      <span>{label}</span>
+      <span className="menu-shortcut-label">
+        {icon ? (
+          <span className="menu-shortcut-icon" aria-hidden="true">
+            <ToolbarIcon name={icon} />
+          </span>
+        ) : null}
+        <span>{label}</span>
+      </span>
       {shortcut ? <span className="shortcut-key menu-shortcut-key">{shortcut}</span> : null}
     </span>
   );
@@ -1920,81 +1929,109 @@ export function ViewerChrome({
           ref={contextMenuRef}
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button
-            className="top-bar-menu-item context-menu-item"
-            onClick={() => {
-              if (currentImagePath) {
-                toggleMarkedPath(contextMenuPath ?? currentImagePath);
-              }
-              closeContextMenu();
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <MenuLabel
-              label={isContextMenuPathMarked ? 'Unmark Current Image' : 'Mark Current Image'}
-              shortcut="M"
-            />
-          </button>
-          <button
-            className="top-bar-menu-item context-menu-item"
-            onClick={async () => {
-              await copyCurrentImage(contextMenuPath);
-              closeContextMenu();
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <MenuLabel label="Copy Image" />
-          </button>
-          <button
-            className="top-bar-menu-item context-menu-item"
-            onClick={async () => {
-              await copyCurrentImagePath(contextMenuPath);
-              closeContextMenu();
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <MenuLabel label="Copy Path" shortcut="Ctrl+Shift+C" />
-          </button>
-          <button
-            className="top-bar-menu-item context-menu-item"
-            onClick={async () => {
-              await revealCurrentImage(contextMenuPath);
-              closeContextMenu();
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <MenuLabel label="Reveal" shortcut="Ctrl+Shift+O" />
-          </button>
-          <button
-            className="top-bar-menu-item context-menu-item"
-            onClick={async () => {
-              await openCurrentImageInEditor(
-                contextMenuPath,
-                externalEditorPath,
-                externalEditorLabel
-              );
-              closeContextMenu();
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <MenuLabel
-              label={externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
-              shortcut="Ctrl+E"
-            />
-          </button>
-          <button
-            className="top-bar-menu-item context-menu-item context-menu-item-danger"
-            onClick={() => void handleContextMenuDelete()}
-            role="menuitem"
-            type="button"
-          >
-            <MenuLabel label="Delete" shortcut="Delete" />
-          </button>
+          <div className="context-menu-section" role="presentation" aria-label="Selection actions">
+            <div className="context-menu-section-label">Selection</div>
+            <button
+              className="top-bar-menu-item context-menu-item"
+              onClick={() => {
+                if (currentImagePath) {
+                  toggleMarkedPath(contextMenuPath ?? currentImagePath);
+                }
+                closeContextMenu();
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel
+                label={isContextMenuPathMarked ? 'Unmark Current Image' : 'Mark Current Image'}
+                icon="pin"
+                shortcut="M"
+              />
+            </button>
+          </div>
+          <div className="context-menu-divider" role="separator" />
+          <div className="context-menu-section" role="presentation" aria-label="Copy actions">
+            <div className="context-menu-section-label">Copy</div>
+            <button
+              className="top-bar-menu-item context-menu-item"
+              onClick={async () => {
+                await copyCurrentImage(contextMenuPath);
+                closeContextMenu();
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel label="Copy Image" icon="copy" />
+            </button>
+            <button
+              className="top-bar-menu-item context-menu-item"
+              onClick={async () => {
+                await copyCurrentImageFileName(contextMenuPath);
+                closeContextMenu();
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel label="Copy Filename" icon="file" />
+            </button>
+            <button
+              className="top-bar-menu-item context-menu-item"
+              onClick={async () => {
+                await copyCurrentImagePath(contextMenuPath);
+                closeContextMenu();
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel label="Copy Path" icon="copy" shortcut="Ctrl+Shift+C" />
+            </button>
+          </div>
+          <div className="context-menu-divider" role="separator" />
+          <div className="context-menu-section" role="presentation" aria-label="Open actions">
+            <div className="context-menu-section-label">Open</div>
+            <button
+              className="top-bar-menu-item context-menu-item"
+              onClick={async () => {
+                await revealCurrentImage(contextMenuPath);
+                closeContextMenu();
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel label="Reveal" icon="reveal" shortcut="Ctrl+Shift+O" />
+            </button>
+            <button
+              className="top-bar-menu-item context-menu-item"
+              onClick={async () => {
+                await openCurrentImageInEditor(
+                  contextMenuPath,
+                  externalEditorPath,
+                  externalEditorLabel
+                );
+                closeContextMenu();
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel
+                label={externalEditorLabel ? `Edit in ${externalEditorLabel}` : 'Edit'}
+                icon="edit"
+                shortcut="Ctrl+E"
+              />
+            </button>
+          </div>
+          <div className="context-menu-divider" role="separator" />
+          <div className="context-menu-section" role="presentation" aria-label="Danger actions">
+            <div className="context-menu-section-label">Danger</div>
+            <button
+              className="top-bar-menu-item context-menu-item context-menu-item-danger"
+              onClick={() => void handleContextMenuDelete()}
+              role="menuitem"
+              type="button"
+            >
+              <MenuLabel label="Delete" icon="delete" shortcut="Delete" />
+            </button>
+          </div>
         </div>
       )}
 

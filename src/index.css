@@ -1185,6 +1185,27 @@ body,
   width: 100%;
 }
 
+.menu-shortcut-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.menu-shortcut-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+}
+
+.menu-shortcut-icon .toolbar-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .menu-shortcut-key {
   flex: 0 0 auto;
 }
@@ -2756,20 +2777,45 @@ body,
 .context-menu {
   position: fixed;
   z-index: calc(var(--z-controls) + 4);
-  min-width: 220px;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.context-menu-section {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lg);
+}
+
+.context-menu-section-label {
+  padding: 2px 8px 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
 }
 
 .context-menu-item {
   width: 100%;
   text-align: left;
+}
+
+.context-menu-item .menu-shortcut-icon {
+  color: currentColor;
 }
 
 .context-menu-item-danger {

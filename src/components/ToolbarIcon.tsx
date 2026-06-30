@@ -5,6 +5,7 @@ type ToolbarIconName =
   | 'favorite'
   | 'favorites'
   | 'filter'
+  | 'file'
   | 'first'
   | 'fit'
   | 'folder'
@@ -40,6 +41,7 @@ const ICON_PATHS: Record<ToolbarIconName, string[]> = {
     'M17 4.5h2.5M17 7h4M17 9.5h2.5',
   ],
   filter: ['M4 6h16', 'M7 12h10', 'M10 18h4'],
+  file: ['M7 3h7l5 5v13H7z', 'M14 3v5h5', 'M10 13h6', 'M10 17h6'],
   first: ['M6 6v12', 'M18 6 10 12l8 6V6Z'],
   fit: ['M5 9V5h4', 'M15 5h4v4', 'M19 15v4h-4', 'M9 19H5v-4'],
   folder: ['M3 7h6l2 2h10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z', 'M3 9h18'],
