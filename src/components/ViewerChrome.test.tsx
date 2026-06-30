@@ -607,7 +607,8 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
     await act(async () => {
       fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
     });
@@ -647,7 +648,8 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
     await act(async () => {
       fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
     });
@@ -852,7 +854,7 @@ describe('ViewerChrome', () => {
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/next.jpg']);
   });
 
-  it('shows the marked actions bar whenever images are marked', () => {
+  it('keeps marked actions tucked away until opened', () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       images: [
@@ -870,11 +872,11 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    expect(screen.getByRole('toolbar', { name: 'Marked image actions' })).toBeInTheDocument();
-    expect(screen.getByText('1 marked')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Marked image actions' })).toBeInTheDocument();
+    expect(screen.queryByRole('toolbar', { name: 'Marked image actions' })).not.toBeInTheDocument();
   });
 
-  it('closes the viewer bulk transfer menu when clicking outside', () => {
+  it('closes the viewer bulk transfer menu when clicking outside', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       images: [
@@ -892,7 +894,8 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    const bulkToolbar = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
     const bulkCopyMenu = bulkToolbar.querySelector('details') as HTMLDetailsElement;
     const bulkCopySummary = bulkCopyMenu.querySelector('summary') as HTMLElement;
 

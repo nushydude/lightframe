@@ -514,6 +514,7 @@ export function ViewerChrome({
   const [scaleWidth, setScaleWidth] = useState('');
   const [scaleHeight, setScaleHeight] = useState('');
   const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
+  const [isMarkedActionsMenuOpen, setIsMarkedActionsMenuOpen] = useState(false);
   const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -524,7 +525,7 @@ export function ViewerChrome({
   });
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const chromeRootRef = useRef<HTMLDivElement | null>(null);
-  const viewerBulkBarRef = useRef<HTMLDivElement | null>(null);
+  const markedActionsMenuRef = useRef<HTMLDetailsElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
   const qualityMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -552,7 +553,7 @@ export function ViewerChrome({
   const menuRefs = useMemo(
     () => [
       chromeRootRef,
-      viewerBulkBarRef,
+      markedActionsMenuRef,
       contextMenuRef,
       moreMenuRef,
       qualityMenuRef,
@@ -1628,12 +1629,6 @@ export function ViewerChrome({
           )}
           {isFavorite && <span className="image-counter">★</span>}
           {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
-          {markedPaths.length > 0 && (
-            <span className="image-counter">
-              {markedPaths.length} marked
-              {isCurrentMarked ? ' • current' : ''}
-            </span>
-          )}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
@@ -1808,6 +1803,53 @@ export function ViewerChrome({
               <span className="top-bar-btn-icon">+</span>
               <span className="top-bar-btn-label">{isCurrentMarked ? 'Marked' : 'Mark'}</span>
             </button>
+            {markedPaths.length > 0 && (
+              <details
+                className="top-bar-menu marked-actions-trigger"
+                ref={markedActionsMenuRef}
+                onToggle={(event) => setIsMarkedActionsMenuOpen(event.currentTarget.open)}
+              >
+                <summary
+                  className="image-counter marked-actions-summary"
+                  aria-label="Marked image actions"
+                  role="button"
+                >
+                  {markedPaths.length} marked
+                </summary>
+                {isMarkedActionsMenuOpen && (
+                  <div
+                    className="top-bar-menu-panel marked-actions-panel"
+                    role="toolbar"
+                    aria-label="Marked image actions"
+                  >
+                    <div className="marked-actions-panel-count" aria-live="polite">
+                      {markedPaths.length} marked
+                      {isCurrentMarked ? ' current' : ''}
+                    </div>
+                    <button
+                      className="top-bar-menu-item"
+                      onClick={markAllVisibleImages}
+                      type="button"
+                    >
+                      Mark All
+                    </button>
+                    <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
+                      Clear
+                    </button>
+                    <span className="contact-sheet-bulk-divider" aria-hidden="true" />
+                    {renderMarkedTransferSubmenu('copy')}
+                    {renderMarkedTransferSubmenu('move')}
+                    <button
+                      className="top-bar-menu-item"
+                      onClick={() => void handleDeleteMarked()}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </details>
+            )}
             {pinnedSecondaryActions.map((action) => (
               <div key={action.id} className="top-bar-menu-entry top-bar-menu-entry--pinned">
                 {action.pinnedNode}
@@ -1874,32 +1916,6 @@ export function ViewerChrome({
           </div>
         </div>
       </div>
-
-      {markedPaths.length > 0 && (
-        <div className="viewer-bulk-menu" ref={viewerBulkBarRef}>
-          <div className="viewer-bulk-bar" role="toolbar" aria-label="Marked image actions">
-            <span className="viewer-bulk-count" aria-live="polite">
-              {markedPaths.length} marked
-            </span>
-            <button className="top-bar-menu-item" onClick={markAllVisibleImages} type="button">
-              Mark All
-            </button>
-            <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
-              Clear
-            </button>
-            <span className="contact-sheet-bulk-divider" aria-hidden="true" />
-            {renderMarkedTransferSubmenu('copy')}
-            {renderMarkedTransferSubmenu('move')}
-            <button
-              className="top-bar-menu-item"
-              onClick={() => void handleDeleteMarked()}
-              type="button"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      )}
 
       {contextMenu.open && (
         <div
