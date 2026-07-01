@@ -137,6 +137,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub window_height: Option<f64>,
     #[serde(default)]
+    pub last_window_display_key: Option<String>,
+    #[serde(default)]
     pub window_bounds_by_display: HashMap<String, WindowBounds>,
     pub sort_order: String,
     #[serde(default = "default_show_thumbnails")]
@@ -268,6 +270,7 @@ impl Default for AppSettings {
             window_y: None,
             window_width: None,
             window_height: None,
+            last_window_display_key: None,
             window_bounds_by_display: HashMap::new(),
             sort_order: "name".to_string(),
             show_thumbnails: default_show_thumbnails(),
@@ -3755,6 +3758,7 @@ mod tests {
         assert_eq!(settings.window_y, None);
         assert_eq!(settings.window_width, None);
         assert_eq!(settings.window_height, None);
+        assert_eq!(settings.last_window_display_key, None);
         assert!(settings.window_bounds_by_display.is_empty());
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");

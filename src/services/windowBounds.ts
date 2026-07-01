@@ -54,10 +54,30 @@ export function displayKeyFromMonitor(monitor: DisplayIdentity | null): string |
 
 export function windowBoundsForDisplay(
   settings: AppSettings,
-  displayKey: string | null
+  displayKey: string | null,
+  availableDisplayKeys?: Iterable<string>
 ): WindowBounds | null {
-  if (displayKey && settings.windowBoundsByDisplay[displayKey]) {
+  const allowedDisplayKeys = availableDisplayKeys ? new Set(availableDisplayKeys) : null;
+  const lastDisplayKey = settings.lastWindowDisplayKey?.trim() || null;
+
+  if (
+    lastDisplayKey &&
+    settings.windowBoundsByDisplay[lastDisplayKey] &&
+    (!allowedDisplayKeys || allowedDisplayKeys.has(lastDisplayKey))
+  ) {
+    return settings.windowBoundsByDisplay[lastDisplayKey];
+  }
+
+  if (
+    displayKey &&
+    settings.windowBoundsByDisplay[displayKey] &&
+    (!allowedDisplayKeys || allowedDisplayKeys.has(displayKey))
+  ) {
     return settings.windowBoundsByDisplay[displayKey];
+  }
+
+  if (allowedDisplayKeys && Object.keys(settings.windowBoundsByDisplay).length > 0) {
+    return null;
   }
 
   return windowBoundsFromLegacySettings(settings);
@@ -131,6 +151,7 @@ export async function persistWindowBoundsSafely({
     windowY: nextState.bounds.y,
     windowWidth: nextState.bounds.width,
     windowHeight: nextState.bounds.height,
+    lastWindowDisplayKey: nextState.displayKey ?? undefined,
     windowBoundsByDisplay: nextState.boundsByDisplay,
   });
 }
@@ -159,6 +180,7 @@ async function canPersistWindowBounds({
 
 interface NextWindowBoundsState {
   bounds: WindowBounds;
+  displayKey: string | null;
   boundsByDisplay: Record<string, WindowBounds>;
 }
 
@@ -190,6 +212,7 @@ async function readNextWindowBoundsState({
 
   return {
     bounds,
+    displayKey,
     boundsByDisplay: nextWindowBoundsByDisplay(settings.windowBoundsByDisplay, displayKey, bounds),
   };
 }
@@ -210,7 +233,7 @@ function nextWindowBoundsByDisplay(
 }
 
 function shouldSkipWindowBoundsUpdate(
-  settings: PersistedWindowBounds & Pick<AppSettings, 'windowBoundsByDisplay'>,
+  settings: PersistedWindowBounds & Pick<AppSettings, 'lastWindowDisplayKey' | 'windowBoundsByDisplay'>,
   nextState: NextWindowBoundsState
 ): boolean {
   return (
@@ -218,6 +241,7 @@ function shouldSkipWindowBoundsUpdate(
     settings.windowY === nextState.bounds.y &&
     settings.windowWidth === nextState.bounds.width &&
     settings.windowHeight === nextState.bounds.height &&
+    (settings.lastWindowDisplayKey ?? null) === nextState.displayKey &&
     settings.windowBoundsByDisplay === nextState.boundsByDisplay
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import {
+  availableMonitors,
   currentMonitor,
   getCurrentWindow,
   PhysicalPosition,
@@ -60,11 +61,13 @@ import {
   persistWindowBoundsSafely,
   windowBoundsForDisplay,
 } from './services/windowBounds';
+import { mainWindowTitle } from './services/windowTitle';
 
 // fallow-ignore-next-line complexity
 function App() {
   const {
     currentImagePath,
+    folderPath,
     showSettings,
     showCommandPalette,
     showPerformanceTelemetry,
@@ -185,8 +188,15 @@ function App() {
 
         if (isMainWindowRef.current && loadedSettings.rememberWindowBounds) {
           try {
-            const displayKey = displayKeyFromMonitor(await currentMonitor());
-            const restoredBounds = windowBoundsForDisplay(loadedSettings, displayKey);
+            const [monitor, monitors] = await Promise.all([currentMonitor(), availableMonitors()]);
+            const displayKey = displayKeyFromMonitor(monitor);
+            const restoredBounds = windowBoundsForDisplay(
+              loadedSettings,
+              displayKey,
+              monitors
+                .map((candidate) => displayKeyFromMonitor(candidate))
+                .filter((candidate): candidate is string => Boolean(candidate))
+            );
             if (restoredBounds) {
               await appWindowRef.current.setPosition(
                 new PhysicalPosition(restoredBounds.x, restoredBounds.y)
@@ -247,6 +257,16 @@ function App() {
     if (!isMainWindowRef.current || !hasStartupResolved || startupShowAttempted) return;
     void showMainWindowOnce();
   }, [hasStartupResolved, showMainWindowOnce, startupShowAttempted]);
+
+  useEffect(() => {
+    if (!isMainWindowRef.current || isProjectorWindow || currentImagePath || folderPath) {
+      return;
+    }
+
+    void appWindowRef.current.setTitle(mainWindowTitle()).catch((err) => {
+      console.error('Failed to reset window title:', err);
+    });
+  }, [currentImagePath, folderPath, isProjectorWindow]);
 
   useEffect(() => {
     if (!isMainWindowRef.current) return;

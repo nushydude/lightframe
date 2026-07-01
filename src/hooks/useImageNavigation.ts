@@ -30,6 +30,7 @@ import {
 } from '../services/performanceTelemetry';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { mainWindowTitle } from '../services/windowTitle';
 
 /** Play a subtle 'boop' sound when hitting the edge of a folder */
 function playBoundaryBeep() {
@@ -295,7 +296,7 @@ export function useImageNavigation() {
   const setFolderWindowTitle = useCallback(async (nextFolderPath: string) => {
     const appWindow = getCurrentWindow();
     const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-    await appWindow.setTitle(`[Folder] ${folderName} - LightFrame`);
+    await appWindow.setTitle(mainWindowTitle(`[Folder] ${folderName}`));
   }, []);
 
   const applyOpenedFolderImages = useCallback(
@@ -415,7 +416,7 @@ export function useImageNavigation() {
 
         const appWindow = getCurrentWindow();
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-        await appWindow.setTitle(`${fileName} - LightFrame`);
+        await appWindow.setTitle(mainWindowTitle(fileName));
         if (!isCurrentGeneration(loadGeneration)) return;
 
         setFolderScanning(true);
@@ -503,6 +504,7 @@ export function useImageNavigation() {
         setFolderPath(nextFolderPath);
         setFolderScanning(true);
         setViewMode('viewer');
+        await setFolderWindowTitle(nextFolderPath);
         if (options?.curationFilter) {
           prepareCurationFilter(options.curationFilter);
         }
@@ -571,6 +573,7 @@ export function useImageNavigation() {
       readCachedFolderImages,
       scanIndexedFolder,
       startBackgroundFolderRefresh,
+      setFolderWindowTitle,
     ]
   );
 

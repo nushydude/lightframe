@@ -50,6 +50,7 @@ export interface AppSettings {
   windowY?: number;
   windowWidth?: number;
   windowHeight?: number;
+  lastWindowDisplayKey?: string;
   windowBoundsByDisplay: Record<string, WindowBounds>;
   sortOrder: 'name' | 'date' | 'size' | 'random';
   showThumbnails: boolean;
@@ -106,6 +107,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     window_y: settings.windowY,
     window_width: settings.windowWidth,
     window_height: settings.windowHeight,
+    last_window_display_key: settings.lastWindowDisplayKey,
     window_bounds_by_display: settings.windowBoundsByDisplay,
     sort_order: settings.sortOrder,
     show_thumbnails: settings.showThumbnails,
@@ -158,6 +160,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     windowY: raw.window_y as number | undefined,
     windowWidth: raw.window_width as number | undefined,
     windowHeight: raw.window_height as number | undefined,
+    lastWindowDisplayKey: optionalTrimmedString(raw.last_window_display_key),
     windowBoundsByDisplay: parseWindowBoundsByDisplay(raw.window_bounds_by_display),
     sortOrder: stringSetting(raw.sort_order, DEFAULT_SETTINGS.sortOrder),
     showThumbnails: booleanSetting(raw.show_thumbnails, DEFAULT_SETTINGS.showThumbnails),

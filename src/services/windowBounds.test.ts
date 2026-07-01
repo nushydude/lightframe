@@ -176,6 +176,7 @@ describe('persistWindowBoundsSafely', () => {
       windowY: 20,
       windowWidth: 1440,
       windowHeight: 900,
+      lastWindowDisplayKey: 'display:0:0:3440x1440@1',
       windowBoundsByDisplay: {
         'display:0:0:3440x1440@1': { x: 10, y: 20, width: 1440, height: 900 },
       },
@@ -219,6 +220,42 @@ describe('windowBoundsForDisplay', () => {
     });
   });
 
+  it('prefers the last active display when it is still available', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      lastWindowDisplayKey: 'secondary',
+      windowBoundsByDisplay: {
+        primary: { x: 10, y: 20, width: 1440, height: 900 },
+        secondary: { x: 1600, y: 50, width: 1200, height: 800 },
+      },
+    };
+
+    expect(windowBoundsForDisplay(settings, 'primary', ['primary', 'secondary'])).toEqual({
+      x: 1600,
+      y: 50,
+      width: 1200,
+      height: 800,
+    });
+  });
+
+  it('falls back to the startup display when the last active display is unavailable', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      lastWindowDisplayKey: 'secondary',
+      windowBoundsByDisplay: {
+        primary: { x: 10, y: 20, width: 1440, height: 900 },
+        secondary: { x: 1600, y: 50, width: 1200, height: 800 },
+      },
+    };
+
+    expect(windowBoundsForDisplay(settings, 'primary', ['primary'])).toEqual({
+      x: 10,
+      y: 20,
+      width: 1440,
+      height: 900,
+    });
+  });
+
   it('falls back to legacy bounds when the current display key does not match', () => {
     const settings = {
       ...DEFAULT_SETTINGS,
@@ -243,11 +280,23 @@ describe('windowBoundsForDisplay', () => {
       width: 3,
       height: 4,
     });
-    expect(windowBoundsForDisplay(settings, null)).toEqual({
-      x: 1,
-      y: 2,
-      width: 3,
-      height: 4,
-    });
+    expect(windowBoundsForDisplay(settings, null)).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+  });
+
+  it('does not restore stale legacy bounds when display-specific entries already exist', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      windowX: 1,
+      windowY: 2,
+      windowWidth: 3,
+      windowHeight: 4,
+      lastWindowDisplayKey: 'secondary',
+      windowBoundsByDisplay: {
+        primary: { x: 10, y: 20, width: 1440, height: 900 },
+        secondary: { x: 1600, y: 50, width: 1200, height: 800 },
+      },
+    };
+
+    expect(windowBoundsForDisplay(settings, 'unknown', ['primary'])).toBeNull();
   });
 });

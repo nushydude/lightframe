@@ -16,6 +16,7 @@ describe('settingsToRust', () => {
       windowY: 240,
       windowWidth: 1440,
       windowHeight: 900,
+      lastWindowDisplayKey: 'display:0:0:3440x1440@1',
       windowBoundsByDisplay: {
         'display:0:0:3440x1440@1': { x: 40, y: 50, width: 1800, height: 1000 },
       },
@@ -27,6 +28,7 @@ describe('settingsToRust', () => {
       window_y: 240,
       window_width: 1440,
       window_height: 900,
+      last_window_display_key: 'display:0:0:3440x1440@1',
       window_bounds_by_display: {
         'display:0:0:3440x1440@1': { x: 40, y: 50, width: 1800, height: 1000 },
       },
@@ -146,6 +148,7 @@ describe('settingsFromRust', () => {
       window_y: 180,
       window_width: 1280,
       window_height: 720,
+      last_window_display_key: 'display:0:0:2560x1440@1',
       window_bounds_by_display: {
         'display:0:0:2560x1440@1': { x: 10, y: 20, width: 1600, height: 900 },
       },
@@ -156,6 +159,7 @@ describe('settingsFromRust', () => {
     expect(settings.windowY).toBe(180);
     expect(settings.windowWidth).toBe(1280);
     expect(settings.windowHeight).toBe(720);
+    expect(settings.lastWindowDisplayKey).toBe('display:0:0:2560x1440@1');
     expect(settings.windowBoundsByDisplay).toEqual({
       'display:0:0:2560x1440@1': { x: 10, y: 20, width: 1600, height: 900 },
     });
