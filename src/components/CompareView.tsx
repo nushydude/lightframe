@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { getPreviewAsset } from '../services/imageAssetCache';
+import { useZoomPan } from '../hooks/useZoomPan';
 import { useViewerStore } from '../state/viewerStore';
 
 const PREVIEW_MAX_DIMENSION = 2048;
@@ -10,6 +11,9 @@ type ComparePaneProps = {
   imagePath: string;
   index: number;
   imageCount: number;
+  imageStyle: CSSProperties;
+  onWheelNext: () => void;
+  onWheelPrev: () => void;
 };
 
 function getFileName(path: string): string {
@@ -46,9 +50,30 @@ function useComparePreview(path: string): { src: string; hasError: boolean } {
   return { src, hasError };
 }
 
-function ComparePane({ roleLabel, isFocused, imagePath, index, imageCount }: ComparePaneProps) {
+function ComparePane({
+  roleLabel,
+  isFocused,
+  imagePath,
+  index,
+  imageCount,
+  imageStyle,
+  onWheelNext,
+  onWheelPrev,
+}: ComparePaneProps) {
   const { src, hasError } = useComparePreview(imagePath);
   const className = ['compare-pane', isFocused ? 'focused' : ''].filter(Boolean).join(' ');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { zoomMode, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } = useZoomPan(
+    containerRef,
+    { onWheelNext, onWheelPrev }
+  );
+  const canvasClassName = [
+    'compare-pane-canvas',
+    isDragging ? 'dragging' : '',
+    zoomMode === 'actual' || zoomMode === 'custom' ? 'zoomable' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <section className={className} aria-label={`${roleLabel} image pane`}>
@@ -64,9 +89,16 @@ function ComparePane({ roleLabel, isFocused, imagePath, index, imageCount }: Com
       <div className="compare-pane-filename" title={getFileName(imagePath)}>
         {getFileName(imagePath)}
       </div>
-      <div className="compare-pane-canvas">
+      <div
+        className={canvasClassName}
+        ref={containerRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
         {src ? (
-          <img src={src} alt="" draggable={false} />
+          <img src={src} alt="" draggable={false} style={imageStyle} />
         ) : hasError ? (
           <div className="compare-pane-placeholder">Unable to load preview</div>
         ) : (
@@ -78,10 +110,38 @@ function ComparePane({ roleLabel, isFocused, imagePath, index, imageCount }: Com
 }
 
 export function CompareView() {
-  const { images, comparePrimaryIndex, compareSecondaryIndex, compareFocusedPane } =
-    useViewerStore();
+  const {
+    images,
+    comparePrimaryIndex,
+    compareSecondaryIndex,
+    compareFocusedPane,
+    zoomMode,
+    zoomLevel,
+    panX,
+    panY,
+    moveCompareFocusedCandidate,
+  } = useViewerStore();
   const primaryImage = images[comparePrimaryIndex];
   const secondaryImage = images[compareSecondaryIndex];
+  const imageStyle = useMemo<CSSProperties>(() => {
+    if (zoomMode === 'actual') {
+      return {
+        transform: `translate(${panX}px, ${panY}px)`,
+        maxWidth: 'none',
+        maxHeight: 'none',
+      };
+    }
+
+    if (zoomMode === 'custom') {
+      return {
+        transform: `translate(${panX}px, ${panY}px) scale(${zoomLevel})`,
+        maxWidth: 'none',
+        maxHeight: 'none',
+      };
+    }
+
+    return {};
+  }, [panX, panY, zoomLevel, zoomMode]);
 
   if (!primaryImage || !secondaryImage) {
     return (
@@ -99,6 +159,9 @@ export function CompareView() {
         imagePath={primaryImage.path}
         index={comparePrimaryIndex}
         imageCount={images.length}
+        imageStyle={imageStyle}
+        onWheelNext={() => void moveCompareFocusedCandidate(1)}
+        onWheelPrev={() => void moveCompareFocusedCandidate(-1)}
       />
       <ComparePane
         roleLabel="Candidate"
@@ -106,6 +169,9 @@ export function CompareView() {
         imagePath={secondaryImage.path}
         index={compareSecondaryIndex}
         imageCount={images.length}
+        imageStyle={imageStyle}
+        onWheelNext={() => void moveCompareFocusedCandidate(1)}
+        onWheelPrev={() => void moveCompareFocusedCandidate(-1)}
       />
     </div>
   );

@@ -770,11 +770,22 @@ body,
 .compare-pane-canvas {
   flex: 1;
   min-height: 0;
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-primary);
   padding: 10px;
+  cursor: default;
+}
+
+.compare-pane-canvas.dragging {
+  cursor: grabbing;
+}
+
+.compare-pane-canvas.zoomable {
+  cursor: grab;
 }
 
 .compare-pane-canvas img {
@@ -782,6 +793,7 @@ body,
   max-height: 100%;
   object-fit: contain;
   pointer-events: none;
+  transform-origin: center center;
 }
 
 .compare-pane-placeholder {

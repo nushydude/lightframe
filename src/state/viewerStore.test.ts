@@ -588,6 +588,36 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().markedPaths).toEqual([]);
   });
 
+  it('restores marked paths against the active image list', () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'c:/folder/keep.jpg',
+          file_name: 'keep.jpg',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+        {
+          path: 'c:/folder/other.jpg',
+          file_name: 'other.jpg',
+          extension: 'jpg',
+          size_bytes: 0,
+          modified_at: null,
+        },
+      ],
+    });
+
+    useViewerStore
+      .getState()
+      .setMarkedPaths(['C:\\Folder\\KEEP.JPG', 'c:/folder/missing.jpg', 'c:/folder/other.jpg']);
+
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'c:/folder/keep.jpg',
+      'c:/folder/other.jpg',
+    ]);
+  });
+
   it('restores per-image pending edits when navigating away and back', () => {
     useViewerStore.setState({
       images: [
@@ -640,6 +670,51 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().isCropMode).toBe(false);
     expect(useViewerStore.getState().cropRect).toBeNull();
     expect(useViewerStore.getState().pendingCropPreview).toBeNull();
+  });
+
+  it('resets compare zoom when cycling images without zoom lock', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+    });
+
+    useViewerStore.getState().enterCompareMode();
+    useViewerStore.getState().setZoomLevel(2);
+    useViewerStore.getState().setPan(40, 50);
+
+    expect(useViewerStore.getState().moveCompareFocusedCandidate(1)).toBe(true);
+    expect(useViewerStore.getState().zoomMode).toBe('fit');
+    expect(useViewerStore.getState().zoomLevel).toBe(1);
+    expect(useViewerStore.getState().panX).toBe(0);
+    expect(useViewerStore.getState().panY).toBe(0);
+  });
+
+  it('preserves compare zoom when zoom lock is enabled', () => {
+    useViewerStore.setState({
+      images: [
+        { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+        { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+      ],
+      currentIndex: 0,
+      currentImagePath: '1.jpg',
+    });
+
+    useViewerStore.getState().enterCompareMode();
+    useViewerStore.getState().setZoomLevel(2);
+    useViewerStore.getState().setPan(40, 50);
+    useViewerStore.getState().setCompareZoomLocked(true);
+
+    expect(useViewerStore.getState().moveCompareFocusedCandidate(1)).toBe(true);
+    expect(useViewerStore.getState().zoomMode).toBe('custom');
+    expect(useViewerStore.getState().zoomLevel).toBe(2);
+    expect(useViewerStore.getState().panX).toBe(40);
+    expect(useViewerStore.getState().panY).toBe(50);
   });
 
   it('clears current-image edits separately from clearing all pending edits', () => {

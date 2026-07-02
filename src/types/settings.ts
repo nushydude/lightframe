@@ -27,6 +27,12 @@ export interface RecentFolder {
   openedAt: number;
 }
 
+export interface PersistedMarkedFolder {
+  folderPath: string;
+  markedPaths: string[];
+  updatedAt: number;
+}
+
 export interface WindowBounds {
   x: number;
   y: number;
@@ -64,6 +70,7 @@ export interface AppSettings {
   pinnedToolbarActions: PinnableToolbarActionId[];
   externalEditorPath?: string;
   externalEditorLabel?: string;
+  persistedMarkedFolders: PersistedMarkedFolder[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -87,6 +94,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentFolders: [],
   quickDestinations: [],
   pinnedToolbarActions: [],
+  persistedMarkedFolders: [],
 };
 
 const MAX_RECENT_FOLDERS = 12;
@@ -129,6 +137,11 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     pinned_toolbar_actions: settings.pinnedToolbarActions,
     external_editor_path: settings.externalEditorPath,
     external_editor_label: settings.externalEditorLabel,
+    persisted_marked_folders: settings.persistedMarkedFolders.map((folder) => ({
+      folder_path: folder.folderPath,
+      marked_paths: folder.markedPaths,
+      updated_at: folder.updatedAt,
+    })),
   };
 }
 
@@ -182,6 +195,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     pinnedToolbarActions: parsePinnedToolbarActions(raw.pinned_toolbar_actions),
     externalEditorPath: optionalTrimmedString(raw.external_editor_path),
     externalEditorLabel: optionalTrimmedString(raw.external_editor_label),
+    persistedMarkedFolders: parsePersistedMarkedFolders(raw.persisted_marked_folders),
   };
 }
 
@@ -285,6 +299,54 @@ function parseWindowBoundsByDisplay(raw: unknown): Record<string, WindowBounds> 
   }
 
   return parsed;
+}
+
+function parsePersistedMarkedFolders(raw: unknown): PersistedMarkedFolder[] {
+  if (!Array.isArray(raw)) {
+    return DEFAULT_SETTINGS.persistedMarkedFolders;
+  }
+
+  const seen = new Set<string>();
+  const folders: PersistedMarkedFolder[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      continue;
+    }
+
+    const entry = value as Record<string, unknown>;
+    const folderPath = String(entry.folder_path ?? '').trim();
+    if (!folderPath) {
+      continue;
+    }
+
+    const normalizedKey = folderPath.replace(/\\/g, '/').toLowerCase();
+    if (seen.has(normalizedKey)) {
+      continue;
+    }
+
+    const markedPaths = Array.isArray(entry.marked_paths)
+      ? entry.marked_paths
+          .map((path) => String(path ?? '').trim())
+          .filter(Boolean)
+          .filter((path, index, array) => {
+            const normalizedPath = path.replace(/\\/g, '/').toLowerCase();
+            return (
+              array.findIndex(
+                (candidate) => candidate.replace(/\\/g, '/').toLowerCase() === normalizedPath
+              ) === index
+            );
+          })
+      : [];
+
+    seen.add(normalizedKey);
+    folders.push({
+      folderPath,
+      markedPaths,
+      updatedAt: typeof entry.updated_at === 'number' ? entry.updated_at : 0,
+    });
+  }
+
+  return folders;
 }
 
 function parseRecentFolders(raw: unknown): RecentFolder[] {

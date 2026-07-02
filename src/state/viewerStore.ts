@@ -258,6 +258,7 @@ interface ViewerState {
   comparePrimaryIndex: number;
   compareSecondaryIndex: number;
   compareFocusedPane: CompareFocusedPane;
+  isCompareZoomLocked: boolean;
 
   // Actions
   setCurrentImage: (path: string, index: number) => void;
@@ -266,6 +267,7 @@ interface ViewerState {
   toggleMarkedPath: (path: string) => void;
   clearMarkedPaths: () => void;
   markAllVisibleImages: () => void;
+  setMarkedPaths: (paths: string[]) => void;
   setCurationFilter: (filter: CurationFilter) => void;
   prepareCurationFilter: (filter: CurationFilter) => void;
   syncFavoriteFilter: (curationByPath: Record<string, CurationStateSnapshot>) => void;
@@ -320,6 +322,7 @@ interface ViewerState {
   switchCompareFocus: () => void;
   moveCompareFocusedCandidate: (direction: -1 | 1) => boolean;
   promoteFocusedComparePane: () => boolean;
+  setCompareZoomLocked: (locked: boolean) => void;
   beginLoadGeneration: () => number;
   reset: () => void;
 }
@@ -365,7 +368,38 @@ const initialState = {
   comparePrimaryIndex: -1,
   compareSecondaryIndex: -1,
   compareFocusedPane: 'secondary' as CompareFocusedPane,
+  isCompareZoomLocked: false,
 };
+
+function uniqueMarkedPaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const uniquePaths: string[] = [];
+  for (const path of paths) {
+    const trimmedPath = path.trim();
+    if (!trimmedPath) {
+      continue;
+    }
+
+    const normalizedPath = normalizePathKey(trimmedPath);
+    if (seen.has(normalizedPath)) {
+      continue;
+    }
+
+    seen.add(normalizedPath);
+    uniquePaths.push(trimmedPath);
+  }
+
+  return uniquePaths;
+}
+
+function compareZoomResetState(): Pick<ViewerState, 'zoomMode' | 'zoomLevel' | 'panX' | 'panY'> {
+  return {
+    zoomMode: 'fit',
+    zoomLevel: 1,
+    panX: 0,
+    panY: 0,
+  };
+}
 
 function getPendingEditForCommit(
   state: ViewerState,
@@ -642,6 +676,11 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     markAllVisibleImages: () =>
       set((state) => ({
         markedPaths: state.images.map((image) => image.path),
+      })),
+
+    setMarkedPaths: (paths) =>
+      set((state) => ({
+        markedPaths: reconcileMarkedPaths(uniqueMarkedPaths(paths), state.images),
       })),
 
     prepareCurationFilter: (filter) =>
@@ -1151,6 +1190,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           cropRect: editFields.cropRect,
           pendingCropPreview: editFields.pendingCropPreview,
           rotation: editFields.rotation,
+          ...(state.viewMode === 'compare' ? compareZoomResetState() : {}),
         };
       }),
 
@@ -1181,6 +1221,7 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         cropRect: editFields.cropRect,
         pendingCropPreview: editFields.pendingCropPreview,
         rotation: editFields.rotation,
+        ...compareZoomResetState(),
       });
       return true;
     },
@@ -1267,9 +1308,13 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           cropRect: editFields.cropRect,
           pendingCropPreview: editFields.pendingCropPreview,
           rotation: editFields.rotation,
+          ...(state.isCompareZoomLocked ? {} : compareZoomResetState()),
         });
       } else {
-        set({ compareSecondaryIndex: nextIndex });
+        set({
+          compareSecondaryIndex: nextIndex,
+          ...(state.isCompareZoomLocked ? {} : compareZoomResetState()),
+        });
       }
 
       return true;
@@ -1312,10 +1357,13 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         cropRect: editFields.cropRect,
         pendingCropPreview: editFields.pendingCropPreview,
         rotation: editFields.rotation,
+        ...(state.isCompareZoomLocked ? {} : compareZoomResetState()),
       });
 
       return true;
     },
+
+    setCompareZoomLocked: (locked) => set({ isCompareZoomLocked: locked }),
 
     beginLoadGeneration: () => {
       const nextGeneration = get().loadGeneration + 1;

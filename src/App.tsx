@@ -61,12 +61,19 @@ import {
   persistWindowBoundsSafely,
   windowBoundsForDisplay,
 } from './services/windowBounds';
+import { updatePersistedMarkedFolders } from './services/markedSelectionPersistence';
 import { mainWindowTitle } from './services/windowTitle';
+
+type PendingMarkedSelectionSnapshot = {
+  folderPath: string | null;
+  markedPaths: string[];
+};
 
 // fallow-ignore-next-line complexity
 function App() {
   const {
     currentImagePath,
+    markedPaths,
     folderPath,
     showSettings,
     showCommandPalette,
@@ -122,6 +129,8 @@ function App() {
   const settingsRef = useRef(settings);
   const settingsLoadedRef = useRef(isLoaded);
   const saveBoundsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistMarkedPathsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingMarkedSelectionRef = useRef<PendingMarkedSelectionSnapshot | null>(null);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const { showControls } = useViewerStore();
   const [isSecondary, setIsSecondary] = useState(false);
@@ -257,6 +266,66 @@ function App() {
     if (!isMainWindowRef.current || !hasStartupResolved || startupShowAttempted) return;
     void showMainWindowOnce();
   }, [hasStartupResolved, showMainWindowOnce, startupShowAttempted]);
+
+  const persistMarkedSelectionSnapshot = useCallback(
+    (snapshot: PendingMarkedSelectionSnapshot | null) => {
+      if (!snapshot) {
+        return;
+      }
+
+      const nextPersistedMarkedFolders = updatePersistedMarkedFolders(
+        settingsRef.current,
+        snapshot.folderPath,
+        snapshot.markedPaths
+      );
+
+      if (nextPersistedMarkedFolders !== settingsRef.current.persistedMarkedFolders) {
+        void updateSettings({ persistedMarkedFolders: nextPersistedMarkedFolders });
+      }
+    },
+    [updateSettings]
+  );
+
+  useEffect(() => {
+    if (!isMainWindowRef.current || !isLoaded) {
+      return;
+    }
+
+    const nextSnapshot: PendingMarkedSelectionSnapshot = {
+      folderPath,
+      markedPaths: [...markedPaths],
+    };
+    const pendingSnapshot = pendingMarkedSelectionRef.current;
+
+    if (persistMarkedPathsTimerRef.current) {
+      clearTimeout(persistMarkedPathsTimerRef.current);
+      persistMarkedPathsTimerRef.current = null;
+      if (pendingSnapshot && pendingSnapshot.folderPath !== nextSnapshot.folderPath) {
+        persistMarkedSelectionSnapshot(pendingSnapshot);
+      }
+    }
+
+    pendingMarkedSelectionRef.current = nextSnapshot;
+    persistMarkedPathsTimerRef.current = setTimeout(() => {
+      persistMarkedPathsTimerRef.current = null;
+      const snapshot = pendingMarkedSelectionRef.current;
+      pendingMarkedSelectionRef.current = null;
+      persistMarkedSelectionSnapshot(snapshot);
+    }, 250);
+  }, [folderPath, isLoaded, markedPaths, persistMarkedSelectionSnapshot]);
+
+  useEffect(
+    () => () => {
+      if (persistMarkedPathsTimerRef.current) {
+        clearTimeout(persistMarkedPathsTimerRef.current);
+        persistMarkedPathsTimerRef.current = null;
+      }
+      const snapshot = pendingMarkedSelectionRef.current;
+      pendingMarkedSelectionRef.current = null;
+      persistMarkedSelectionSnapshot(snapshot);
+    },
+    [persistMarkedSelectionSnapshot]
+  );
 
   useEffect(() => {
     if (!isMainWindowRef.current || isProjectorWindow || currentImagePath || folderPath) {

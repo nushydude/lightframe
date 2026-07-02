@@ -74,11 +74,25 @@ describe('settingsToRust', () => {
       ...DEFAULT_SETTINGS,
       externalEditorPath: 'C:/Program Files/Paint.NET/paintdotnet.exe',
       externalEditorLabel: 'Paint.NET',
+      persistedMarkedFolders: [
+        {
+          folderPath: 'C:/Images',
+          markedPaths: ['C:/Images/a.jpg'],
+          updatedAt: 42,
+        },
+      ],
     });
 
     expect(rust).toMatchObject({
       external_editor_path: 'C:/Program Files/Paint.NET/paintdotnet.exe',
       external_editor_label: 'Paint.NET',
+      persisted_marked_folders: [
+        {
+          folder_path: 'C:/Images',
+          marked_paths: ['C:/Images/a.jpg'],
+          updated_at: 42,
+        },
+      ],
     });
   });
 
@@ -207,10 +221,24 @@ describe('settingsFromRust', () => {
     const settings = settingsFromRust({
       external_editor_path: 'C:/Program Files/Paint.NET/paintdotnet.exe',
       external_editor_label: 'Paint.NET',
+      persisted_marked_folders: [
+        {
+          folder_path: 'C:/Images',
+          marked_paths: ['C:/Images/a.jpg'],
+          updated_at: 42,
+        },
+      ],
     });
 
     expect(settings.externalEditorPath).toBe('C:/Program Files/Paint.NET/paintdotnet.exe');
     expect(settings.externalEditorLabel).toBe('Paint.NET');
+    expect(settings.persistedMarkedFolders).toEqual([
+      {
+        folderPath: 'C:/Images',
+        markedPaths: ['C:/Images/a.jpg'],
+        updatedAt: 42,
+      },
+    ]);
   });
 
   it('parses projector prompt preference from rust payloads', () => {

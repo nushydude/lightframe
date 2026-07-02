@@ -163,6 +163,8 @@ pub struct AppSettings {
     pub external_editor_path: Option<String>,
     #[serde(default)]
     pub external_editor_label: Option<String>,
+    #[serde(default)]
+    pub persisted_marked_folders: Vec<PersistedMarkedFolder>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -178,6 +180,13 @@ pub struct RecentFolder {
     pub path: String,
     pub label: String,
     pub opened_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PersistedMarkedFolder {
+    pub folder_path: String,
+    pub marked_paths: Vec<String>,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -284,6 +293,7 @@ impl Default for AppSettings {
             pinned_toolbar_actions: Vec::new(),
             external_editor_path: None,
             external_editor_label: None,
+            persisted_marked_folders: Vec::new(),
         }
     }
 }
@@ -3770,5 +3780,6 @@ mod tests {
         assert!(settings.recent_folders.is_empty());
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);
+        assert!(settings.persisted_marked_folders.is_empty());
     }
 }

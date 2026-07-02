@@ -28,6 +28,7 @@ import {
   recordFolderOpenSourceTelemetry,
   setNextImageSelectionKind,
 } from '../services/performanceTelemetry';
+import { getPersistedMarkedPathsForFolder } from '../services/markedSelectionPersistence';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { mainWindowTitle } from '../services/windowTitle';
@@ -174,6 +175,7 @@ export function useImageNavigation() {
     setFolderScanning,
     setCurrentIndex,
     prepareCurationFilter,
+    setMarkedPaths,
     navigateNext,
     navigatePrev,
     navigateFirst,
@@ -314,6 +316,7 @@ export function useImageNavigation() {
         preferredIndex: 0,
         preferredPath: null,
       });
+      setMarkedPaths(getPersistedMarkedPathsForFolder(settings, nextFolderPath));
       recordFolderOpenReconcileTelemetry(getNow() - reconcileStartedAt);
 
       await setFolderWindowTitle(nextFolderPath);
@@ -324,7 +327,14 @@ export function useImageNavigation() {
 
       return true;
     },
-    [applyFolderImages, isCurrentGeneration, setError, setFolderWindowTitle]
+    [
+      applyFolderImages,
+      isCurrentGeneration,
+      setError,
+      setFolderWindowTitle,
+      setMarkedPaths,
+      settings,
+    ]
   );
 
   const startBackgroundFolderRefresh = useCallback(

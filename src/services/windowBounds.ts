@@ -233,7 +233,8 @@ function nextWindowBoundsByDisplay(
 }
 
 function shouldSkipWindowBoundsUpdate(
-  settings: PersistedWindowBounds & Pick<AppSettings, 'lastWindowDisplayKey' | 'windowBoundsByDisplay'>,
+  settings: PersistedWindowBounds &
+    Pick<AppSettings, 'lastWindowDisplayKey' | 'windowBoundsByDisplay'>,
   nextState: NextWindowBoundsState
 ): boolean {
   return (

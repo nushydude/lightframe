@@ -472,6 +472,7 @@ export function ViewerChrome({
     exitCompareMode,
     enterCropMode,
     exitCropMode,
+    isCompareZoomLocked,
     setCropAspectRatio,
     resetCrop,
     applyCropPreview,
@@ -481,6 +482,8 @@ export function ViewerChrome({
     toggleMarkedPath,
     clearMarkedPaths,
     markAllVisibleImages,
+    setMarkedPaths,
+    setCompareZoomLocked,
     removeImagesByPaths,
   } = useViewerStore();
   const curationByPath = useCurationStore((state) => state.curationByPath);
@@ -552,7 +555,6 @@ export function ViewerChrome({
 
   const menuRefs = useMemo(
     () => [
-      chromeRootRef,
       markedActionsMenuRef,
       contextMenuRef,
       moreMenuRef,
@@ -565,21 +567,10 @@ export function ViewerChrome({
   );
 
   const closeOverflowMenus = useCallback(() => {
-    for (const ref of menuRefs) {
-      const node = ref.current;
-      if (!node) {
-        continue;
-      }
-
-      if (node instanceof HTMLDetailsElement) {
-        node.open = false;
-      }
-
-      node.querySelectorAll('details[open]').forEach((menu) => {
-        (menu as HTMLDetailsElement).open = false;
-      });
-    }
-  }, [menuRefs]);
+    chromeRootRef.current
+      ?.querySelectorAll('details[open]')
+      .forEach((menu) => ((menu as HTMLDetailsElement).open = false));
+  }, []);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu((current) => (current.open ? { ...current, open: false, path: null } : current));
@@ -592,7 +583,11 @@ export function ViewerChrome({
         return;
       }
 
-      if (menuRefs.some((ref) => ref.current?.contains(target))) {
+      if (
+        target.closest(
+          '.top-bar-menu, .top-bar-submenu, .quality-menu, .crop-actions-menu, .bottom-controls-menu, .edit-queue-menu, .context-menu'
+        )
+      ) {
         return;
       }
 
@@ -1191,15 +1186,16 @@ export function ViewerChrome({
     }
 
     const result = await transferImagesToDestination(markedPaths, destination, mode);
+    const successfulPaths = new Set(result.successes.map((success) => success.sourcePath));
+    const failedPaths = markedPaths.filter((path) => !successfulPaths.has(path));
+
     if (mode === 'move') {
-      const movedPaths = new Set(result.successes.map((success) => success.sourcePath));
-      if (movedPaths.size > 0) {
-        removeImagesByPaths([...movedPaths]);
-        useViewerStore.setState((state) => ({
-          markedPaths: state.markedPaths.filter((path) => !movedPaths.has(path)),
-        }));
+      if (successfulPaths.size > 0) {
+        removeImagesByPaths([...successfulPaths]);
       }
     }
+
+    setMarkedPaths(failedPaths);
     showTransferResultMessage(result, destination, mode);
     closeContextMenu();
     closeOverflowMenus();
@@ -2300,6 +2296,31 @@ export function ViewerChrome({
         >
           1:1
         </button>
+
+        {viewMode === 'compare' && (
+          <button
+            className={`control-btn control-btn--text has-tooltip ${isCompareZoomLocked ? 'active' : ''}`}
+            onClick={() => setCompareZoomLocked(!isCompareZoomLocked)}
+            data-tooltip={
+              isCompareZoomLocked
+                ? 'Unlock compare zoom while switching images'
+                : 'Lock compare zoom while switching images'
+            }
+            title={
+              isCompareZoomLocked
+                ? 'Unlock compare zoom while switching images'
+                : 'Lock compare zoom while switching images'
+            }
+            aria-label={isCompareZoomLocked ? 'Unlock compare zoom' : 'Lock compare zoom'}
+            id="btn-compare-zoom-lock"
+            type="button"
+          >
+            <ToolbarIcon name="pin" />
+            <span className="sr-only">
+              {isCompareZoomLocked ? 'Unlock compare zoom' : 'Lock compare zoom'}
+            </span>
+          </button>
+        )}
 
         <details
           className="quality-menu"
