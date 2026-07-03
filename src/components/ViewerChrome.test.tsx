@@ -320,6 +320,36 @@ describe('ViewerChrome', () => {
     expect(container.querySelector('#btn-pinned-refresh')).toBeTruthy();
   });
 
+  it('closes pinned top-bar submenus on outside click', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        recentFolders: [{ path: 'D:/Shoots/May', label: 'May', openedAt: 100 }],
+      },
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByLabelText('Pin Recent Folders'));
+
+    const pinnedRecentFoldersButton = screen.getAllByLabelText('Open recent folder').slice(-1)[0];
+    const pinnedRecentFoldersMenu = pinnedRecentFoldersButton?.closest(
+      'details'
+    ) as HTMLDetailsElement;
+
+    fireEvent.click(pinnedRecentFoldersButton as HTMLElement);
+    expect(pinnedRecentFoldersMenu.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => {
+      expect(pinnedRecentFoldersMenu.open).toBe(false);
+    });
+  });
+
   it('closes overflow menus when clicking outside them', async () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
 
@@ -335,6 +365,51 @@ describe('ViewerChrome', () => {
 
     await waitFor(() => {
       expect(moreMenu.open).toBe(false);
+    });
+  });
+
+  it('closes bottom control menus on outside click and Escape', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const canvas = document.createElement('div');
+    canvas.className = 'image-canvas';
+    canvas.appendChild(image);
+    document.body.appendChild(canvas);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const qualityButton = screen.getByLabelText('Scaled export quality');
+    const qualityMenu = qualityButton.closest('details') as HTMLDetailsElement;
+
+    fireEvent.click(qualityButton);
+    expect(qualityMenu.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => {
+      expect(qualityMenu.open).toBe(false);
+    });
+
+    fireEvent.click(qualityButton);
+    expect(qualityMenu.open).toBe(true);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(qualityMenu.open).toBe(false);
     });
   });
 

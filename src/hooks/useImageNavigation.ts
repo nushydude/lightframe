@@ -232,6 +232,7 @@ export function useImageNavigation() {
       const visibleImages = useViewerStore.getState().images;
 
       if (visibleImages.length === 0) {
+        setMarkedPaths([]);
         useViewerStore.setState({ currentImagePath: null, currentIndex: -1 });
         setError(
           useViewerStore.getState().showOnlyFavorites && folderImages.length > 0
@@ -255,7 +256,7 @@ export function useImageNavigation() {
         setCurrentIndex(nextIndex);
       }
     },
-    [setCurrentIndex, setError, setImages]
+    [setCurrentIndex, setError, setImages, setMarkedPaths]
   );
 
   const scanIndexedFolder = useCallback(
@@ -304,6 +305,8 @@ export function useImageNavigation() {
   const applyOpenedFolderImages = useCallback(
     async (loadGeneration: number, nextFolderPath: string, folderImages: ImageFile[]) => {
       if (folderImages.length === 0) {
+        setMarkedPaths([]);
+        setFolderPath(nextFolderPath);
         clearPendingFolderOpenTelemetry(loadGeneration);
         setError(emptyFolderOpenMessage);
         return false;
@@ -317,6 +320,7 @@ export function useImageNavigation() {
         preferredPath: null,
       });
       setMarkedPaths(getPersistedMarkedPathsForFolder(settings, nextFolderPath));
+      setFolderPath(nextFolderPath);
       recordFolderOpenReconcileTelemetry(getNow() - reconcileStartedAt);
 
       await setFolderWindowTitle(nextFolderPath);
@@ -331,6 +335,7 @@ export function useImageNavigation() {
       applyFolderImages,
       isCurrentGeneration,
       setError,
+      setFolderPath,
       setFolderWindowTitle,
       setMarkedPaths,
       settings,
@@ -392,6 +397,8 @@ export function useImageNavigation() {
           preferredIndex: index >= 0 ? index : 0,
           preferredPath: filePath,
         });
+        setMarkedPaths(getPersistedMarkedPathsForFolder(settings, parentFolder));
+        setFolderPath(parentFolder);
       } catch (err) {
         console.error('Failed to scan folder:', err);
         if (isCurrentGeneration(loadGeneration)) {
@@ -410,6 +417,9 @@ export function useImageNavigation() {
       applyActiveSortOrder,
       applyFolderImages,
       emptyFolderOpenMessage,
+      setFolderPath,
+      setMarkedPaths,
+      settings,
     ]
   );
 
@@ -419,7 +429,6 @@ export function useImageNavigation() {
 
       try {
         const parentFolder = getParentFolder(filePath);
-        setFolderPath(parentFolder);
         setNextImageSelectionKind(scanInBackground ? 'startup-open' : 'open-image');
         setCurrentImage(filePath, 0);
         setViewMode('viewer');
@@ -449,7 +458,6 @@ export function useImageNavigation() {
       setCurrentImage,
       setError,
       setFolderScanning,
-      setFolderPath,
       setViewMode,
     ]
   );
@@ -511,7 +519,6 @@ export function useImageNavigation() {
       let backgroundRefreshStarted = false;
 
       try {
-        setFolderPath(nextFolderPath);
         setFolderScanning(true);
         setViewMode('viewer');
         await setFolderWindowTitle(nextFolderPath);
@@ -575,7 +582,6 @@ export function useImageNavigation() {
       beginLoadGeneration,
       isCurrentGeneration,
       setError,
-      setFolderPath,
       setFolderScanning,
       setViewMode,
       prepareCurationFilter,

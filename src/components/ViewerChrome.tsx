@@ -567,10 +567,22 @@ export function ViewerChrome({
   );
 
   const closeOverflowMenus = useCallback(() => {
-    chromeRootRef.current
-      ?.querySelectorAll('details[open]')
-      .forEach((menu) => ((menu as HTMLDetailsElement).open = false));
-  }, []);
+    const menuNodes = [chromeRootRef.current, ...menuRefs.map((ref) => ref.current)];
+
+    for (const node of menuNodes) {
+      if (!node) {
+        continue;
+      }
+
+      if (node instanceof HTMLDetailsElement) {
+        node.open = false;
+      }
+
+      node.querySelectorAll('details[open]').forEach((menu) => {
+        (menu as HTMLDetailsElement).open = false;
+      });
+    }
+  }, [menuRefs]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu((current) => (current.open ? { ...current, open: false, path: null } : current));
