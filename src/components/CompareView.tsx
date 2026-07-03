@@ -63,10 +63,8 @@ function ComparePane({
   const { src, hasError } = useComparePreview(imagePath);
   const className = ['compare-pane', isFocused ? 'focused' : ''].filter(Boolean).join(' ');
   const containerRef = useRef<HTMLDivElement>(null);
-  const { zoomMode, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } = useZoomPan(
-    containerRef,
-    { onWheelNext, onWheelPrev }
-  );
+  const { zoomMode, isDragging, handleMouseDown, handleMouseMove, handleMouseUp, handleWheel } =
+    useZoomPan(containerRef, { onWheelNext, onWheelPrev });
   const canvasClassName = [
     'compare-pane-canvas',
     isDragging ? 'dragging' : '',
@@ -96,6 +94,7 @@ function ComparePane({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
       >
         {src ? (
           <img src={src} alt="" draggable={false} style={imageStyle} />
