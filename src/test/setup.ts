@@ -6,6 +6,18 @@ import { useToastStore } from '../state/toastStore';
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
   convertFileSrc: vi.fn((path: string) => `asset://localhost/${path}`),
+  Resource: class MockResource {
+    rid: number;
+
+    constructor(rid: number) {
+      this.rid = rid;
+    }
+
+    close = vi.fn(async () => undefined);
+  },
+  Channel: class MockChannel {
+    onmessage?: (message: unknown) => void;
+  },
 }));
 
 // Mock Tauri Window APIs
@@ -36,6 +48,10 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: vi.fn(),
   confirm: vi.fn(),
   message: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/plugin-process', () => ({
+  relaunch: vi.fn(),
 }));
 
 // Mock AudioContext for boundary beep

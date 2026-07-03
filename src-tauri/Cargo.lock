@@ -2526,6 +2526,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "trash",
+ "url",
  "windows 0.61.3",
 ]
 

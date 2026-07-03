@@ -35,7 +35,8 @@ uses cross-platform Tauri where possible.
 - Projector mode that opens a synced fullscreen secondary window for second-display review.
 - EXIF/file info panel with XMP sidecar support for RAW workflows.
 - Settings for theme, default fit mode, slideshow behavior, folder auto-refresh, window bounds,
-  projector behavior, performance mode, recent folders, quick destinations, and external editor.
+  projector behavior, performance mode, update channel, recent folders, quick destinations, and
+  external editor.
 - Format-support diagnostics, generated-cache controls, performance telemetry overlay, and support
   snapshot export.
 - Built-in update checks through the Tauri updater plugin.
@@ -98,6 +99,13 @@ Build a Tauri application package:
 pnpm tauri build
 ```
 
+Run the Windows packaged-startup smoke test after building an unpackaged release executable:
+
+```powershell
+pnpm tauri build --no-bundle --ci
+pnpm run smoke:windows
+```
+
 ## Quality Gates
 
 Frontend checks:
@@ -122,8 +130,22 @@ Full local CI:
 pnpm run ci:local
 ```
 
+CI also runs a Windows packaged-startup smoke job for pull requests, `main`, and release-work
+branches. It builds the release executable, launches it with seeded window-position settings, and
+fails if the app exits, never shows a main window, or records a fresh Windows crash event.
+
 The repository installs local git hooks with `pnpm install`. The pre-commit hook runs
 `pnpm run commit:gate`, and the commit-msg hook enforces Conventional Commit messages.
+
+## Release Channels
+
+Stable releases use tags such as `v8.2.2`. The release workflow creates a draft GitHub release and
+the app's Stable update channel reads GitHub's latest published stable updater manifest.
+
+Preview releases use semver prerelease tags such as `v8.3.0-beta.1`. They are created as prerelease
+drafts; when a maintainer publishes one, `.github/workflows/preview-channel.yml` copies its
+`latest.json` into the fixed `app-preview-channel` prerelease. Users who opt into Preview in
+Settings check that manifest instead of the stable `/latest` release.
 
 ## Project Structure
 
@@ -131,9 +153,11 @@ The repository installs local git hooks with `pnpm install`. The pre-commit hook
   editing queue, telemetry, and tests.
 - `src-tauri/` contains the Tauri shell, Rust commands, folder watching, native Windows codec
   integration, generated asset caches, image editing operations, and Rust tests.
-- `.github/workflows/ci.yml` runs frontend and Rust quality gates for pushes and pull requests to
-  `main`.
-- `.github/workflows/release.yml` builds draft Windows releases from version tags.
+- `.github/workflows/ci.yml` runs frontend, Rust, and Windows packaged-startup quality gates.
+- `.github/workflows/release.yml` builds draft Windows stable and prerelease packages from version
+  tags.
+- `.github/workflows/preview-channel.yml` maintains the opt-in preview updater manifest when a
+  prerelease is published.
 
 ## Contributing
 

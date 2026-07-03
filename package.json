@@ -27,6 +27,7 @@
     "commit:gate": "node ./scripts/run-commit-gate.mjs",
     "commit:message:check": "node ./scripts/check-commit-message.mjs",
     "ci:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
+    "smoke:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke/windows-launch-smoke.ps1",
     "ci:local": "pnpm run ci:frontend && pnpm run ci:rust"
   },
   "dependencies": {

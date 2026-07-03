@@ -552,6 +552,26 @@ export function SettingsPanel() {
           <div className="settings-group">
             <div className="settings-group-title">System</div>
             <div className="setting-row">
+              <span className="setting-label">Update channel</span>
+              <select
+                className="setting-select setting-select-wide"
+                value={settings.updateChannel}
+                aria-label="Update channel"
+                onChange={(e) =>
+                  handleChange('updateChannel', e.target.value as AppSettings['updateChannel'])
+                }
+                id="setting-update-channel"
+              >
+                <option value="stable">Stable releases</option>
+                <option value="preview">Preview / beta releases</option>
+              </select>
+            </div>
+            <p className="setting-help">
+              Stable receives published production builds. Preview is opt-in and can receive beta
+              builds after they pass packaging checks.
+            </p>
+
+            <div className="setting-row">
               <span className="setting-label">Default image viewer</span>
               <button
                 className="setting-button-primary"

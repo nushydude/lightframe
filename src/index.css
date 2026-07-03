@@ -2347,6 +2347,10 @@ body,
   min-width: 120px;
 }
 
+.setting-select-wide {
+  min-width: 180px;
+}
+
 .setting-select:hover {
   border-color: var(--border-hover);
 }
