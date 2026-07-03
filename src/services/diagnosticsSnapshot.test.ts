@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import packageJson from '../../package.json';
 import type { CodecHealthReport } from './tauriCommands';
 import type { PerformanceTelemetrySnapshot } from './performanceTelemetry';
 import { DEFAULT_SETTINGS } from '../types/settings';
@@ -161,7 +162,7 @@ describe('diagnosticsSnapshot', () => {
     });
 
     expect(snapshot.schemaVersion).toBe(1);
-    expect(snapshot.app.version).toBe('8.1.5');
+    expect(snapshot.app.version).toBe(packageJson.version);
     expect(snapshot.app.windowLabel).toBe('main');
     expect(snapshot.viewer.visibleImageCount).toBe(12);
     expect(snapshot.settings.performanceMode).toBe('fast');
