@@ -19,6 +19,8 @@ export interface WindowRestorePlan {
   displayKey: string | null;
 }
 
+export type WindowRestoreWaitResult = 'completed' | 'failed' | 'timed-out';
+
 interface WindowRestoreCandidate {
   bounds: WindowBounds;
   displayKey: string | null;
@@ -109,6 +111,27 @@ export function windowRestorePlanForDisplays(
     bounds: constrainWindowBoundsForRestore(candidate.bounds, display),
     displayKey: candidate.displayKey,
   };
+}
+
+export async function waitForWindowRestoreBeforeShow(
+  restorePromise: Promise<void>,
+  timeoutMs: number
+): Promise<WindowRestoreWaitResult> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const guardedRestore = restorePromise
+    .then((): WindowRestoreWaitResult => 'completed')
+    .catch((): WindowRestoreWaitResult => 'failed');
+  const timeout = new Promise<WindowRestoreWaitResult>((resolve) => {
+    timeoutId = setTimeout(() => resolve('timed-out'), Math.max(0, timeoutMs));
+  });
+
+  try {
+    return await Promise.race([guardedRestore, timeout]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 interface ShouldPersistWindowBoundsParams {
