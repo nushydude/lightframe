@@ -59,7 +59,7 @@ import { resolveStartupDecision } from './services/startup';
 import {
   displayKeyFromMonitor,
   persistWindowBoundsSafely,
-  windowBoundsForDisplay,
+  windowRestorePlanForDisplays,
 } from './services/windowBounds';
 import { updatePersistedMarkedFolders } from './services/markedSelectionPersistence';
 import { mainWindowTitle } from './services/windowTitle';
@@ -199,19 +199,13 @@ function App() {
           try {
             const [monitor, monitors] = await Promise.all([currentMonitor(), availableMonitors()]);
             const displayKey = displayKeyFromMonitor(monitor);
-            const restoredBounds = windowBoundsForDisplay(
-              loadedSettings,
-              displayKey,
-              monitors
-                .map((candidate) => displayKeyFromMonitor(candidate))
-                .filter((candidate): candidate is string => Boolean(candidate))
-            );
-            if (restoredBounds) {
-              await appWindowRef.current.setPosition(
-                new PhysicalPosition(restoredBounds.x, restoredBounds.y)
-              );
+            const restorePlan = windowRestorePlanForDisplays(loadedSettings, displayKey, monitors);
+            if (restorePlan) {
               await appWindowRef.current.setSize(
-                new PhysicalSize(restoredBounds.width, restoredBounds.height)
+                new PhysicalSize(restorePlan.bounds.width, restorePlan.bounds.height)
+              );
+              await appWindowRef.current.setPosition(
+                new PhysicalPosition(restorePlan.bounds.x, restorePlan.bounds.y)
               );
             }
           } catch (err) {

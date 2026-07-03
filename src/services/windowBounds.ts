@@ -14,6 +14,11 @@ export interface DisplayIdentity {
   scaleFactor: number;
 }
 
+export interface WindowRestorePlan {
+  bounds: WindowBounds;
+  displayKey: string | null;
+}
+
 export function hasCompleteWindowBounds(
   settings: PersistedWindowBounds
 ): settings is Required<PersistedWindowBounds> {
@@ -81,6 +86,64 @@ export function windowBoundsForDisplay(
   }
 
   return windowBoundsFromLegacySettings(settings);
+}
+
+export function windowRestorePlanForDisplays(
+  settings: AppSettings,
+  startupDisplayKey: string | null,
+  displays: readonly DisplayIdentity[]
+): WindowRestorePlan | null {
+  const displayKeyByKey = new Map<string, DisplayIdentity>();
+  for (const display of displays) {
+    const key = displayKeyFromMonitor(display);
+    if (key) {
+      displayKeyByKey.set(key, display);
+    }
+  }
+
+  const lastDisplayKey = settings.lastWindowDisplayKey?.trim() || null;
+  const candidates: Array<{ bounds: WindowBounds | null; displayKey: string | null }> = [
+    {
+      bounds:
+        lastDisplayKey && displayKeyByKey.has(lastDisplayKey)
+          ? (settings.windowBoundsByDisplay[lastDisplayKey] ?? null)
+          : null,
+      displayKey: lastDisplayKey,
+    },
+    {
+      bounds:
+        startupDisplayKey && displayKeyByKey.has(startupDisplayKey)
+          ? (settings.windowBoundsByDisplay[startupDisplayKey] ?? null)
+          : null,
+      displayKey: startupDisplayKey,
+    },
+  ];
+
+  if (displayKeyByKey.size === 0 || Object.keys(settings.windowBoundsByDisplay).length === 0) {
+    candidates.push({
+      bounds: windowBoundsFromLegacySettings(settings),
+      displayKey: startupDisplayKey,
+    });
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate.bounds) {
+      continue;
+    }
+
+    const display =
+      (candidate.displayKey && displayKeyByKey.get(candidate.displayKey)) ||
+      displayContainingWindowCenter(candidate.bounds, displays) ||
+      displays[0];
+    return {
+      bounds: display
+        ? clampWindowBoundsToDisplay(candidate.bounds, display)
+        : roundWindowBounds(candidate.bounds),
+      displayKey: candidate.displayKey,
+    };
+  }
+
+  return null;
 }
 
 interface ShouldPersistWindowBoundsParams {
@@ -254,4 +317,56 @@ function windowBoundsEqual(left: WindowBounds | undefined, right: WindowBounds):
     left.width === right.width &&
     left.height === right.height
   );
+}
+
+function clampWindowBoundsToDisplay(bounds: WindowBounds, display: DisplayIdentity): WindowBounds {
+  const displayLeft = display.position.x;
+  const displayTop = display.position.y;
+  const displayWidth = Math.max(1, display.size.width);
+  const displayHeight = Math.max(1, display.size.height);
+  const width = Math.min(Math.max(1, Math.round(bounds.width)), displayWidth);
+  const height = Math.min(Math.max(1, Math.round(bounds.height)), displayHeight);
+  const maxX = displayLeft + displayWidth - width;
+  const maxY = displayTop + displayHeight - height;
+
+  return {
+    x: clamp(Math.round(bounds.x), displayLeft, maxX),
+    y: clamp(Math.round(bounds.y), displayTop, maxY),
+    width,
+    height,
+  };
+}
+
+function displayContainingWindowCenter(
+  bounds: WindowBounds,
+  displays: readonly DisplayIdentity[]
+): DisplayIdentity | null {
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  return (
+    displays.find(
+      (display) =>
+        centerX >= display.position.x &&
+        centerX < display.position.x + display.size.width &&
+        centerY >= display.position.y &&
+        centerY < display.position.y + display.size.height
+    ) ?? null
+  );
+}
+
+function roundWindowBounds(bounds: WindowBounds): WindowBounds {
+  return {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.max(1, Math.round(bounds.width)),
+    height: Math.max(1, Math.round(bounds.height)),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
 }
