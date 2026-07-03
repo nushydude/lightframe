@@ -33,6 +33,39 @@ describe('useZoomPan', () => {
     expect(useViewerStore.getState().zoomMode).toBe('custom');
   });
 
+  it('does not rerender when unrelated persisted mark settings change', () => {
+    act(() => {
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, mouseWheelBehavior: 'zoom' },
+      });
+    });
+
+    let renderCount = 0;
+    renderHook(() => {
+      renderCount++;
+      return useZoomPan(containerRef);
+    });
+
+    expect(renderCount).toBe(1);
+
+    act(() => {
+      useSettingsStore.setState((state) => ({
+        settings: {
+          ...state.settings,
+          persistedMarkedFolders: [
+            {
+              folderPath: 'c:/images',
+              markedPaths: ['c:/images/one.jpg'],
+              updatedAt: 1,
+            },
+          ],
+        },
+      }));
+    });
+
+    expect(renderCount).toBe(1);
+  });
+
   it('should navigate next/prev in navigate mode', () => {
     const onWheelNext = vi.fn();
     const onWheelPrev = vi.fn();

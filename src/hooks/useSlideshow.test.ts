@@ -96,6 +96,34 @@ describe('useSlideshow', () => {
     expect(useViewerStore.getState().isSlideshowActive).toBe(true);
   });
 
+  it('does not rerender when unrelated persisted mark settings change', () => {
+    let renderCount = 0;
+
+    renderHook(() => {
+      renderCount++;
+      return useSlideshow();
+    });
+
+    expect(renderCount).toBe(1);
+
+    act(() => {
+      useSettingsStore.setState((state) => ({
+        settings: {
+          ...state.settings,
+          persistedMarkedFolders: [
+            {
+              folderPath: 'C:/images',
+              markedPaths: ['C:/images/1.jpg'],
+              updatedAt: 1,
+            },
+          ],
+        },
+      }));
+    });
+
+    expect(renderCount).toBe(1);
+  });
+
   it('preserves shuffle progress when new images are added mid-slideshow', async () => {
     useSettingsStore.setState((state) => ({
       ...state,
