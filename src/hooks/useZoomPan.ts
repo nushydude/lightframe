@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useState, type WheelEvent as ReactWheelEvent } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 
@@ -9,7 +9,7 @@ type UseZoomPanOptions = {
 
 /** Hook for zoom and pan functionality */
 export function useZoomPan(
-  containerRef: React.RefObject<HTMLDivElement | null>,
+  _containerRef: React.RefObject<HTMLDivElement | null>,
   options: UseZoomPanOptions = {}
 ) {
   const { onWheelNext, onWheelPrev } = options;
@@ -35,7 +35,7 @@ export function useZoomPan(
 
   /** Handle mouse wheel for zoom or navigation */
   const handleWheel = useCallback(
-    (e: WheelEvent) => {
+    (e: WheelEvent | ReactWheelEvent<HTMLDivElement>) => {
       e.preventDefault();
       if (settings.mouseWheelBehavior === 'zoom') {
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
@@ -93,15 +93,6 @@ export function useZoomPan(
     setIsDragging(false);
   }, []);
 
-  // Attach wheel listener to container
-  useEffect(() => {
-    const container = containerRef.current;
-    if (container) {
-      container.addEventListener('wheel', handleWheel, { passive: false });
-      return () => container.removeEventListener('wheel', handleWheel);
-    }
-  }, [containerRef, handleWheel]);
-
   return {
     zoomMode,
     zoomLevel,
@@ -111,6 +102,7 @@ export function useZoomPan(
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
+    handleWheel,
     setZoomMode,
     setZoomLevel,
     resetZoom,

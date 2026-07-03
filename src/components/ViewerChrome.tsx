@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
@@ -69,6 +78,10 @@ type SecondaryToolbarActionId =
   | 'recent-folders'
   | 'reveal'
   | 'settings';
+
+type ZoomControlActionId = 'zoom-out' | 'zoom-reset' | 'zoom-in';
+
+const ZOOM_CONTROL_DUPLICATE_GUARD_MS = 250;
 const SCALE_EXPORT_MAX_DIMENSION = 65_535;
 const SCALE_EXPORT_MAX_PIXELS = 50_000_000;
 const SCALE_EXPORT_MAX_MEGAPIXELS = SCALE_EXPORT_MAX_PIXELS / 1_000_000;
@@ -598,6 +611,14 @@ export function ViewerChrome({
       if (
         target.closest(
           '.top-bar-menu, .top-bar-submenu, .quality-menu, .crop-actions-menu, .bottom-controls-menu, .edit-queue-menu, .context-menu'
+        )
+      ) {
+        return;
+      }
+
+      if (
+        target.closest(
+          '.top-bar, .bottom-controls, .thumbnail-strip, .nav-arrow, .slideshow-indicator'
         )
       ) {
         return;
@@ -1239,6 +1260,66 @@ export function ViewerChrome({
     if (zoomMode === 'actual') return '100%';
     return `${Math.round(zoomLevel * 100)}%`;
   };
+
+  const zoomPointerActivationRef = useRef<ZoomControlActionId | null>(null);
+
+  const stopZoomControlPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    zoomPointerActivationRef.current = null;
+    event.stopPropagation();
+  }, []);
+
+  const activateZoomControl = useCallback((actionId: ZoomControlActionId, action: () => void) => {
+    if (zoomPointerActivationRef.current === actionId) {
+      return;
+    }
+
+    zoomPointerActivationRef.current = actionId;
+    action();
+
+    window.setTimeout(() => {
+      if (zoomPointerActivationRef.current === actionId) {
+        zoomPointerActivationRef.current = null;
+      }
+    }, ZOOM_CONTROL_DUPLICATE_GUARD_MS);
+  }, []);
+
+  const activateZoomControlOnPointerUp = useCallback(
+    (actionId: ZoomControlActionId, action: () => void) =>
+      (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (!event.pointerType) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        activateZoomControl(actionId, action);
+      },
+    [activateZoomControl]
+  );
+
+  const activateZoomControlOnMouseUp = useCallback(
+    (actionId: ZoomControlActionId, action: () => void) =>
+      (event: ReactMouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        activateZoomControl(actionId, action);
+      },
+    [activateZoomControl]
+  );
+
+  const activateZoomControlOnClick = useCallback(
+    (actionId: ZoomControlActionId, action: () => void) =>
+      (event: ReactMouseEvent<HTMLButtonElement>) => {
+        if (zoomPointerActivationRef.current === actionId) {
+          zoomPointerActivationRef.current = null;
+          return;
+        }
+
+        event.stopPropagation();
+        action();
+      },
+    []
+  );
 
   if (!currentImagePath) return null;
 
@@ -2190,18 +2271,25 @@ export function ViewerChrome({
 
         <button
           className="control-btn has-tooltip"
-          onClick={zoomOut}
+          onPointerDown={stopZoomControlPointerDown}
+          onPointerUp={activateZoomControlOnPointerUp('zoom-out', zoomOut)}
+          onMouseUp={activateZoomControlOnMouseUp('zoom-out', zoomOut)}
+          onClick={activateZoomControlOnClick('zoom-out', zoomOut)}
           data-tooltip="Zoom out (-)"
           title="Zoom out (-)"
           aria-label="Zoom out"
           id="btn-zoom-out"
+          type="button"
         >
           <ToolbarIcon name="zoomOut" />
         </button>
 
         <button
           className="zoom-display zoom-display--button has-tooltip"
-          onClick={resetZoom}
+          onPointerDown={stopZoomControlPointerDown}
+          onPointerUp={activateZoomControlOnPointerUp('zoom-reset', resetZoom)}
+          onMouseUp={activateZoomControlOnMouseUp('zoom-reset', resetZoom)}
+          onClick={activateZoomControlOnClick('zoom-reset', resetZoom)}
           data-tooltip="Recenter and fit"
           title="Recenter and fit"
           aria-label="Reset zoom to fit"
@@ -2212,11 +2300,15 @@ export function ViewerChrome({
 
         <button
           className="control-btn has-tooltip"
-          onClick={zoomIn}
+          onPointerDown={stopZoomControlPointerDown}
+          onPointerUp={activateZoomControlOnPointerUp('zoom-in', zoomIn)}
+          onMouseUp={activateZoomControlOnMouseUp('zoom-in', zoomIn)}
+          onClick={activateZoomControlOnClick('zoom-in', zoomIn)}
           data-tooltip="Zoom in (+)"
           title="Zoom in (+)"
           aria-label="Zoom in"
           id="btn-zoom-in"
+          type="button"
         >
           <ToolbarIcon name="zoomIn" />
         </button>

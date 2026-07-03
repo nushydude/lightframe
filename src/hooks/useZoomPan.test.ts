@@ -22,11 +22,11 @@ describe('useZoomPan', () => {
       });
     });
 
-    renderHook(() => useZoomPan(containerRef));
+    const { result } = renderHook(() => useZoomPan(containerRef));
 
     const wheelEvent = new WheelEvent('wheel', { deltaY: -100 }); // Zoom in
     act(() => {
-      containerRef.current?.dispatchEvent(wheelEvent);
+      result.current.handleWheel(wheelEvent);
     });
 
     expect(useViewerStore.getState().zoomLevel).toBeGreaterThan(1);
@@ -45,14 +45,14 @@ describe('useZoomPan', () => {
       });
     });
 
-    renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
+    const { result } = renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
 
     act(() => {
-      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+      result.current.handleWheel(new WheelEvent('wheel', { deltaY: 100 }));
       vi.advanceTimersByTime(221);
     });
     act(() => {
-      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+      result.current.handleWheel(new WheelEvent('wheel', { deltaY: -100 }));
     });
 
     expect(onWheelNext).toHaveBeenCalledTimes(1);
@@ -69,10 +69,10 @@ describe('useZoomPan', () => {
       });
     });
 
-    renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
+    const { result } = renderHook(() => useZoomPan(containerRef, { onWheelNext, onWheelPrev }));
 
     act(() => {
-      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaX: 120, deltaY: 50 }));
+      result.current.handleWheel(new WheelEvent('wheel', { deltaX: 120, deltaY: 50 }));
     });
 
     expect(onWheelNext).not.toHaveBeenCalled();
@@ -90,17 +90,17 @@ describe('useZoomPan', () => {
       });
     });
 
-    renderHook(() => useZoomPan(containerRef, { onWheelNext }));
+    const { result } = renderHook(() => useZoomPan(containerRef, { onWheelNext }));
 
     act(() => {
-      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
-      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+      result.current.handleWheel(new WheelEvent('wheel', { deltaY: 100 }));
+      result.current.handleWheel(new WheelEvent('wheel', { deltaY: 100 }));
     });
     expect(onWheelNext).toHaveBeenCalledTimes(1);
 
     act(() => {
       vi.advanceTimersByTime(221);
-      containerRef.current?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+      result.current.handleWheel(new WheelEvent('wheel', { deltaY: 100 }));
     });
     expect(onWheelNext).toHaveBeenCalledTimes(2);
   });

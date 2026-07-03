@@ -440,8 +440,16 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     pendingCropPreview,
     setError,
   } = useViewerStore();
-  const { zoomLevel, panX, panY, isDragging, handleMouseDown, handleMouseMove, handleMouseUp } =
-    useZoomPan(containerRef, { onWheelNext, onWheelPrev });
+  const {
+    zoomLevel,
+    panX,
+    panY,
+    isDragging,
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+    handleWheel,
+  } = useZoomPan(containerRef, { onWheelNext, onWheelPrev });
 
   const [previewAsset, setPreviewAsset] = useState<LoadedImageAsset | null>(null);
   const [fullAsset, setFullAsset] = useState<LoadedImageAsset | null>(null);
@@ -1252,6 +1260,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onWheel={handleWheel}
     >
       {isTiledRendererActive && metadata && (
         <TiledImageRenderer
