@@ -9,6 +9,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
+import * as viewerActions from '../services/viewerActions';
 import { useToastStore } from '../state/toastStore';
 
 const projectorState = vi.hoisted(() => ({
@@ -317,6 +318,99 @@ describe('ViewerChrome', () => {
     });
 
     expect(container.querySelector('#btn-pinned-refresh')).toBeTruthy();
+  });
+
+  it('closes pinned top-bar submenus on outside click', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        recentFolders: [{ path: 'D:/Shoots/May', label: 'May', openedAt: 100 }],
+      },
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByLabelText('Pin Recent Folders'));
+
+    const pinnedRecentFoldersButton = screen.getAllByLabelText('Open recent folder').slice(-1)[0];
+    const pinnedRecentFoldersMenu = pinnedRecentFoldersButton?.closest(
+      'details'
+    ) as HTMLDetailsElement;
+
+    fireEvent.click(pinnedRecentFoldersButton as HTMLElement);
+    expect(pinnedRecentFoldersMenu.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => {
+      expect(pinnedRecentFoldersMenu.open).toBe(false);
+    });
+  });
+
+  it('closes overflow menus when clicking outside them', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const moreButton = screen.getByLabelText('More actions');
+    const moreMenu = moreButton.closest('details') as HTMLDetailsElement;
+
+    fireEvent.click(moreButton);
+    expect(moreMenu.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => {
+      expect(moreMenu.open).toBe(false);
+    });
+  });
+
+  it('closes bottom control menus on outside click and Escape', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const image = document.createElement('img');
+    Object.defineProperty(image, 'naturalWidth', { value: 1200, configurable: true });
+    Object.defineProperty(image, 'naturalHeight', { value: 800, configurable: true });
+    const canvas = document.createElement('div');
+    canvas.className = 'image-canvas';
+    canvas.appendChild(image);
+    document.body.appendChild(canvas);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const qualityButton = screen.getByLabelText('Scaled export quality');
+    const qualityMenu = qualityButton.closest('details') as HTMLDetailsElement;
+
+    fireEvent.click(qualityButton);
+    expect(qualityMenu.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => {
+      expect(qualityMenu.open).toBe(false);
+    });
+
+    fireEvent.click(qualityButton);
+    expect(qualityMenu.open).toBe(true);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(qualityMenu.open).toBe(false);
+    });
   });
 
   it('shows a disabled compare button when fewer than two images are loaded', () => {
@@ -662,6 +756,113 @@ describe('ViewerChrome', () => {
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/two.jpg']);
   });
 
+  it('clears successfully copied marked images after a bulk copy', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/one.jpg',
+      images: [
+        {
+          path: 'C:/Images/one.jpg',
+          file_name: 'one.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/two.jpg',
+          file_name: 'two.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/one.jpg', 'C:/Images/two.jpg'],
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        quickDestinations: [{ id: 'export', label: 'Export', path: 'D:/Export' }],
+      },
+    }));
+    vi.spyOn(viewerActions, 'transferImagesToDestination').mockResolvedValue({
+      successes: [
+        { sourcePath: 'C:/Images/one.jpg', targetPath: 'D:/Export/one.jpg' },
+        { sourcePath: 'C:/Images/two.jpg', targetPath: 'D:/Export/two.jpg' },
+      ],
+      failures: [],
+      failureCount: 0,
+    });
+    vi.spyOn(viewerActions, 'showTransferResultMessage').mockImplementation(() => undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
+    fireEvent.click(within(bulkToolbar).getByLabelText('Copy marked images'));
+    const destinationButton = within(bulkToolbar).getAllByRole('button', { name: 'Export' })[0];
+
+    await act(async () => {
+      fireEvent.click(destinationButton);
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().markedPaths).toEqual([]);
+    });
+  });
+
+  it('keeps only failed marked images selected after a partial bulk copy', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/one.jpg',
+      images: [
+        {
+          path: 'C:/Images/one.jpg',
+          file_name: 'one.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/two.jpg',
+          file_name: 'two.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/one.jpg', 'C:/Images/two.jpg'],
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        quickDestinations: [{ id: 'export', label: 'Export', path: 'D:/Export' }],
+      },
+    }));
+    vi.spyOn(viewerActions, 'transferImagesToDestination').mockResolvedValue({
+      successes: [{ sourcePath: 'C:/Images/one.jpg', targetPath: 'D:/Export/one.jpg' }],
+      failures: [{ sourcePath: 'C:/Images/two.jpg', error: 'disk full' }],
+      failureCount: 1,
+    });
+    vi.spyOn(viewerActions, 'showTransferResultMessage').mockImplementation(() => undefined);
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
+    fireEvent.click(within(bulkToolbar).getByLabelText('Copy marked images'));
+    const destinationButton = within(bulkToolbar).getAllByRole('button', { name: 'Export' })[0];
+
+    await act(async () => {
+      fireEvent.click(destinationButton);
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/two.jpg']);
+    });
+  });
+
   it('opens a context menu with shortcut hints on right click', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
@@ -811,6 +1012,39 @@ describe('ViewerChrome', () => {
 
     expect(useViewerStore.getState().currentImagePath).toBe('C:/Images/next.jpg');
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
+  });
+
+  it('shows a compare zoom lock toggle only in compare mode', () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { rerender } = render(<ViewerChrome {...defaultProps} />);
+    expect(screen.queryByLabelText('Lock compare zoom')).not.toBeInTheDocument();
+
+    useViewerStore.getState().enterCompareMode();
+    rerender(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('Lock compare zoom'));
+    expect(useViewerStore.getState().isCompareZoomLocked).toBe(true);
+    expect(screen.getByLabelText('Unlock compare zoom')).toBeInTheDocument();
   });
 
   it('binds thumbnail-strip context menu actions to the clicked thumbnail path', async () => {

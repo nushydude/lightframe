@@ -13,6 +13,7 @@ import type { ImageFile, ImageMetadata } from '../types/image';
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
 import { settingsFromRust, settingsToRust } from '../types/settings';
+import { projectorWindowTitle } from './windowTitle';
 
 export interface ExifData {
   make?: string;
@@ -425,7 +426,7 @@ export async function openSecondaryWindow(): Promise<void> {
     }
 
     const webview = new WebviewWindow(label, {
-      title: 'LightFrame - Projector',
+      title: projectorWindowTitle(),
       width: 800,
       height: 600,
       visible: false,

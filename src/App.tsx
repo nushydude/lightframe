@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import {
+  availableMonitors,
   currentMonitor,
   getCurrentWindow,
   PhysicalPosition,
@@ -60,11 +61,20 @@ import {
   persistWindowBoundsSafely,
   windowBoundsForDisplay,
 } from './services/windowBounds';
+import { updatePersistedMarkedFolders } from './services/markedSelectionPersistence';
+import { mainWindowTitle } from './services/windowTitle';
+
+type PendingMarkedSelectionSnapshot = {
+  folderPath: string | null;
+  markedPaths: string[];
+};
 
 // fallow-ignore-next-line complexity
 function App() {
   const {
     currentImagePath,
+    markedPaths,
+    folderPath,
     showSettings,
     showCommandPalette,
     showPerformanceTelemetry,
@@ -119,6 +129,8 @@ function App() {
   const settingsRef = useRef(settings);
   const settingsLoadedRef = useRef(isLoaded);
   const saveBoundsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistMarkedPathsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingMarkedSelectionRef = useRef<PendingMarkedSelectionSnapshot | null>(null);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const { showControls } = useViewerStore();
   const [isSecondary, setIsSecondary] = useState(false);
@@ -185,8 +197,15 @@ function App() {
 
         if (isMainWindowRef.current && loadedSettings.rememberWindowBounds) {
           try {
-            const displayKey = displayKeyFromMonitor(await currentMonitor());
-            const restoredBounds = windowBoundsForDisplay(loadedSettings, displayKey);
+            const [monitor, monitors] = await Promise.all([currentMonitor(), availableMonitors()]);
+            const displayKey = displayKeyFromMonitor(monitor);
+            const restoredBounds = windowBoundsForDisplay(
+              loadedSettings,
+              displayKey,
+              monitors
+                .map((candidate) => displayKeyFromMonitor(candidate))
+                .filter((candidate): candidate is string => Boolean(candidate))
+            );
             if (restoredBounds) {
               await appWindowRef.current.setPosition(
                 new PhysicalPosition(restoredBounds.x, restoredBounds.y)
@@ -247,6 +266,76 @@ function App() {
     if (!isMainWindowRef.current || !hasStartupResolved || startupShowAttempted) return;
     void showMainWindowOnce();
   }, [hasStartupResolved, showMainWindowOnce, startupShowAttempted]);
+
+  const persistMarkedSelectionSnapshot = useCallback(
+    (snapshot: PendingMarkedSelectionSnapshot | null) => {
+      if (!snapshot) {
+        return;
+      }
+
+      const nextPersistedMarkedFolders = updatePersistedMarkedFolders(
+        settingsRef.current,
+        snapshot.folderPath,
+        snapshot.markedPaths
+      );
+
+      if (nextPersistedMarkedFolders !== settingsRef.current.persistedMarkedFolders) {
+        void updateSettings({ persistedMarkedFolders: nextPersistedMarkedFolders });
+      }
+    },
+    [updateSettings]
+  );
+
+  useEffect(() => {
+    if (!isMainWindowRef.current || !isLoaded) {
+      return;
+    }
+
+    const nextSnapshot: PendingMarkedSelectionSnapshot = {
+      folderPath,
+      markedPaths: [...markedPaths],
+    };
+    const pendingSnapshot = pendingMarkedSelectionRef.current;
+
+    if (persistMarkedPathsTimerRef.current) {
+      clearTimeout(persistMarkedPathsTimerRef.current);
+      persistMarkedPathsTimerRef.current = null;
+      if (pendingSnapshot && pendingSnapshot.folderPath !== nextSnapshot.folderPath) {
+        persistMarkedSelectionSnapshot(pendingSnapshot);
+      }
+    }
+
+    pendingMarkedSelectionRef.current = nextSnapshot;
+    persistMarkedPathsTimerRef.current = setTimeout(() => {
+      persistMarkedPathsTimerRef.current = null;
+      const snapshot = pendingMarkedSelectionRef.current;
+      pendingMarkedSelectionRef.current = null;
+      persistMarkedSelectionSnapshot(snapshot);
+    }, 250);
+  }, [folderPath, isLoaded, markedPaths, persistMarkedSelectionSnapshot]);
+
+  useEffect(
+    () => () => {
+      if (persistMarkedPathsTimerRef.current) {
+        clearTimeout(persistMarkedPathsTimerRef.current);
+        persistMarkedPathsTimerRef.current = null;
+      }
+      const snapshot = pendingMarkedSelectionRef.current;
+      pendingMarkedSelectionRef.current = null;
+      persistMarkedSelectionSnapshot(snapshot);
+    },
+    [persistMarkedSelectionSnapshot]
+  );
+
+  useEffect(() => {
+    if (!isMainWindowRef.current || isProjectorWindow || currentImagePath || folderPath) {
+      return;
+    }
+
+    void appWindowRef.current.setTitle(mainWindowTitle()).catch((err) => {
+      console.error('Failed to reset window title:', err);
+    });
+  }, [currentImagePath, folderPath, isProjectorWindow]);
 
   useEffect(() => {
     if (!isMainWindowRef.current) return;

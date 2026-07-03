@@ -12,6 +12,9 @@ import {
 } from '../services/tauriCommands';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
+import { mainWindowTitle } from '../services/windowTitle';
+
+const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 
 // Mock the services and Tauri APIs
 vi.mock('../services/tauriCommands', () => ({
@@ -31,7 +34,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: vi.fn(() => ({
     label: 'main',
-    setTitle: vi.fn().mockResolvedValue(undefined),
+    setTitle: mockSetTitle,
   })),
 }));
 
@@ -68,6 +71,7 @@ describe('useImageNavigation', () => {
       settings: { ...useSettingsStore.getState().settings, sortOrder: 'name' },
     });
     vi.clearAllMocks();
+    mockSetTitle.mockResolvedValue(undefined);
     (listenToFolderWatcherChanges as any).mockResolvedValue(vi.fn());
   });
 
@@ -232,6 +236,85 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().viewMode).toBe('viewer');
     expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
     expect(refreshFolderIndex).toHaveBeenCalledWith('c:/test');
+  });
+
+  it('updates the title when opening an empty folder', async () => {
+    useViewerStore.setState({
+      folderPath: 'c:/old',
+      markedPaths: ['c:/old/keep.jpg'],
+    });
+    (readFolderIndex as any).mockResolvedValue([]);
+    (refreshFolderIndex as any).mockResolvedValue([]);
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+
+    expect(mockSetTitle).toHaveBeenCalledWith(mainWindowTitle('[Folder] test'));
+    expect(useViewerStore.getState().folderPath).toBe('c:/test');
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+  });
+
+  it('does not switch folderPath until a new folder load applies its marks', async () => {
+    useViewerStore.setState({
+      folderPath: 'c:/old',
+      markedPaths: ['c:/old/keep.jpg'],
+    });
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        persistedMarkedFolders: [
+          {
+            folderPath: 'c:/new',
+            markedPaths: ['c:/new/fresh.jpg'],
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+
+    let resolveRefresh: ((images: Array<Record<string, unknown>>) => void) | undefined;
+    (readFolderIndex as any).mockResolvedValue([]);
+    (refreshFolderIndex as any).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    let openPromise: Promise<void> | undefined;
+    act(() => {
+      openPromise = result.current.openFolder('c:/new');
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().isFolderScanning).toBe(true);
+    });
+    expect(useViewerStore.getState().folderPath).toBe('c:/old');
+    expect(useViewerStore.getState().markedPaths).toEqual(['c:/old/keep.jpg']);
+
+    await act(async () => {
+      resolveRefresh?.([
+        {
+          path: 'c:/new/fresh.jpg',
+          file_name: 'fresh.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1000',
+        },
+      ]);
+
+      await openPromise;
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().folderPath).toBe('c:/new');
+    });
+    expect(useViewerStore.getState().markedPaths).toEqual(['c:/new/fresh.jpg']);
   });
 
   it('applies recent-folder preset filters against the newly opened folder', async () => {
