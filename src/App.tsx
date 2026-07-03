@@ -59,15 +59,20 @@ import { resolveStartupDecision } from './services/startup';
 import {
   displayKeyFromMonitor,
   persistWindowBoundsSafely,
+  waitForWindowRestoreBeforeShow,
   windowRestorePlanForDisplays,
 } from './services/windowBounds';
 import { updatePersistedMarkedFolders } from './services/markedSelectionPersistence';
 import { mainWindowTitle } from './services/windowTitle';
+import type { AppSettings } from './types/settings';
 
 type PendingMarkedSelectionSnapshot = {
   folderPath: string | null;
   markedPaths: string[];
 };
+
+const STARTUP_WINDOW_RESTORE_TIMEOUT_MS = 750;
+const STARTUP_WINDOW_SHOW_WATCHDOG_MS = 2000;
 
 // fallow-ignore-next-line complexity
 function App() {
@@ -148,6 +153,37 @@ function App() {
     }
   }, []);
 
+  const restoreMainWindowBounds = useCallback(
+    async (loadedSettings: AppSettings, canContinue: () => boolean) => {
+      if (!isMainWindowRef.current || !loadedSettings.rememberWindowBounds) {
+        return;
+      }
+
+      const [monitor, monitors] = await Promise.all([currentMonitor(), availableMonitors()]);
+      if (!canContinue()) {
+        return;
+      }
+
+      const displayKey = displayKeyFromMonitor(monitor);
+      const restorePlan = windowRestorePlanForDisplays(loadedSettings, displayKey, monitors);
+      if (!restorePlan) {
+        return;
+      }
+
+      await appWindowRef.current.setSize(
+        new PhysicalSize(restorePlan.bounds.width, restorePlan.bounds.height)
+      );
+      if (!canContinue()) {
+        return;
+      }
+
+      await appWindowRef.current.setPosition(
+        new PhysicalPosition(restorePlan.bounds.x, restorePlan.bounds.y)
+      );
+    },
+    []
+  );
+
   useEffect(() => {
     settingsRef.current = settings;
     settingsLoadedRef.current = isLoaded;
@@ -195,22 +231,14 @@ function App() {
         const loadedDefaultFitMode = isProjectorWindow ? 'fit' : loadedSettings.defaultFitMode;
         useViewerStore.getState().setDefaultZoomMode(loadedDefaultFitMode);
 
-        if (isMainWindowRef.current && loadedSettings.rememberWindowBounds) {
-          try {
-            const [monitor, monitors] = await Promise.all([currentMonitor(), availableMonitors()]);
-            const displayKey = displayKeyFromMonitor(monitor);
-            const restorePlan = windowRestorePlanForDisplays(loadedSettings, displayKey, monitors);
-            if (restorePlan) {
-              await appWindowRef.current.setSize(
-                new PhysicalSize(restorePlan.bounds.width, restorePlan.bounds.height)
-              );
-              await appWindowRef.current.setPosition(
-                new PhysicalPosition(restorePlan.bounds.x, restorePlan.bounds.y)
-              );
-            }
-          } catch (err) {
-            console.error('Failed to restore window bounds:', err);
-          }
+        let canContinueRestore = true;
+        const restoreResult = await waitForWindowRestoreBeforeShow(
+          restoreMainWindowBounds(loadedSettings, () => !isCancelled && canContinueRestore),
+          STARTUP_WINDOW_RESTORE_TIMEOUT_MS
+        );
+        if (restoreResult !== 'completed') {
+          canContinueRestore = false;
+          console.warn(`Skipped startup window restore before show: ${restoreResult}`);
         }
       }
 
@@ -254,7 +282,23 @@ function App() {
       isCancelled = true;
       if (unlisten) unlisten();
     };
-  }, [isProjectorWindow, loadCuration, loadSettings, openImage, openImageForStartup, setError]);
+  }, [
+    isProjectorWindow,
+    loadCuration,
+    loadSettings,
+    openImage,
+    openImageForStartup,
+    restoreMainWindowBounds,
+    setError,
+  ]);
+
+  useEffect(() => {
+    if (!isMainWindowRef.current || startupShowAttempted) return;
+    const timeoutId = setTimeout(() => {
+      void showMainWindowOnce();
+    }, STARTUP_WINDOW_SHOW_WATCHDOG_MS);
+    return () => clearTimeout(timeoutId);
+  }, [showMainWindowOnce, startupShowAttempted]);
 
   useEffect(() => {
     if (!isMainWindowRef.current || !hasStartupResolved || startupShowAttempted) return;

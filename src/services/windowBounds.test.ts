@@ -5,6 +5,7 @@ import {
   hasCompleteWindowBounds,
   persistWindowBoundsSafely,
   shouldPersistWindowBounds,
+  waitForWindowRestoreBeforeShow,
   windowBoundsForDisplay,
   windowRestorePlanForDisplays,
 } from './windowBounds';
@@ -380,5 +381,28 @@ describe('windowRestorePlanForDisplays', () => {
     };
 
     expect(windowRestorePlanForDisplays(settings, primaryKey, [primaryDisplay])).toBeNull();
+  });
+});
+
+describe('waitForWindowRestoreBeforeShow', () => {
+  it('returns completed when restore finishes before the timeout', async () => {
+    await expect(waitForWindowRestoreBeforeShow(Promise.resolve(), 50)).resolves.toBe('completed');
+  });
+
+  it('returns failed when restore rejects before the timeout', async () => {
+    await expect(
+      waitForWindowRestoreBeforeShow(Promise.reject(new Error('boom')), 50)
+    ).resolves.toBe('failed');
+  });
+
+  it('returns timed-out when restore does not settle before the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const resultPromise = waitForWindowRestoreBeforeShow(new Promise(() => {}), 50);
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(resultPromise).resolves.toBe('timed-out');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
