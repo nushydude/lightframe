@@ -6,6 +6,7 @@ import {
   persistWindowBoundsSafely,
   shouldPersistWindowBounds,
   windowBoundsForDisplay,
+  windowRestorePlanForDisplays,
 } from './windowBounds';
 
 describe('hasCompleteWindowBounds', () => {
@@ -298,5 +299,86 @@ describe('windowBoundsForDisplay', () => {
     };
 
     expect(windowBoundsForDisplay(settings, 'unknown', ['primary'])).toBeNull();
+  });
+});
+
+describe('windowRestorePlanForDisplays', () => {
+  const primaryDisplay = {
+    name: '\\\\.\\DISPLAY1',
+    position: { x: 0, y: 0 },
+    size: { width: 3440, height: 1440 },
+    scaleFactor: 1,
+  };
+  const portraitDisplay = {
+    name: '\\\\.\\DISPLAY2',
+    position: { x: 3440, y: -866 },
+    size: { width: 1440, height: 2560 },
+    scaleFactor: 1,
+  };
+  const primaryKey = displayKeyFromMonitor(primaryDisplay) ?? 'primary';
+  const portraitKey = displayKeyFromMonitor(portraitDisplay) ?? 'portrait';
+
+  it('clamps restored bounds to the selected display before startup applies them', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      lastWindowDisplayKey: portraitKey,
+      windowBoundsByDisplay: {
+        [portraitKey]: { x: 3432, y: -874, width: 1440, height: 2489 },
+      },
+    };
+
+    expect(
+      windowRestorePlanForDisplays(settings, primaryKey, [primaryDisplay, portraitDisplay])
+    ).toEqual({
+      bounds: { x: 3440, y: -866, width: 1440, height: 2489 },
+      displayKey: portraitKey,
+    });
+  });
+
+  it('falls back to the startup display when the last display is no longer available', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      lastWindowDisplayKey: portraitKey,
+      windowBoundsByDisplay: {
+        [primaryKey]: { x: 8, y: 12, width: 1200, height: 800 },
+        [portraitKey]: { x: 3440, y: -866, width: 1440, height: 2489 },
+      },
+    };
+
+    expect(windowRestorePlanForDisplays(settings, primaryKey, [primaryDisplay])).toEqual({
+      bounds: { x: 8, y: 12, width: 1200, height: 800 },
+      displayKey: primaryKey,
+    });
+  });
+
+  it('rounds and clamps legacy bounds only when no display-specific entries exist', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      windowX: -20.4,
+      windowY: 10.6,
+      windowWidth: 500.2,
+      windowHeight: 400.8,
+      windowBoundsByDisplay: {},
+    };
+
+    expect(windowRestorePlanForDisplays(settings, primaryKey, [primaryDisplay])).toEqual({
+      bounds: { x: 0, y: 11, width: 500, height: 401 },
+      displayKey: primaryKey,
+    });
+  });
+
+  it('does not restore stale legacy bounds when display-specific entries exist', () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      windowX: 10,
+      windowY: 10,
+      windowWidth: 1200,
+      windowHeight: 800,
+      windowBoundsByDisplay: {
+        [portraitKey]: { x: 3440, y: -866, width: 1440, height: 2489 },
+      },
+    };
+
+    expect(windowRestorePlanForDisplays(settings, primaryKey, [primaryDisplay])).toBeNull();
   });
 });
