@@ -286,8 +286,9 @@ describe('useImageNavigation', () => {
 
     const { result } = renderHook(() => useImageNavigation());
 
-    const openPromise = act(async () => {
-      await result.current.openFolder('c:/new');
+    let openPromise: Promise<void> | undefined;
+    act(() => {
+      openPromise = result.current.openFolder('c:/new');
     });
 
     await waitFor(() => {
@@ -296,17 +297,19 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().folderPath).toBe('c:/old');
     expect(useViewerStore.getState().markedPaths).toEqual(['c:/old/keep.jpg']);
 
-    resolveRefresh?.([
-      {
-        path: 'c:/new/fresh.jpg',
-        file_name: 'fresh.jpg',
-        extension: 'jpg',
-        size_bytes: 100,
-        modified_at: '1000',
-      },
-    ]);
+    await act(async () => {
+      resolveRefresh?.([
+        {
+          path: 'c:/new/fresh.jpg',
+          file_name: 'fresh.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1000',
+        },
+      ]);
 
-    await openPromise;
+      await openPromise;
+    });
 
     await waitFor(() => {
       expect(useViewerStore.getState().folderPath).toBe('c:/new');
