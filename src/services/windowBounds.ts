@@ -19,6 +19,11 @@ export interface WindowRestorePlan {
   displayKey: string | null;
 }
 
+interface WindowRestoreCandidate {
+  bounds: WindowBounds;
+  displayKey: string | null;
+}
+
 export function hasCompleteWindowBounds(
   settings: PersistedWindowBounds
 ): settings is Required<PersistedWindowBounds> {
@@ -93,57 +98,17 @@ export function windowRestorePlanForDisplays(
   startupDisplayKey: string | null,
   displays: readonly DisplayIdentity[]
 ): WindowRestorePlan | null {
-  const displayKeyByKey = new Map<string, DisplayIdentity>();
-  for (const display of displays) {
-    const key = displayKeyFromMonitor(display);
-    if (key) {
-      displayKeyByKey.set(key, display);
-    }
+  const displayKeyByKey = displaysByKey(displays);
+  const candidate = firstWindowRestoreCandidate(settings, startupDisplayKey, displayKeyByKey);
+  if (!candidate) {
+    return null;
   }
 
-  const lastDisplayKey = settings.lastWindowDisplayKey?.trim() || null;
-  const candidates: Array<{ bounds: WindowBounds | null; displayKey: string | null }> = [
-    {
-      bounds:
-        lastDisplayKey && displayKeyByKey.has(lastDisplayKey)
-          ? (settings.windowBoundsByDisplay[lastDisplayKey] ?? null)
-          : null,
-      displayKey: lastDisplayKey,
-    },
-    {
-      bounds:
-        startupDisplayKey && displayKeyByKey.has(startupDisplayKey)
-          ? (settings.windowBoundsByDisplay[startupDisplayKey] ?? null)
-          : null,
-      displayKey: startupDisplayKey,
-    },
-  ];
-
-  if (displayKeyByKey.size === 0 || Object.keys(settings.windowBoundsByDisplay).length === 0) {
-    candidates.push({
-      bounds: windowBoundsFromLegacySettings(settings),
-      displayKey: startupDisplayKey,
-    });
-  }
-
-  for (const candidate of candidates) {
-    if (!candidate.bounds) {
-      continue;
-    }
-
-    const display =
-      (candidate.displayKey && displayKeyByKey.get(candidate.displayKey)) ||
-      displayContainingWindowCenter(candidate.bounds, displays) ||
-      displays[0];
-    return {
-      bounds: display
-        ? clampWindowBoundsToDisplay(candidate.bounds, display)
-        : roundWindowBounds(candidate.bounds),
-      displayKey: candidate.displayKey,
-    };
-  }
-
-  return null;
+  const display = displayForRestoreCandidate(candidate, displayKeyByKey, displays);
+  return {
+    bounds: constrainWindowBoundsForRestore(candidate.bounds, display),
+    displayKey: candidate.displayKey,
+  };
 }
 
 interface ShouldPersistWindowBoundsParams {
@@ -317,6 +282,81 @@ function windowBoundsEqual(left: WindowBounds | undefined, right: WindowBounds):
     left.width === right.width &&
     left.height === right.height
   );
+}
+
+function displaysByKey(displays: readonly DisplayIdentity[]): Map<string, DisplayIdentity> {
+  const displayKeyByKey = new Map<string, DisplayIdentity>();
+  for (const display of displays) {
+    const key = displayKeyFromMonitor(display);
+    if (key) {
+      displayKeyByKey.set(key, display);
+    }
+  }
+
+  return displayKeyByKey;
+}
+
+function firstWindowRestoreCandidate(
+  settings: AppSettings,
+  startupDisplayKey: string | null,
+  displayKeyByKey: ReadonlyMap<string, DisplayIdentity>
+): WindowRestoreCandidate | null {
+  const lastDisplayKey = settings.lastWindowDisplayKey?.trim() || null;
+  const candidates = [
+    displaySpecificRestoreCandidate(settings, lastDisplayKey, displayKeyByKey),
+    displaySpecificRestoreCandidate(settings, startupDisplayKey, displayKeyByKey),
+    legacyRestoreCandidate(settings, startupDisplayKey, displayKeyByKey),
+  ];
+
+  return candidates.find((candidate) => candidate !== null) ?? null;
+}
+
+function displaySpecificRestoreCandidate(
+  settings: AppSettings,
+  displayKey: string | null,
+  displayKeyByKey: ReadonlyMap<string, DisplayIdentity>
+): WindowRestoreCandidate | null {
+  const bounds =
+    displayKey && displayKeyByKey.has(displayKey)
+      ? (settings.windowBoundsByDisplay[displayKey] ?? null)
+      : null;
+  return bounds ? { bounds, displayKey } : null;
+}
+
+function legacyRestoreCandidate(
+  settings: AppSettings,
+  startupDisplayKey: string | null,
+  displayKeyByKey: ReadonlyMap<string, DisplayIdentity>
+): WindowRestoreCandidate | null {
+  const hasDisplaySpecificBounds = Object.keys(settings.windowBoundsByDisplay).length > 0;
+  if (displayKeyByKey.size > 0 && hasDisplaySpecificBounds) {
+    return null;
+  }
+
+  const bounds = windowBoundsFromLegacySettings(settings);
+  return bounds ? { bounds, displayKey: startupDisplayKey } : null;
+}
+
+function displayForRestoreCandidate(
+  candidate: WindowRestoreCandidate,
+  displayKeyByKey: ReadonlyMap<string, DisplayIdentity>,
+  displays: readonly DisplayIdentity[]
+): DisplayIdentity | null {
+  if (candidate.displayKey) {
+    const display = displayKeyByKey.get(candidate.displayKey);
+    if (display) {
+      return display;
+    }
+  }
+
+  return displayContainingWindowCenter(candidate.bounds, displays) ?? displays[0] ?? null;
+}
+
+function constrainWindowBoundsForRestore(
+  bounds: WindowBounds,
+  display: DisplayIdentity | null
+): WindowBounds {
+  return display ? clampWindowBoundsToDisplay(bounds, display) : roundWindowBounds(bounds);
 }
 
 function clampWindowBoundsToDisplay(bounds: WindowBounds, display: DisplayIdentity): WindowBounds {
