@@ -10,14 +10,13 @@ interface AvailableUpdate {
   channel: UpdateChannel;
 }
 
-export function UpdateNotification() {
-  const updateChannel = useSettingsStore((state) => state.settings.updateChannel);
-  const isSettingsLoaded = useSettingsStore((state) => state.isLoaded);
+type InstallStatus = 'idle' | 'downloading' | 'installError';
+
+function useAvailableUpdate(
+  updateChannel: UpdateChannel,
+  isSettingsLoaded: boolean
+): [AvailableUpdate | null, (update: AvailableUpdate | null) => void] {
   const [updateInfo, setUpdateInfo] = useState<AvailableUpdate | null>(null);
-  const [status, setStatus] = useState<'idle' | 'checking' | 'downloading' | 'installError'>(
-    'idle'
-  );
-  const [progress, setProgress] = useState(0);
 
   useEffect(() => {
     if (!isSettingsLoaded) {
@@ -28,7 +27,6 @@ export function UpdateNotification() {
 
     async function refreshAvailableUpdate() {
       try {
-        setStatus('checking');
         const update = await checkUpdateChannel(updateChannel);
         if (isCancelled) {
           return;
@@ -38,12 +36,8 @@ export function UpdateNotification() {
         } else {
           setUpdateInfo(null);
         }
-        setStatus('idle');
       } catch (err) {
         console.error('Failed to check for updates:', err);
-        if (!isCancelled) {
-          setStatus('idle');
-        }
       }
     }
 
@@ -58,73 +52,155 @@ export function UpdateNotification() {
     };
   }, [isSettingsLoaded, updateChannel]);
 
+  return [updateInfo, setUpdateInfo];
+}
+
+async function downloadAndInstallChannelUpdate(
+  channel: UpdateChannel,
+  onProgress: (progress: number) => void
+): Promise<boolean> {
+  const update = await checkUpdateChannel(channel);
+  if (!update) {
+    return false;
+  }
+
+  let downloaded = 0;
+  let contentLength = 0;
+
+  await update.downloadAndInstall((event) => {
+    switch (event.event) {
+      case 'Started':
+        contentLength = event.data.contentLength || 0;
+        break;
+      case 'Progress':
+        downloaded += event.data.chunkLength;
+        if (contentLength > 0) {
+          onProgress(Math.round((downloaded / contentLength) * 100));
+        }
+        break;
+    }
+  });
+
+  await relaunch();
+  return true;
+}
+
+function shouldShowUpdateNotification(
+  updateInfo: AvailableUpdate | null,
+  status: InstallStatus
+): boolean {
+  return updateInfo !== null || status === 'downloading' || status === 'installError';
+}
+
+function DownloadingUpdateContent({ progress }: { progress: number }) {
+  return (
+    <>
+      <span className="update-title">Downloading update...</span>
+      <div className="progress-bar">
+        <div className="progress-fill" style={{ width: `${progress}%` }} />
+      </div>
+    </>
+  );
+}
+
+function InstallErrorContent({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <>
+      <span className="update-title">Update failed</span>
+      <button className="update-btn" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </>
+  );
+}
+
+function AvailableUpdateContent({
+  updateInfo,
+  onUpdate,
+  onLater,
+}: {
+  updateInfo: AvailableUpdate | null;
+  onUpdate: () => void;
+  onLater: () => void;
+}) {
+  return (
+    <>
+      <span className="update-title">
+        {updateInfo ? updateChannelLabel(updateInfo.channel) : 'Stable'} update available: v
+        {updateInfo?.version}
+      </span>
+      <div className="update-actions">
+        <button className="update-btn primary" onClick={onUpdate}>
+          Update & Relaunch
+        </button>
+        <button className="update-btn" onClick={onLater}>
+          Later
+        </button>
+      </div>
+    </>
+  );
+}
+
+function UpdateNotificationContent({
+  status,
+  progress,
+  updateInfo,
+  onUpdate,
+  onDismissError,
+  onLater,
+}: {
+  status: InstallStatus;
+  progress: number;
+  updateInfo: AvailableUpdate | null;
+  onUpdate: () => void;
+  onDismissError: () => void;
+  onLater: () => void;
+}) {
+  switch (status) {
+    case 'downloading':
+      return <DownloadingUpdateContent progress={progress} />;
+    case 'installError':
+      return <InstallErrorContent onDismiss={onDismissError} />;
+    default:
+      return (
+        <AvailableUpdateContent updateInfo={updateInfo} onUpdate={onUpdate} onLater={onLater} />
+      );
+  }
+}
+
+export function UpdateNotification() {
+  const updateChannel = useSettingsStore((state) => state.settings.updateChannel);
+  const isSettingsLoaded = useSettingsStore((state) => state.isLoaded);
+  const [updateInfo, setUpdateInfo] = useAvailableUpdate(updateChannel, isSettingsLoaded);
+  const [status, setStatus] = useState<InstallStatus>('idle');
+  const [progress, setProgress] = useState(0);
+
   const handleUpdate = async () => {
     const channel = updateInfo?.channel ?? updateChannel;
-    const update = await checkUpdateChannel(channel);
-    if (!update) return;
-
     try {
       setStatus('downloading');
       setProgress(0);
-      let downloaded = 0;
-      let contentLength = 0;
-
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case 'Started':
-            contentLength = event.data.contentLength || 0;
-            break;
-          case 'Progress':
-            downloaded += event.data.chunkLength;
-            if (contentLength > 0) {
-              setProgress(Math.round((downloaded / contentLength) * 100));
-            }
-            break;
-        }
-      });
-
-      await relaunch();
+      const didInstall = await downloadAndInstallChannelUpdate(channel, setProgress);
+      setStatus(didInstall ? 'downloading' : 'idle');
     } catch (err) {
       console.error('Failed to install update:', err);
       setStatus('installError');
     }
   };
 
-  if (!updateInfo && status !== 'downloading' && status !== 'installError') return null;
+  if (!shouldShowUpdateNotification(updateInfo, status)) return null;
 
   return (
     <div className={`update-notification ${status === 'downloading' ? 'busy' : ''}`}>
       <div className="update-content">
-        {status === 'downloading' ? (
-          <>
-            <span className="update-title">Downloading update...</span>
-            <div className="progress-bar">
-              <div className="progress-fill" style={{ width: `${progress}%` }} />
-            </div>
-          </>
-        ) : status === 'installError' ? (
-          <>
-            <span className="update-title">Update failed</span>
-            <button className="update-btn" onClick={() => setStatus('idle')}>
-              Dismiss
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="update-title">
-              {updateInfo ? updateChannelLabel(updateInfo.channel) : 'Stable'} update available: v
-              {updateInfo?.version}
-            </span>
-            <div className="update-actions">
-              <button className="update-btn primary" onClick={handleUpdate}>
-                Update & Relaunch
-              </button>
-              <button className="update-btn" onClick={() => setUpdateInfo(null)}>
-                Later
-              </button>
-            </div>
-          </>
-        )}
+        <UpdateNotificationContent
+          status={status}
+          progress={progress}
+          updateInfo={updateInfo}
+          onUpdate={handleUpdate}
+          onDismissError={() => setStatus('idle')}
+          onLater={() => setUpdateInfo(null)}
+        />
       </div>
     </div>
   );
