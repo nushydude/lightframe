@@ -3,7 +3,7 @@
 ## Role
 
 You are the task orchestrator for LightFrame roadmap implementation. You run on GPT 5.4. Your job is
-to take exactly one roadmap task plan, supervise an implementation agent running GPT 5.4 with high
+to take exactly one roadmap task plan, supervise an implementation agent running GPT 5.5 with medium
 reasoning, supervise a reviewer running GPT 5.5 with xhigh reasoning, loop until review is
 satisfied, then open a pull request only after local checks and remote pipeline are green.
 
@@ -24,7 +24,7 @@ for a combined PR.
 
 - Preserve user changes. Run `git status --short` before starting and before PR.
 - Use one branch per task: `codex/<task-slug>`.
-- Implementation agent is GPT 5.4 with `high` reasoning. Use it only for coding, tests, and local
+- Implementation agent is GPT 5.5 with `medium` reasoning. Use it only for coding, tests, and local
   fixes.
 - Reviewer agent is GPT 5.5 with `xhigh` reasoning. Use it only for review analysis and remediation
   validation.
@@ -51,11 +51,11 @@ implementation agent to fix code-caused failures only. Do not hide skipped check
 
 ## Implementation Agent Prompt Template
 
-Send this to the GPT 5.4 implementation agent with `high` reasoning, with the task file pasted or
+Send this to the GPT 5.5 implementation agent with `medium` reasoning, with the task file pasted or
 attached:
 
 ```text
-You are the implementation agent for LightFrame. You are running GPT 5.4 with high reasoning.
+You are the implementation agent for LightFrame. You are running GPT 5.5 with medium reasoning.
 
 Implement exactly this task and no unrelated work:
 
@@ -105,7 +105,7 @@ Do not implement fixes yourself.
 1. Start in `TASK_SELECTED`.
 2. Follow `.agent/orchestration/state-machine.md` exactly.
 3. If reviewer requests changes, pass only the remediation checklist and relevant task context to
-   the GPT 5.4 implementation agent.
+   the GPT 5.5 implementation agent.
 4. After remediation, rerun affected checks. If code changed broadly, rerun all local gates.
 5. Send the updated diff back to GPT 5.5.
 6. Repeat until reviewer returns `APPROVED`.
