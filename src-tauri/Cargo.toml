@@ -35,6 +35,7 @@ little_exif = "0.6.23"
 sha2 = "0.10"
 libjpeg-turbo-rs = "0.6"
 notify = "8.2.0"
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }

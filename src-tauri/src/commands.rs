@@ -151,6 +151,8 @@ pub struct AppSettings {
     pub performance_mode: String,
     #[serde(default = "default_auto_refresh_folder")]
     pub auto_refresh_folder: bool,
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
     #[serde(default = "default_saved_view_presets")]
     pub saved_view_presets: Vec<String>,
     #[serde(default)]
@@ -259,6 +261,10 @@ fn default_auto_refresh_folder() -> bool {
     true
 }
 
+fn default_update_channel() -> String {
+    "stable".to_string()
+}
+
 fn default_saved_view_presets() -> Vec<String> {
     vec!["favorites".to_string(), "rated4".to_string(), "unreviewed".to_string()]
 }
@@ -287,6 +293,7 @@ impl Default for AppSettings {
             open_projector_in_grid_view: false,
             performance_mode: default_performance_mode(),
             auto_refresh_folder: default_auto_refresh_folder(),
+            update_channel: default_update_channel(),
             saved_view_presets: default_saved_view_presets(),
             recent_folders: Vec::new(),
             quick_destinations: Vec::new(),
@@ -3773,6 +3780,7 @@ mod tests {
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");
         assert!(settings.auto_refresh_folder);
+        assert_eq!(settings.update_channel, "stable");
         assert_eq!(
             settings.saved_view_presets,
             vec!["favorites".to_string(), "rated4".to_string(), "unreviewed".to_string()]

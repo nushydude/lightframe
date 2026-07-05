@@ -1,0 +1,60 @@
+name: Preview Channel
+
+on:
+  release:
+    types: [published]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PREVIEW_CHANNEL_TAG: app-preview-channel
+
+jobs:
+  publish-preview-manifest:
+    name: Publish Preview Manifest
+    runs-on: ubuntu-latest
+    if: >
+      github.event.release.prerelease &&
+      startsWith(github.event.release.tag_name, 'app-v') &&
+      github.event.release.tag_name != 'app-preview-channel'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download prerelease updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p preview-channel
+          gh release download "$RELEASE_TAG" \
+            --repo "$GH_REPO" \
+            --pattern latest.json \
+            --dir preview-channel \
+            --clobber
+
+      - name: Publish preview channel manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$PREVIEW_CHANNEL_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$PREVIEW_CHANNEL_TAG" \
+              --repo "$GH_REPO" \
+              --draft=false \
+              --prerelease \
+              --latest=false \
+              --title "LightFrame Preview Channel" \
+              --notes "Machine-maintained updater manifest for opt-in preview builds."
+          else
+            gh release create "$PREVIEW_CHANNEL_TAG" \
+              --repo "$GH_REPO" \
+              --prerelease \
+              --latest=false \
+              --title "LightFrame Preview Channel" \
+              --notes "Machine-maintained updater manifest for opt-in preview builds."
+          fi
+
+          gh release upload "$PREVIEW_CHANNEL_TAG" preview-channel/latest.json \
+            --repo "$GH_REPO" \
+            --clobber

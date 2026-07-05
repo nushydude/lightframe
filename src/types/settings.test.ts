@@ -142,6 +142,17 @@ describe('settingsToRust', () => {
     });
   });
 
+  it('maps update channel to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      updateChannel: 'preview',
+    });
+
+    expect(rust).toMatchObject({
+      update_channel: 'preview',
+    });
+  });
+
   it('maps saved view presets to rust payloads', () => {
     const rust = settingsToRust({
       ...DEFAULT_SETTINGS,
@@ -268,6 +279,12 @@ describe('settingsFromRust', () => {
   it('parses auto-refresh folder preference with a default enabled fallback', () => {
     expect(settingsFromRust({ auto_refresh_folder: false }).autoRefreshFolder).toBe(false);
     expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
+  });
+
+  it('parses update channel and falls back to stable', () => {
+    expect(settingsFromRust({ update_channel: 'preview' }).updateChannel).toBe('preview');
+    expect(settingsFromRust({ update_channel: 'nightly' }).updateChannel).toBe('stable');
+    expect(settingsFromRust({}).updateChannel).toBe('stable');
   });
 
   it('parses crop save mode from rust payloads and defaults to copy', () => {

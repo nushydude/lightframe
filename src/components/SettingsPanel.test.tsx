@@ -54,4 +54,15 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('Format Support')).toBeInTheDocument();
     });
   });
+
+  it('renders the update channel setting', async () => {
+    render(<SettingsPanel />);
+
+    expect(screen.getByLabelText('Update channel')).toHaveValue('stable');
+    expect(screen.getByText('Preview / beta releases')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText('Format Support')).toBeInTheDocument();
+    });
+  });
 });

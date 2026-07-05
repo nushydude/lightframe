@@ -4,6 +4,7 @@ mod folder_watcher;
 mod native_codecs;
 mod path_normalization;
 mod thumbnails;
+mod update_channels;
 mod windows_shortcuts;
 
 use tauri::Manager;
@@ -55,6 +56,7 @@ pub fn run() {
             commands::get_image_tile,
             commands::read_settings,
             commands::write_settings,
+            update_channels::check_update_channel,
             commands::save_diagnostics_snapshot,
             commands::read_curation_metadata,
             commands::write_image_curation,

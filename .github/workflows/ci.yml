@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['main']
+    branches: ['main', 'codex/**', 'hotfix/**', 'release/**']
   pull_request:
     branches: ['main']
 
@@ -52,6 +52,10 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git fetch origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
 
+      - name: Fetch main audit base branch
+        if: github.event_name != 'pull_request'
+        run: git fetch --force origin "+refs/heads/main:refs/remotes/origin/main"
+
       - name: Audit changed-code quality
         run: pnpm run quality:audit:ci
 
@@ -83,3 +87,34 @@ jobs:
       - name: Run Rust tests
         run: cargo test
         working-directory: ./src-tauri
+
+  windows-packaged-startup-smoke:
+    name: Windows Packaged Startup Smoke
+    runs-on: windows-2025
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unpackaged Tauri release executable
+        run: pnpm tauri build --no-bundle --ci
+
+      - name: Smoke test packaged startup
+        shell: pwsh
+        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe

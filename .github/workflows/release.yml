@@ -47,4 +47,4 @@ jobs:
           releaseName: 'LightFrame v__VERSION__'
           releaseBody: 'See the assets to download the installer.'
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

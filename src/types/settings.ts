@@ -41,6 +41,7 @@ export interface WindowBounds {
 }
 
 export type PerformanceMode = 'fast' | 'balanced' | 'lowMemory';
+export type UpdateChannel = 'stable' | 'preview';
 
 export interface AppSettings {
   theme: 'system' | 'dark' | 'light';
@@ -64,6 +65,7 @@ export interface AppSettings {
   openProjectorInGridView: boolean;
   performanceMode: PerformanceMode;
   autoRefreshFolder: boolean;
+  updateChannel: UpdateChannel;
   savedViewPresets: CurationFilter[];
   recentFolders: RecentFolder[];
   quickDestinations: QuickDestination[];
@@ -90,6 +92,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   openProjectorInGridView: false,
   performanceMode: 'balanced',
   autoRefreshFolder: true,
+  updateChannel: 'stable',
   savedViewPresets: ['favorites', 'rated4', 'unreviewed'],
   recentFolders: [],
   quickDestinations: [],
@@ -123,6 +126,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     open_projector_in_grid_view: settings.openProjectorInGridView,
     performance_mode: settings.performanceMode,
     auto_refresh_folder: settings.autoRefreshFolder,
+    update_channel: settings.updateChannel,
     saved_view_presets: settings.savedViewPresets,
     recent_folders: settings.recentFolders.map((folder) => ({
       path: folder.path,
@@ -189,6 +193,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       ? raw.performance_mode
       : DEFAULT_SETTINGS.performanceMode,
     autoRefreshFolder: booleanSetting(raw.auto_refresh_folder, DEFAULT_SETTINGS.autoRefreshFolder),
+    updateChannel: parseUpdateChannel(raw.update_channel),
     savedViewPresets: parseSavedViewPresets(raw.saved_view_presets),
     recentFolders: parseRecentFolders(raw.recent_folders),
     quickDestinations: parseQuickDestinations(raw.quick_destinations),
@@ -209,6 +214,10 @@ function numberSetting(value: unknown, fallback: number): number {
 
 function booleanSetting(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function parseUpdateChannel(value: unknown): UpdateChannel {
+  return value === 'preview' ? 'preview' : DEFAULT_SETTINGS.updateChannel;
 }
 
 function optionalTrimmedString(value: unknown): string | undefined {
