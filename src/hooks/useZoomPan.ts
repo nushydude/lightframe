@@ -26,7 +26,7 @@ export function useZoomPan(
     zoomOut,
   } = useViewerStore();
 
-  const settings = useSettingsStore((s) => s.settings);
+  const mouseWheelBehavior = useSettingsStore((state) => state.settings.mouseWheelBehavior);
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const panStartRef = useRef({ x: 0, y: 0 });
@@ -37,7 +37,7 @@ export function useZoomPan(
   const handleWheel = useCallback(
     (e: WheelEvent | ReactWheelEvent<HTMLDivElement>) => {
       e.preventDefault();
-      if (settings.mouseWheelBehavior === 'zoom') {
+      if (mouseWheelBehavior === 'zoom') {
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
         const newLevel = Math.max(0.1, Math.min(20, zoomLevel * delta));
         setZoomLevel(newLevel);
@@ -60,7 +60,7 @@ export function useZoomPan(
         onWheelPrev?.();
       }
     },
-    [zoomLevel, settings.mouseWheelBehavior, setZoomLevel, onWheelNext, onWheelPrev]
+    [zoomLevel, mouseWheelBehavior, setZoomLevel, onWheelNext, onWheelPrev]
   );
 
   /** Start panning */

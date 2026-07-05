@@ -185,7 +185,8 @@ export function useImageNavigation() {
     setViewMode,
   } = useViewerStore();
 
-  const settings = useSettingsStore((state) => state.settings);
+  const sortOrder = useSettingsStore((state) => state.settings.sortOrder);
+  const autoRefreshFolder = useSettingsStore((state) => state.settings.autoRefreshFolder);
   const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
   const pendingWatcherRefreshFolderRef = useRef<string | null>(null);
 
@@ -196,9 +197,9 @@ export function useImageNavigation() {
 
   useEffect(() => {
     const sourceImages = allImages.length > 0 ? allImages : images;
-    if (sourceImages.length === 0 || settings.sortOrder === 'name') return;
+    if (sourceImages.length === 0 || sortOrder === 'name') return;
 
-    const sorted = sortImages([...sourceImages], settings.sortOrder);
+    const sorted = sortImages([...sourceImages], sortOrder);
     const hasOrderChanged = sorted.some((image, index) => image.path !== sourceImages[index]?.path);
     if (!hasOrderChanged) return;
 
@@ -212,12 +213,11 @@ export function useImageNavigation() {
         setCurrentIndex(newIndex);
       }
     }
-  }, [allImages, currentIndex, images, setCurrentIndex, setImages, settings.sortOrder]);
+  }, [allImages, currentIndex, images, setCurrentIndex, setImages, sortOrder]);
 
-  const applyActiveSortOrder = useCallback(
-    (folderImages: ImageFile[]) => sortImages(folderImages, settings.sortOrder),
-    [settings.sortOrder]
-  );
+  const applyActiveSortOrder = useCallback((folderImages: ImageFile[]) => {
+    return sortImages(folderImages, useSettingsStore.getState().settings.sortOrder);
+  }, []);
 
   const applyFolderImages = useCallback(
     (
@@ -319,7 +319,9 @@ export function useImageNavigation() {
         preferredIndex: 0,
         preferredPath: null,
       });
-      setMarkedPaths(getPersistedMarkedPathsForFolder(settings, nextFolderPath));
+      setMarkedPaths(
+        getPersistedMarkedPathsForFolder(useSettingsStore.getState().settings, nextFolderPath)
+      );
       setFolderPath(nextFolderPath);
       recordFolderOpenReconcileTelemetry(getNow() - reconcileStartedAt);
 
@@ -338,7 +340,6 @@ export function useImageNavigation() {
       setFolderPath,
       setFolderWindowTitle,
       setMarkedPaths,
-      settings,
     ]
   );
 
@@ -397,7 +398,9 @@ export function useImageNavigation() {
           preferredIndex: index >= 0 ? index : 0,
           preferredPath: filePath,
         });
-        setMarkedPaths(getPersistedMarkedPathsForFolder(settings, parentFolder));
+        setMarkedPaths(
+          getPersistedMarkedPathsForFolder(useSettingsStore.getState().settings, parentFolder)
+        );
         setFolderPath(parentFolder);
       } catch (err) {
         console.error('Failed to scan folder:', err);
@@ -419,7 +422,6 @@ export function useImageNavigation() {
       emptyFolderOpenMessage,
       setFolderPath,
       setMarkedPaths,
-      settings,
     ]
   );
 
@@ -684,7 +686,7 @@ export function useImageNavigation() {
         images: state.allImages.length > 0 ? state.allImages : state.images,
         currentIndex: state.currentIndex,
         currentImagePath: state.currentImagePath,
-        sortOrder: settings.sortOrder,
+        sortOrder: useSettingsStore.getState().settings.sortOrder,
       });
 
       if (reconciliation.requiresFullRefresh) {
@@ -712,7 +714,7 @@ export function useImageNavigation() {
         preferredPath: reconciliation.preferredPath,
       });
     },
-    [applyFolderImages, refreshFolderFromDisk, settings.sortOrder]
+    [applyFolderImages, refreshFolderFromDisk]
   );
 
   const handleFolderWatcherPayloadRef = useRef(handleFolderWatcherPayload);
@@ -739,7 +741,7 @@ export function useImageNavigation() {
   }, [folderPath, isFolderScanning, refreshFolderFromDisk]);
 
   useEffect(() => {
-    if (!isMainWindowRef.current || !folderPath || !settings.autoRefreshFolder) {
+    if (!isMainWindowRef.current || !folderPath || !autoRefreshFolder) {
       return;
     }
 
@@ -773,7 +775,7 @@ export function useImageNavigation() {
         console.warn('Failed to stop folder watcher:', err);
       });
     };
-  }, [folderPath, settings.autoRefreshFolder]);
+  }, [autoRefreshFolder, folderPath]);
 
   /** Navigate to the next image */
   const goNext = useCallback(

@@ -19,13 +19,19 @@ export function useSlideshow() {
     setCurrentIndex,
   } = useViewerStore();
 
-  const settings = useSettingsStore((s) => s.settings);
+  const autoFullscreenOnSlideshow = useSettingsStore(
+    (state) => state.settings.autoFullscreenOnSlideshow
+  );
+  const loopSlideshow = useSettingsStore((state) => state.settings.loopSlideshow);
+  const shuffleSlideshow = useSettingsStore((state) => state.settings.shuffleSlideshow);
+  const slideshowIntervalSeconds = useSettingsStore(
+    (state) => state.settings.slideshowIntervalSeconds
+  );
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shuffleOrderRef = useRef<number[]>([]);
   const shuffleIndexRef = useRef(0);
   const currentIndexRef = useRef(currentIndex);
   const previousImagePathsRef = useRef(images.map((image) => image.path));
-  const imageOrderSignature = images.map((image) => image.path).join('\n');
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
@@ -72,10 +78,10 @@ export function useSlideshow() {
 
   /** Advance to the next slide */
   const advanceSlide = useCallback(() => {
-    if (settings.shuffleSlideshow) {
+    if (shuffleSlideshow) {
       shuffleIndexRef.current++;
       if (shuffleIndexRef.current >= shuffleOrderRef.current.length) {
-        if (settings.loopSlideshow) {
+        if (loopSlideshow) {
           shuffleIndexRef.current = 0;
         } else {
           void stopAndRestoreWindow();
@@ -85,18 +91,12 @@ export function useSlideshow() {
       const nextIdx = shuffleOrderRef.current[shuffleIndexRef.current];
       setCurrentIndex(nextIdx);
     } else {
-      const advanced = navigateNext(settings.loopSlideshow);
+      const advanced = navigateNext(loopSlideshow);
       if (!advanced) {
         void stopAndRestoreWindow();
       }
     }
-  }, [
-    settings.shuffleSlideshow,
-    settings.loopSlideshow,
-    navigateNext,
-    setCurrentIndex,
-    stopAndRestoreWindow,
-  ]);
+  }, [shuffleSlideshow, loopSlideshow, navigateNext, setCurrentIndex, stopAndRestoreWindow]);
 
   const reconcileShuffleOrder = useCallback(() => {
     const currentPath = images[currentIndexRef.current]?.path ?? null;
@@ -144,20 +144,13 @@ export function useSlideshow() {
   }, [generateShuffleOrder, images]);
 
   useEffect(() => {
-    if (!isSlideshowActive || !settings.shuffleSlideshow || images.length < 2) {
+    if (!isSlideshowActive || !shuffleSlideshow || images.length < 2) {
       previousImagePathsRef.current = images.map((image) => image.path);
       return;
     }
 
     reconcileShuffleOrder();
-  }, [
-    imageOrderSignature,
-    images,
-    images.length,
-    isSlideshowActive,
-    reconcileShuffleOrder,
-    settings.shuffleSlideshow,
-  ]);
+  }, [images, images.length, isSlideshowActive, reconcileShuffleOrder, shuffleSlideshow]);
 
   // Timer management
   useEffect(() => {
@@ -167,7 +160,7 @@ export function useSlideshow() {
     }
 
     if (isSlideshowActive && !isSlideshowPaused && images.length > 1) {
-      timerRef.current = setInterval(advanceSlide, settings.slideshowIntervalSeconds * 1000);
+      timerRef.current = setInterval(advanceSlide, slideshowIntervalSeconds * 1000);
     }
 
     return () => {
@@ -180,7 +173,7 @@ export function useSlideshow() {
     isSlideshowActive,
     isSlideshowPaused,
     advanceSlide,
-    settings.slideshowIntervalSeconds,
+    slideshowIntervalSeconds,
     images.length,
     currentIndex,
   ]);
@@ -189,7 +182,7 @@ export function useSlideshow() {
   const start = useCallback(async () => {
     if (images.length < 2) return;
 
-    if (settings.shuffleSlideshow) {
+    if (shuffleSlideshow) {
       generateShuffleOrder(currentIndex);
       previousImagePathsRef.current = images.map((image) => image.path);
     }
@@ -197,7 +190,7 @@ export function useSlideshow() {
     startSlideshow();
 
     // Auto-fullscreen if setting is enabled
-    if (settings.autoFullscreenOnSlideshow && !isFullscreen) {
+    if (autoFullscreenOnSlideshow && !isFullscreen) {
       try {
         const appWindow = getCurrentWindow();
         await appWindow.setFullscreen(true);
@@ -210,8 +203,8 @@ export function useSlideshow() {
     images,
     currentIndex,
     isFullscreen,
-    settings.autoFullscreenOnSlideshow,
-    settings.shuffleSlideshow,
+    autoFullscreenOnSlideshow,
+    shuffleSlideshow,
     startSlideshow,
     setFullscreen,
     generateShuffleOrder,

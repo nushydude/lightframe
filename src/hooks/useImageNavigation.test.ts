@@ -108,6 +108,45 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
   });
 
+  it('keeps open callbacks stable across settings persistence updates', () => {
+    const { result } = renderHook(() => useImageNavigation());
+    const initialOpenImage = result.current.openImage;
+    const initialOpenImageForStartup = result.current.openImageForStartup;
+    const initialOpenFolder = result.current.openFolder;
+
+    act(() => {
+      useSettingsStore.setState((state) => ({
+        settings: {
+          ...state.settings,
+          persistedMarkedFolders: [
+            {
+              folderPath: 'c:/test',
+              markedPaths: ['c:/test/img1.jpg'],
+              updatedAt: 1,
+            },
+          ],
+        },
+      }));
+    });
+
+    expect(result.current.openImage).toBe(initialOpenImage);
+    expect(result.current.openImageForStartup).toBe(initialOpenImageForStartup);
+    expect(result.current.openFolder).toBe(initialOpenFolder);
+
+    act(() => {
+      useSettingsStore.setState((state) => ({
+        settings: {
+          ...state.settings,
+          sortOrder: 'date',
+        },
+      }));
+    });
+
+    expect(result.current.openImage).toBe(initialOpenImage);
+    expect(result.current.openImageForStartup).toBe(initialOpenImageForStartup);
+    expect(result.current.openFolder).toBe(initialOpenFolder);
+  });
+
   it('returns to viewer mode when opening an image from grid mode', async () => {
     const mockImages = [
       {

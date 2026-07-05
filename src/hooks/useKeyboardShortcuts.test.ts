@@ -1,6 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
+import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 
 describe('useKeyboardShortcuts', () => {
@@ -29,6 +30,13 @@ describe('useKeyboardShortcuts', () => {
     useViewerStore.getState().reset();
     vi.clearAllMocks();
     useViewerStore.setState({ currentImagePath: 'c:/test/a.jpg' });
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        loopSlideshow: false,
+        persistedMarkedFolders: [],
+      },
+    }));
     document.body.innerHTML = '';
   });
 
@@ -254,6 +262,34 @@ describe('useKeyboardShortcuts', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(handlers.toggleMarkedCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rerender shortcut handling when unrelated persisted mark settings change', () => {
+    let renderCount = 0;
+
+    renderHook(() => {
+      renderCount++;
+      useKeyboardShortcuts(handlers);
+    });
+
+    expect(renderCount).toBe(1);
+
+    act(() => {
+      useSettingsStore.setState((state) => ({
+        settings: {
+          ...state.settings,
+          persistedMarkedFolders: [
+            {
+              folderPath: 'c:/images',
+              markedPaths: ['c:/images/one.jpg'],
+              updatedAt: 1,
+            },
+          ],
+        },
+      }));
+    });
+
+    expect(renderCount).toBe(1);
   });
 
   it('handles compare mode keyboard controls', () => {

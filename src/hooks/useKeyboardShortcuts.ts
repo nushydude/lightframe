@@ -57,7 +57,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
     promoteFocusedComparePane,
   } = useViewerStore();
 
-  const settings = useSettingsStore((s) => s.settings);
+  const loopSlideshow = useSettingsStore((state) => state.settings.loopSlideshow);
   const lastUnhandledEscapeAtRef = useRef<number | null>(null);
 
   const handleKeyDown = useCallback(
@@ -354,7 +354,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         beginNavigationKeydownTelemetry('next');
-        if (!handlers.goNext(settings.loopSlideshow)) {
+        if (!handlers.goNext(loopSlideshow)) {
           cancelPendingNavigationKeydownTelemetry();
         }
         return;
@@ -364,7 +364,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         beginNavigationKeydownTelemetry('prev');
-        if (!handlers.goPrev(settings.loopSlideshow)) {
+        if (!handlers.goPrev(loopSlideshow)) {
           cancelPendingNavigationKeydownTelemetry();
         }
         return;
@@ -443,7 +443,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       viewMode,
       isCropMode,
       cropRect,
-      settings.loopSlideshow,
+      loopSlideshow,
       setFullscreen,
       setShowSettings,
       zoomMode,
