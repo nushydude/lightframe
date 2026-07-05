@@ -39,7 +39,8 @@ export function CropOverlay({ imageBounds, cropRect }: CropOverlayProps) {
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const [isPointerDragging, setIsPointerDragging] = useState(false);
-  const { cropAspectRatio, updateCropRect } = useViewerStore();
+  const cropAspectRatio = useViewerStore((state) => state.cropAspectRatio);
+  const updateCropRect = useViewerStore((state) => state.updateCropRect);
 
   const pixelRect = useMemo(
     () => normalizedToPixelRect(cropRect, imageBounds.width, imageBounds.height),

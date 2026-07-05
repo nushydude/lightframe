@@ -96,7 +96,9 @@ function getCurrentIndexWindow(
  * Renders the scrolled viewport instead of the whole folder.
  */
 export function ThumbnailStrip() {
-  const { images, currentIndex, setCurrentIndex } = useViewerStore();
+  const images = useViewerStore((state) => state.images);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
   const initialWindow = getCurrentIndexWindow(currentIndex, 0, images.length);

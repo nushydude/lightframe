@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
+import { Profiler } from 'react';
 import { ViewerChrome } from './ViewerChrome';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
@@ -68,6 +69,22 @@ describe('ViewerChrome', () => {
   it('should not render if no image is open', () => {
     const { container } = render(<ViewerChrome {...defaultProps} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it('does not commit chrome renders for pan-only store updates', () => {
+    let commitCount = 0;
+    render(
+      <Profiler id="viewer-chrome" onRender={() => commitCount++}>
+        <ViewerChrome {...defaultProps} />
+      </Profiler>
+    );
+
+    commitCount = 0;
+    act(() => {
+      useViewerStore.getState().setPan(24, 36);
+    });
+
+    expect(commitCount).toBe(0);
   });
 
   it('should render file name and counter when image is open', () => {

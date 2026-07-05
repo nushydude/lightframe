@@ -162,28 +162,26 @@ function getNow(): number {
 /** Hook for image navigation and file opening */
 export function useImageNavigation() {
   const emptyFolderOpenMessage = 'No supported images found in the selected folder';
-  const {
-    images,
-    allImages,
-    currentIndex,
-    currentImagePath,
-    folderPath,
-    isFolderScanning,
-    setCurrentImage,
-    setImages,
-    setFolderPath,
-    setFolderScanning,
-    setCurrentIndex,
-    prepareCurationFilter,
-    setMarkedPaths,
-    navigateNext,
-    navigatePrev,
-    navigateFirst,
-    navigateLast,
-    setError,
-    beginLoadGeneration,
-    setViewMode,
-  } = useViewerStore();
+  const images = useViewerStore((state) => state.images);
+  const allImages = useViewerStore((state) => state.allImages);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const folderPath = useViewerStore((state) => state.folderPath);
+  const isFolderScanning = useViewerStore((state) => state.isFolderScanning);
+  const setCurrentImage = useViewerStore((state) => state.setCurrentImage);
+  const setImages = useViewerStore((state) => state.setImages);
+  const setFolderPath = useViewerStore((state) => state.setFolderPath);
+  const setFolderScanning = useViewerStore((state) => state.setFolderScanning);
+  const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
+  const prepareCurationFilter = useViewerStore((state) => state.prepareCurationFilter);
+  const setMarkedPaths = useViewerStore((state) => state.setMarkedPaths);
+  const navigateNext = useViewerStore((state) => state.navigateNext);
+  const navigatePrev = useViewerStore((state) => state.navigatePrev);
+  const navigateFirst = useViewerStore((state) => state.navigateFirst);
+  const navigateLast = useViewerStore((state) => state.navigateLast);
+  const setError = useViewerStore((state) => state.setError);
+  const beginLoadGeneration = useViewerStore((state) => state.beginLoadGeneration);
+  const setViewMode = useViewerStore((state) => state.setViewMode);
 
   const sortOrder = useSettingsStore((state) => state.settings.sortOrder);
   const autoRefreshFolder = useSettingsStore((state) => state.settings.autoRefreshFolder);

@@ -32,30 +32,28 @@ interface KeyboardHandlers {
 
 /** Hook for handling all keyboard shortcuts */
 export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
-  const {
-    isFullscreen,
-    isSlideshowActive,
-    showSettings,
-    showCommandPalette,
-    currentImagePath,
-    viewMode,
-    isCropMode,
-    cropRect,
-    setFullscreen,
-    setShowSettings,
-    zoomIn,
-    zoomOut,
-    resetZoom,
-    zoomMode,
-    setZoomMode,
-    updateCropRect,
-    applyCropPreview,
-    exitCropMode,
-    exitCompareMode,
-    switchCompareFocus,
-    moveCompareFocusedCandidate,
-    promoteFocusedComparePane,
-  } = useViewerStore();
+  const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
+  const showSettings = useViewerStore((state) => state.showSettings);
+  const showCommandPalette = useViewerStore((state) => state.showCommandPalette);
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const viewMode = useViewerStore((state) => state.viewMode);
+  const isCropMode = useViewerStore((state) => state.isCropMode);
+  const cropRect = useViewerStore((state) => state.cropRect);
+  const setFullscreen = useViewerStore((state) => state.setFullscreen);
+  const setShowSettings = useViewerStore((state) => state.setShowSettings);
+  const zoomIn = useViewerStore((state) => state.zoomIn);
+  const zoomOut = useViewerStore((state) => state.zoomOut);
+  const resetZoom = useViewerStore((state) => state.resetZoom);
+  const zoomMode = useViewerStore((state) => state.zoomMode);
+  const setZoomMode = useViewerStore((state) => state.setZoomMode);
+  const updateCropRect = useViewerStore((state) => state.updateCropRect);
+  const applyCropPreview = useViewerStore((state) => state.applyCropPreview);
+  const exitCropMode = useViewerStore((state) => state.exitCropMode);
+  const exitCompareMode = useViewerStore((state) => state.exitCompareMode);
+  const switchCompareFocus = useViewerStore((state) => state.switchCompareFocus);
+  const moveCompareFocusedCandidate = useViewerStore((state) => state.moveCompareFocusedCandidate);
+  const promoteFocusedComparePane = useViewerStore((state) => state.promoteFocusedComparePane);
 
   const loopSlideshow = useSettingsStore((state) => state.settings.loopSlideshow);
   const lastUnhandledEscapeAtRef = useRef<number | null>(null);

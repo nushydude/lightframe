@@ -109,17 +109,15 @@ function ComparePane({
 }
 
 export function CompareView() {
-  const {
-    images,
-    comparePrimaryIndex,
-    compareSecondaryIndex,
-    compareFocusedPane,
-    zoomMode,
-    zoomLevel,
-    panX,
-    panY,
-    moveCompareFocusedCandidate,
-  } = useViewerStore();
+  const images = useViewerStore((state) => state.images);
+  const comparePrimaryIndex = useViewerStore((state) => state.comparePrimaryIndex);
+  const compareSecondaryIndex = useViewerStore((state) => state.compareSecondaryIndex);
+  const compareFocusedPane = useViewerStore((state) => state.compareFocusedPane);
+  const zoomMode = useViewerStore((state) => state.zoomMode);
+  const zoomLevel = useViewerStore((state) => state.zoomLevel);
+  const panX = useViewerStore((state) => state.panX);
+  const panY = useViewerStore((state) => state.panY);
+  const moveCompareFocusedCandidate = useViewerStore((state) => state.moveCompareFocusedCandidate);
   const primaryImage = images[comparePrimaryIndex];
   const secondaryImage = images[compareSecondaryIndex];
   const imageStyle = useMemo<CSSProperties>(() => {

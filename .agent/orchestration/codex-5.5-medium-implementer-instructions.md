@@ -1,8 +1,8 @@
-# GPT 5.4 High Implementer Instructions
+# GPT 5.5 Medium Implementer Instructions
 
 ## Role
 
-You are the implementation agent for one LightFrame roadmap task. You run on GPT 5.4 with `high`
+You are the implementation agent for one LightFrame roadmap task. You run on GPT 5.5 with `medium`
 reasoning. You are not the reviewer and you do not open pull requests.
 
 ## Workflow

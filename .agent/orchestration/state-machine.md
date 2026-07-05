@@ -1,6 +1,6 @@
 # LightFrame Roadmap Task State Machine
 
-This state machine controls one roadmap task from selection through green pipeline. The orchestrator
+This state machine controls one roadmap task from selection through merge cleanup. The orchestrator
 must not skip states.
 
 ## State List
@@ -57,7 +57,7 @@ Exit to:
 
 Entry criteria:
 
-- Codex 5.3 implementation agent has received the task plan and constraints.
+- GPT 5.5 medium implementation agent has received the task plan and constraints.
 
 Actions:
 
@@ -115,7 +115,7 @@ Entry criteria:
 
 Actions:
 
-- Send exact failing command and relevant log excerpt to Codex 5.3.
+- Send exact failing command and relevant log excerpt to the GPT 5.5 medium implementation agent.
 - Implementation agent fixes only code-caused failures.
 - Rerun failed checks, then full gates if the fix touches shared behavior.
 
@@ -147,7 +147,7 @@ Entry criteria:
 
 Actions:
 
-- Send reviewer checklist to Codex 5.3.
+- Send reviewer checklist to the GPT 5.5 medium implementation agent.
 - Implementation agent fixes requested items only.
 - Run checks named by reviewer and local gates as needed.
 
@@ -198,7 +198,7 @@ Entry criteria:
 Actions:
 
 - Fetch failed job logs.
-- Send failure summary to Codex 5.3.
+- Send failure summary to the GPT 5.5 medium implementation agent.
 - Fix, run local gates, commit, push.
 - Send changed diff to GPT 5.5 if behavior changed.
 
@@ -218,6 +218,9 @@ Entry criteria:
 Actions:
 
 - Report PR URL, branch, checks, and any follow-up.
+- Wait for the user to merge the PR.
+- Remove the merged task worktree once the merge is confirmed.
+- Confirm the primary worktree is back on `main`.
 
 ### ABANDONED
 
@@ -254,4 +257,3 @@ PIPELINE_REMEDIATION -> PIPELINE_WAIT
 ```
 
 Any other transition requires a user decision.
-

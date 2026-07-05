@@ -41,6 +41,14 @@ Use this order unless the user explicitly reprioritizes work:
 31. `tasks/31-windows-native-codec-path.md`
 32. `tasks/32-format-specific-detail-paths.md`
 33. `tasks/33-raw-photo-sidecars.md`
+34. `tasks/34-hot-path-store-subscription-tuning.md`
+35. `tasks/35-scalable-folder-catalog.md`
+36. `tasks/36-slideshow-large-folder-reconciliation.md`
+37. `tasks/37-scalable-curation-persistence.md`
+38. `tasks/38-windows-ci-release-parity.md`
+39. `tasks/39-toolchain-install-hygiene.md`
+40. `tasks/40-tauri-capability-scope-hardening.md`
+41. `tasks/41-edit-queue-immutable-state-updates.md`
 
 ## Shared Ground Rules
 
@@ -61,4 +69,4 @@ Use these files when handing the task to a GPT 5.4 orchestrator:
 - `.agent/orchestration/gpt-5.4-orchestrator-instructions.md`
 - `.agent/orchestration/state-machine.md`
 - `.agent/orchestration/gpt-5.5-reviewer-instructions.md`
-- `.agent/orchestration/codex-5.3-implementer-instructions.md`
+- `.agent/orchestration/codex-5.5-medium-implementer-instructions.md`

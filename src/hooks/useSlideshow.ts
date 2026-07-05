@@ -5,19 +5,17 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 
 /** Hook for slideshow functionality */
 export function useSlideshow() {
-  const {
-    isSlideshowActive,
-    isSlideshowPaused,
-    images,
-    currentIndex,
-    isFullscreen,
-    startSlideshow,
-    stopSlideshow,
-    toggleSlideshowPause,
-    navigateNext,
-    setFullscreen,
-    setCurrentIndex,
-  } = useViewerStore();
+  const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
+  const isSlideshowPaused = useViewerStore((state) => state.isSlideshowPaused);
+  const images = useViewerStore((state) => state.images);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const startSlideshow = useViewerStore((state) => state.startSlideshow);
+  const stopSlideshow = useViewerStore((state) => state.stopSlideshow);
+  const toggleSlideshowPause = useViewerStore((state) => state.toggleSlideshowPause);
+  const navigateNext = useViewerStore((state) => state.navigateNext);
+  const setFullscreen = useViewerStore((state) => state.setFullscreen);
+  const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
 
   const autoFullscreenOnSlideshow = useSettingsStore(
     (state) => state.settings.autoFullscreenOnSlideshow
