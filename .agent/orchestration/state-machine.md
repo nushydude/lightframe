@@ -1,6 +1,6 @@
 # LightFrame Roadmap Task State Machine
 
-This state machine controls one roadmap task from selection through green pipeline. The orchestrator
+This state machine controls one roadmap task from selection through merge cleanup. The orchestrator
 must not skip states.
 
 ## State List
@@ -218,6 +218,9 @@ Entry criteria:
 Actions:
 
 - Report PR URL, branch, checks, and any follow-up.
+- Wait for the user to merge the PR.
+- Remove the merged task worktree once the merge is confirmed.
+- Confirm the primary worktree is back on `main`.
 
 ### ABANDONED
 

@@ -76,27 +76,26 @@ const STARTUP_WINDOW_SHOW_WATCHDOG_MS = 2000;
 
 // fallow-ignore-next-line complexity
 function App() {
-  const {
-    currentImagePath,
-    markedPaths,
-    folderPath,
-    showSettings,
-    showCommandPalette,
-    showPerformanceTelemetry,
-    errorMessage,
-    isFullscreen,
-    isSlideshowActive,
-    viewMode,
-    setError,
-    setShowControls,
-    setShowCommandPalette,
-    setShowPerformanceTelemetry,
-    setFullscreen,
-    setDefaultZoomMode,
-    resetZoom,
-    syncFavoriteFilter,
-    reset,
-  } = useViewerStore();
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const markedPaths = useViewerStore((state) => state.markedPaths);
+  const folderPath = useViewerStore((state) => state.folderPath);
+  const showSettings = useViewerStore((state) => state.showSettings);
+  const showCommandPalette = useViewerStore((state) => state.showCommandPalette);
+  const showPerformanceTelemetry = useViewerStore((state) => state.showPerformanceTelemetry);
+  const errorMessage = useViewerStore((state) => state.errorMessage);
+  const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
+  const viewMode = useViewerStore((state) => state.viewMode);
+  const showControls = useViewerStore((state) => state.showControls);
+  const setError = useViewerStore((state) => state.setError);
+  const setShowControls = useViewerStore((state) => state.setShowControls);
+  const setShowCommandPalette = useViewerStore((state) => state.setShowCommandPalette);
+  const setShowPerformanceTelemetry = useViewerStore((state) => state.setShowPerformanceTelemetry);
+  const setFullscreen = useViewerStore((state) => state.setFullscreen);
+  const setDefaultZoomMode = useViewerStore((state) => state.setDefaultZoomMode);
+  const resetZoom = useViewerStore((state) => state.resetZoom);
+  const syncFavoriteFilter = useViewerStore((state) => state.syncFavoriteFilter);
+  const reset = useViewerStore((state) => state.reset);
 
   const { settings, isLoaded, loadSettings, updateSettings } = useSettingsStore();
   const loadCuration = useCurationStore((state) => state.loadCuration);
@@ -137,7 +136,6 @@ function App() {
   const persistMarkedPathsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingMarkedSelectionRef = useRef<PendingMarkedSelectionSnapshot | null>(null);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
-  const { showControls } = useViewerStore();
   const [isSecondary, setIsSecondary] = useState(false);
   const isProjectorWindow = appWindowRef.current.label === 'secondary';
 

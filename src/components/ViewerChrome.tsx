@@ -447,58 +447,56 @@ export function ViewerChrome({
   onStopSlideshow,
   onTogglePause,
 }: ViewerChromeProps) {
-  const {
-    currentImagePath,
-    images,
-    currentIndex,
-    folderPath,
-    isFullscreen,
-    isSlideshowActive,
-    isSlideshowPaused,
-    zoomMode,
-    zoomLevel,
-    imageSmoothing,
-    imageSharpening,
-    isFolderScanning,
-    curationFilter,
-    markedPaths,
-    setFullscreen,
-    setShowSettings,
-    setZoomMode,
-    resetZoom,
-    setImageSmoothing,
-    setImageSharpening,
-    resetImageAdjustments,
-    setCurationFilter,
-    zoomIn,
-    zoomOut,
-    removeImage,
-    rotation,
-    isCropMode,
-    cropRect,
-    pendingCropPreview,
-    pendingEditsByPath,
-    cropAspectRatio,
-    viewMode,
-    setViewMode,
-    enterCompareMode,
-    exitCompareMode,
-    enterCropMode,
-    exitCropMode,
-    isCompareZoomLocked,
-    setCropAspectRatio,
-    resetCrop,
-    applyCropPreview,
-    clearCropPreview,
-    clearPendingEdits,
-    commitPendingEdits,
-    toggleMarkedPath,
-    clearMarkedPaths,
-    markAllVisibleImages,
-    setMarkedPaths,
-    setCompareZoomLocked,
-    removeImagesByPaths,
-  } = useViewerStore();
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const images = useViewerStore((state) => state.images);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const folderPath = useViewerStore((state) => state.folderPath);
+  const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
+  const isSlideshowPaused = useViewerStore((state) => state.isSlideshowPaused);
+  const zoomMode = useViewerStore((state) => state.zoomMode);
+  const zoomLevel = useViewerStore((state) => state.zoomLevel);
+  const imageSmoothing = useViewerStore((state) => state.imageSmoothing);
+  const imageSharpening = useViewerStore((state) => state.imageSharpening);
+  const isFolderScanning = useViewerStore((state) => state.isFolderScanning);
+  const curationFilter = useViewerStore((state) => state.curationFilter);
+  const markedPaths = useViewerStore((state) => state.markedPaths);
+  const setFullscreen = useViewerStore((state) => state.setFullscreen);
+  const setShowSettings = useViewerStore((state) => state.setShowSettings);
+  const setZoomMode = useViewerStore((state) => state.setZoomMode);
+  const resetZoom = useViewerStore((state) => state.resetZoom);
+  const setImageSmoothing = useViewerStore((state) => state.setImageSmoothing);
+  const setImageSharpening = useViewerStore((state) => state.setImageSharpening);
+  const resetImageAdjustments = useViewerStore((state) => state.resetImageAdjustments);
+  const setCurationFilter = useViewerStore((state) => state.setCurationFilter);
+  const zoomIn = useViewerStore((state) => state.zoomIn);
+  const zoomOut = useViewerStore((state) => state.zoomOut);
+  const removeImage = useViewerStore((state) => state.removeImage);
+  const rotation = useViewerStore((state) => state.rotation);
+  const isCropMode = useViewerStore((state) => state.isCropMode);
+  const cropRect = useViewerStore((state) => state.cropRect);
+  const pendingCropPreview = useViewerStore((state) => state.pendingCropPreview);
+  const pendingEditsByPath = useViewerStore((state) => state.pendingEditsByPath);
+  const cropAspectRatio = useViewerStore((state) => state.cropAspectRatio);
+  const viewMode = useViewerStore((state) => state.viewMode);
+  const setViewMode = useViewerStore((state) => state.setViewMode);
+  const enterCompareMode = useViewerStore((state) => state.enterCompareMode);
+  const exitCompareMode = useViewerStore((state) => state.exitCompareMode);
+  const enterCropMode = useViewerStore((state) => state.enterCropMode);
+  const exitCropMode = useViewerStore((state) => state.exitCropMode);
+  const isCompareZoomLocked = useViewerStore((state) => state.isCompareZoomLocked);
+  const setCropAspectRatio = useViewerStore((state) => state.setCropAspectRatio);
+  const resetCrop = useViewerStore((state) => state.resetCrop);
+  const applyCropPreview = useViewerStore((state) => state.applyCropPreview);
+  const clearCropPreview = useViewerStore((state) => state.clearCropPreview);
+  const clearPendingEdits = useViewerStore((state) => state.clearPendingEdits);
+  const commitPendingEdits = useViewerStore((state) => state.commitPendingEdits);
+  const toggleMarkedPath = useViewerStore((state) => state.toggleMarkedPath);
+  const clearMarkedPaths = useViewerStore((state) => state.clearMarkedPaths);
+  const markAllVisibleImages = useViewerStore((state) => state.markAllVisibleImages);
+  const setMarkedPaths = useViewerStore((state) => state.setMarkedPaths);
+  const setCompareZoomLocked = useViewerStore((state) => state.setCompareZoomLocked);
+  const removeImagesByPaths = useViewerStore((state) => state.removeImagesByPaths);
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);

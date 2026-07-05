@@ -64,21 +64,19 @@ export function ContactSheet({
   onRefreshFolder,
   onStartSlideshow,
 }: ContactSheetProps) {
-  const {
-    images,
-    currentIndex,
-    isFullscreen,
-    rotation,
-    pendingCropPreview,
-    curationFilter,
-    setCurrentIndex,
-    setFullscreen,
-    setViewMode,
-    setCurationFilter,
-    setShowSettings,
-    enterCompareMode,
-    enterCropMode,
-  } = useViewerStore();
+  const images = useViewerStore((state) => state.images);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const rotation = useViewerStore((state) => state.rotation);
+  const pendingCropPreview = useViewerStore((state) => state.pendingCropPreview);
+  const curationFilter = useViewerStore((state) => state.curationFilter);
+  const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
+  const setFullscreen = useViewerStore((state) => state.setFullscreen);
+  const setViewMode = useViewerStore((state) => state.setViewMode);
+  const setCurationFilter = useViewerStore((state) => state.setCurationFilter);
+  const setShowSettings = useViewerStore((state) => state.setShowSettings);
+  const enterCompareMode = useViewerStore((state) => state.enterCompareMode);
+  const enterCropMode = useViewerStore((state) => state.enterCropMode);
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setFavoriteForPaths = useCurationStore((state) => state.setFavoriteForPaths);

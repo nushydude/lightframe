@@ -13,18 +13,16 @@ export function useZoomPan(
   options: UseZoomPanOptions = {}
 ) {
   const { onWheelNext, onWheelPrev } = options;
-  const {
-    zoomMode,
-    zoomLevel,
-    panX,
-    panY,
-    setZoomMode,
-    setZoomLevel,
-    setPan,
-    resetZoom,
-    zoomIn,
-    zoomOut,
-  } = useViewerStore();
+  const zoomMode = useViewerStore((state) => state.zoomMode);
+  const zoomLevel = useViewerStore((state) => state.zoomLevel);
+  const panX = useViewerStore((state) => state.panX);
+  const panY = useViewerStore((state) => state.panY);
+  const setZoomMode = useViewerStore((state) => state.setZoomMode);
+  const setZoomLevel = useViewerStore((state) => state.setZoomLevel);
+  const setPan = useViewerStore((state) => state.setPan);
+  const resetZoom = useViewerStore((state) => state.resetZoom);
+  const zoomIn = useViewerStore((state) => state.zoomIn);
+  const zoomOut = useViewerStore((state) => state.zoomOut);
 
   const mouseWheelBehavior = useSettingsStore((state) => state.settings.mouseWheelBehavior);
   const [isDragging, setIsDragging] = useState(false);

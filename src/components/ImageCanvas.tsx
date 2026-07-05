@@ -428,18 +428,16 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     zoomLevel: 1,
   });
   const [imageBounds, setImageBounds] = useState<ImageBounds | null>(null);
-  const {
-    currentImagePath,
-    zoomMode,
-    currentIndex,
-    rotation,
-    cacheBuster,
-    loadGeneration,
-    isCropMode,
-    cropRect,
-    pendingCropPreview,
-    setError,
-  } = useViewerStore();
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const zoomMode = useViewerStore((state) => state.zoomMode);
+  const currentIndex = useViewerStore((state) => state.currentIndex);
+  const rotation = useViewerStore((state) => state.rotation);
+  const cacheBuster = useViewerStore((state) => state.cacheBuster);
+  const loadGeneration = useViewerStore((state) => state.loadGeneration);
+  const isCropMode = useViewerStore((state) => state.isCropMode);
+  const cropRect = useViewerStore((state) => state.cropRect);
+  const pendingCropPreview = useViewerStore((state) => state.pendingCropPreview);
+  const setError = useViewerStore((state) => state.setError);
   const {
     zoomLevel,
     panX,

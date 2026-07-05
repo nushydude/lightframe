@@ -12,7 +12,25 @@ export function CommandPalette({ commands, isOpen, onClose }: CommandPaletteProp
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const viewerState = useViewerStore();
+  const currentImagePath = useViewerStore((state) => state.currentImagePath);
+  const images = useViewerStore((state) => state.images);
+  const allImages = useViewerStore((state) => state.allImages);
+  const rotation = useViewerStore((state) => state.rotation);
+  const viewMode = useViewerStore((state) => state.viewMode);
+  const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
+  const commandEnablementState = useMemo(
+    () =>
+      ({
+        ...useViewerStore.getState(),
+        currentImagePath,
+        images,
+        allImages,
+        rotation,
+        viewMode,
+        isSlideshowActive,
+      }) as ReturnType<typeof useViewerStore.getState>,
+    [allImages, currentImagePath, images, isSlideshowActive, rotation, viewMode]
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -28,7 +46,7 @@ export function CommandPalette({ commands, isOpen, onClose }: CommandPaletteProp
     const normalizedQuery = query.trim().toLowerCase();
 
     return commands.filter((command) => {
-      if (!command.isEnabled(viewerState)) {
+      if (!command.isEnabled(commandEnablementState)) {
         return false;
       }
 
@@ -39,7 +57,7 @@ export function CommandPalette({ commands, isOpen, onClose }: CommandPaletteProp
       const searchableText = [command.label, ...(command.keywords ?? [])].join(' ').toLowerCase();
       return searchableText.includes(normalizedQuery);
     });
-  }, [commands, query, viewerState]);
+  }, [commandEnablementState, commands, query]);
 
   useEffect(() => {
     if (filteredCommands.length === 0) {
