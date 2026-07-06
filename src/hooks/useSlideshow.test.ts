@@ -312,6 +312,121 @@ describe('useSlideshow', () => {
     }
   });
 
+  it('keeps every slide reachable when a looped shuffled slideshow changes direction mid-cycle', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        loopSlideshow: true,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            slideshowDirection: 'reverse',
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      const visited = new Set([useViewerStore.getState().currentIndex]);
+      const sequenceAfterToggle: number[] = [];
+      for (let tick = 0; tick < 4; tick += 1) {
+        act(() => {
+          vi.advanceTimersByTime(4000);
+        });
+        const currentTickIndex = useViewerStore.getState().currentIndex;
+        sequenceAfterToggle.push(currentTickIndex);
+        visited.add(currentTickIndex);
+      }
+
+      expect(sequenceAfterToggle[0]).toBe(2);
+      expect(visited).toEqual(new Set([0, 1, 2]));
+      expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('creates a fresh shuffle order when shuffle is enabled during a later active slideshow', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      await act(async () => {
+        await result.current.stop();
+      });
+
+      await act(async () => {
+        useViewerStore.getState().setCurrentIndex(0);
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            shuffleSlideshow: false,
+          },
+        }));
+        await result.current.start();
+      });
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            shuffleSlideshow: true,
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState()).toMatchObject({
+        currentIndex: 1,
+        isSlideshowActive: true,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('does not rerender when unrelated persisted mark settings change', () => {
     let renderCount = 0;
 

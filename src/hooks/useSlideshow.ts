@@ -31,6 +31,7 @@ export function useSlideshow() {
   const shuffleOrderRef = useRef<number[]>([]);
   const shuffleIndexRef = useRef(0);
   const shuffleDirectionRef = useRef(slideshowDirection);
+  const isShuffleOrderReadyRef = useRef(false);
   const currentIndexRef = useRef(currentIndex);
   const previousImagePathsRef = useRef(images.map((image) => image.path));
 
@@ -74,6 +75,7 @@ export function useSlideshow() {
       shuffleOrderRef.current = indices;
       shuffleIndexRef.current = direction === 'reverse' ? indices.length : 0;
       shuffleDirectionRef.current = direction;
+      isShuffleOrderReadyRef.current = true;
     },
     [images.length, slideshowDirection]
   );
@@ -171,27 +173,50 @@ export function useSlideshow() {
       slideshowDirection === 'reverse'
         ? [currentPath, ...newPaths, ...remainingPaths]
         : [currentPath, ...remainingPaths, ...newPaths];
-    if (loopSlideshow && nextOrderPaths.length < Math.min(2, nextImagePaths.length)) {
-      const nextCyclePaths = nextImagePaths.filter((path) => path !== currentPath);
-      shufflePaths(nextCyclePaths);
-      nextOrderPaths = [currentPath, ...nextCyclePaths];
+    if (loopSlideshow) {
+      const cyclePaths = nextImagePaths.filter(
+        (path) => path !== currentPath && !nextOrderPaths.includes(path)
+      );
+      if (nextOrderPaths.length < Math.min(2, nextImagePaths.length)) {
+        shufflePaths(cyclePaths);
+      }
+      nextOrderPaths =
+        slideshowDirection === 'reverse'
+          ? [currentPath, ...cyclePaths, ...newPaths, ...remainingPaths]
+          : [...nextOrderPaths, ...cyclePaths];
     }
     shuffleOrderRef.current = nextOrderPaths
       .map((path) => nextImagePaths.indexOf(path))
       .filter((index) => index >= 0);
     shuffleIndexRef.current = slideshowDirection === 'reverse' ? shuffleOrderRef.current.length : 0;
     shuffleDirectionRef.current = slideshowDirection;
+    isShuffleOrderReadyRef.current = true;
     previousImagePathsRef.current = nextImagePaths;
   }, [generateShuffleOrder, images, loopSlideshow, shufflePaths, slideshowDirection]);
 
   useEffect(() => {
     if (!isSlideshowActive || !shuffleSlideshow || images.length < 2) {
+      isShuffleOrderReadyRef.current = false;
+      previousImagePathsRef.current = images.map((image) => image.path);
+      return;
+    }
+
+    if (!isShuffleOrderReadyRef.current) {
+      generateShuffleOrder(currentIndexRef.current, slideshowDirection);
       previousImagePathsRef.current = images.map((image) => image.path);
       return;
     }
 
     reconcileShuffleOrder();
-  }, [images, images.length, isSlideshowActive, reconcileShuffleOrder, shuffleSlideshow]);
+  }, [
+    generateShuffleOrder,
+    images,
+    images.length,
+    isSlideshowActive,
+    reconcileShuffleOrder,
+    shuffleSlideshow,
+    slideshowDirection,
+  ]);
 
   // Timer management
   useEffect(() => {
