@@ -22,6 +22,7 @@ type ToolbarIconName =
   | 'rotateCcw'
   | 'rotateCw'
   | 'settings'
+  | 'shuffle'
   | 'slideshow'
   | 'slideshowForward'
   | 'slideshowReverse'
@@ -78,6 +79,7 @@ const ICON_PATHS: Record<ToolbarIconName, string[]> = {
     'M4.9 19.1 7 17',
     'M17 7l2.1-2.1',
   ],
+  shuffle: ['M4 7h3l10 10h3', 'M17 7h3v3', 'M20 7l-4 4', 'M4 17h3l3-3', 'M17 17h3v-3'],
   slideshow: ['M7 5v14l11-7L7 5Z', 'M3.5 6.5v11', 'M20.5 6.5v11'],
   slideshowForward: ['M5 7v10l7-5-7-5Z', 'M13 7v10l7-5-7-5Z'],
   slideshowReverse: ['M19 7v10l-7-5 7-5Z', 'M11 7v10l-7-5 7-5Z'],

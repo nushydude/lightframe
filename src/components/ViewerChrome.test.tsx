@@ -234,6 +234,9 @@ describe('ViewerChrome', () => {
 
     expect(toolbarIds.indexOf('btn-ctrl-prev')).toBeLessThan(toolbarIds.indexOf('btn-ctrl-next'));
     expect(toolbarIds.indexOf('btn-ctrl-next')).toBeLessThan(
+      toolbarIds.indexOf('btn-slideshow-shuffle')
+    );
+    expect(toolbarIds.indexOf('btn-slideshow-shuffle')).toBeLessThan(
       toolbarIds.indexOf('btn-slideshow-direction')
     );
     expect(toolbarIds.indexOf('btn-slideshow-direction')).toBeLessThan(
@@ -571,14 +574,48 @@ describe('ViewerChrome', () => {
 
     const { container } = render(<ViewerChrome {...defaultProps} />);
 
-    expect(screen.getAllByLabelText('Run slideshow in reverse')).toHaveLength(2);
+    expect(screen.getAllByLabelText('Run slideshow in reverse')).toHaveLength(1);
 
     fireEvent.click(container.querySelector('#btn-slideshow-direction') as HTMLButtonElement);
 
     await waitFor(() => {
       expect(useSettingsStore.getState().settings.slideshowDirection).toBe('reverse');
     });
-    expect(screen.getAllByLabelText('Run slideshow forward')).toHaveLength(2);
+    expect(screen.getAllByLabelText('Run slideshow forward')).toHaveLength(1);
+  });
+
+  it('toggles slideshow shuffle from the playback controls', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo1.jpg',
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getByLabelText('Shuffle slideshow')).toBeInTheDocument();
+
+    fireEvent.click(container.querySelector('#btn-slideshow-shuffle') as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.shuffleSlideshow).toBe(true);
+    });
+    expect(screen.getByLabelText('Turn slideshow shuffle off')).toBeInTheDocument();
   });
 
   it('shows a top-bar slideshow button', () => {
