@@ -78,6 +78,13 @@ export function useSlideshow() {
     [images.length, slideshowDirection]
   );
 
+  const shufflePaths = useCallback((paths: string[]) => {
+    for (let i = paths.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [paths[i], paths[j]] = [paths[j], paths[i]];
+    }
+  }, []);
+
   /** Advance to the next slide */
   const advanceSlide = useCallback(() => {
     if (shuffleSlideshow) {
@@ -158,22 +165,24 @@ export function useSlideshow() {
     }
 
     const newPaths = nextImagePaths.filter((path) => !seenPaths.has(path));
-    for (let i = newPaths.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [newPaths[i], newPaths[j]] = [newPaths[j], newPaths[i]];
-    }
+    shufflePaths(newPaths);
 
-    const nextOrderPaths =
+    let nextOrderPaths =
       slideshowDirection === 'reverse'
         ? [currentPath, ...newPaths, ...remainingPaths]
         : [currentPath, ...remainingPaths, ...newPaths];
+    if (loopSlideshow && nextOrderPaths.length < Math.min(2, nextImagePaths.length)) {
+      const nextCyclePaths = nextImagePaths.filter((path) => path !== currentPath);
+      shufflePaths(nextCyclePaths);
+      nextOrderPaths = [currentPath, ...nextCyclePaths];
+    }
     shuffleOrderRef.current = nextOrderPaths
       .map((path) => nextImagePaths.indexOf(path))
       .filter((index) => index >= 0);
     shuffleIndexRef.current = slideshowDirection === 'reverse' ? shuffleOrderRef.current.length : 0;
     shuffleDirectionRef.current = slideshowDirection;
     previousImagePathsRef.current = nextImagePaths;
-  }, [generateShuffleOrder, images, slideshowDirection]);
+  }, [generateShuffleOrder, images, loopSlideshow, shufflePaths, slideshowDirection]);
 
   useEffect(() => {
     if (!isSlideshowActive || !shuffleSlideshow || images.length < 2) {

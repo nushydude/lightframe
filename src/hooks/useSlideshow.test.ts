@@ -256,6 +256,62 @@ describe('useSlideshow', () => {
     }
   });
 
+  it('keeps looping when a shuffled slideshow changes direction at the end of a cycle', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        loopSlideshow: true,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(2);
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            slideshowDirection: 'reverse',
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState()).toMatchObject({
+        currentIndex: 0,
+        isSlideshowActive: true,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('does not rerender when unrelated persisted mark settings change', () => {
     let renderCount = 0;
 
