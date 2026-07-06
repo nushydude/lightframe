@@ -131,6 +131,7 @@ describe('diagnosticsSnapshot', () => {
       settings: {
         ...DEFAULT_SETTINGS,
         performanceMode: 'fast',
+        slideshowDirection: 'reverse',
         recentFolders: [{ path: 'C:/photos', label: 'photos', openedAt: 123 }],
       },
       viewer: {
@@ -166,6 +167,7 @@ describe('diagnosticsSnapshot', () => {
     expect(snapshot.app.windowLabel).toBe('main');
     expect(snapshot.viewer.visibleImageCount).toBe(12);
     expect(snapshot.settings.performanceMode).toBe('fast');
+    expect(snapshot.settings.slideshowDirection).toBe('reverse');
     expect(snapshot.settings.recentFoldersCount).toBe(1);
     expect(snapshot.currentImageMetadata?.format).toBe('JPEG');
     expect(snapshot.codecHealth?.entries[0]?.label).toBe('HEIF');

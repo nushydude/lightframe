@@ -512,6 +512,8 @@ export function ViewerChrome({
   const cropSaveMode = useSettingsStore((state) => state.settings.cropSaveMode);
   const pinnedToolbarActions = useSettingsStore((state) => state.settings.pinnedToolbarActions);
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
+  const shuffleSlideshow = useSettingsStore((state) => state.settings.shuffleSlideshow);
+  const slideshowDirection = useSettingsStore((state) => state.settings.slideshowDirection);
   const promptProjectorGridOnOpen = useSettingsStore(
     (state) => state.settings.promptProjectorGridOnOpen
   );
@@ -717,6 +719,13 @@ export function ViewerChrome({
   const isFavorite = Boolean(currentCuration?.favorite);
   const currentRating = currentCuration?.rating ?? 0;
   const slideshowToggleLabel = isSlideshowPaused ? 'Resume slideshow' : 'Pause slideshow';
+  const slideshowShuffleLabel = shuffleSlideshow
+    ? 'Turn slideshow shuffle off'
+    : 'Shuffle slideshow';
+  const isReverseSlideshow = slideshowDirection === 'reverse';
+  const slideshowDirectionLabel = isReverseSlideshow
+    ? 'Run slideshow forward'
+    : 'Run slideshow in reverse';
   const markedPathSet = useMemo(() => new Set(markedPaths), [markedPaths]);
   const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
   const contextMenuPath = contextMenu.path;
@@ -735,6 +744,18 @@ export function ViewerChrome({
     } catch (err) {
       console.error('Failed to toggle fullscreen:', err);
     }
+  };
+
+  const handleToggleSlideshowDirection = () => {
+    void updateSettings({
+      slideshowDirection: isReverseSlideshow ? 'forward' : 'reverse',
+    });
+  };
+
+  const handleToggleSlideshowShuffle = () => {
+    void updateSettings({
+      shuffleSlideshow: !shuffleSlideshow,
+    });
   };
 
   const handleDelete = async () => {
@@ -2226,6 +2247,32 @@ export function ViewerChrome({
           id="btn-ctrl-next"
         >
           <ToolbarIcon name="next" />
+        </button>
+
+        <button
+          className={`control-btn has-tooltip ${shuffleSlideshow ? 'active' : ''}`}
+          onClick={handleToggleSlideshowShuffle}
+          data-tooltip={slideshowShuffleLabel}
+          title={slideshowShuffleLabel}
+          aria-label={slideshowShuffleLabel}
+          id="btn-slideshow-shuffle"
+          disabled={!canStartSlideshow}
+          type="button"
+        >
+          <ToolbarIcon name="shuffle" />
+        </button>
+
+        <button
+          className={`control-btn has-tooltip ${isReverseSlideshow ? 'active' : ''}`}
+          onClick={handleToggleSlideshowDirection}
+          data-tooltip={slideshowDirectionLabel}
+          title={slideshowDirectionLabel}
+          aria-label={slideshowDirectionLabel}
+          id="btn-slideshow-direction"
+          disabled={!canStartSlideshow}
+          type="button"
+        >
+          <ToolbarIcon name={isReverseSlideshow ? 'slideshowReverse' : 'slideshowForward'} />
         </button>
 
         {!isSlideshowActive ? (

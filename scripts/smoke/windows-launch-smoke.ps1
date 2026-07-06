@@ -68,6 +68,7 @@ try {
   $seedSettings = [ordered]@{
     theme = "dark"
     slideshow_interval_seconds = 4
+    slideshow_direction = "forward"
     loop_slideshow = $false
     shuffle_slideshow = $false
     auto_fullscreen_on_slideshow = $true

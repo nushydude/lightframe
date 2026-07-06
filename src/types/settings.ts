@@ -42,10 +42,12 @@ export interface WindowBounds {
 
 export type PerformanceMode = 'fast' | 'balanced' | 'lowMemory';
 export type UpdateChannel = 'stable' | 'preview';
+export type SlideshowDirection = 'forward' | 'reverse';
 
 export interface AppSettings {
   theme: 'system' | 'dark' | 'light';
   slideshowIntervalSeconds: number;
+  slideshowDirection: SlideshowDirection;
   loopSlideshow: boolean;
   shuffleSlideshow: boolean;
   autoFullscreenOnSlideshow: boolean;
@@ -78,6 +80,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   slideshowIntervalSeconds: 4,
+  slideshowDirection: 'forward',
   loopSlideshow: false,
   shuffleSlideshow: false,
   autoFullscreenOnSlideshow: true,
@@ -107,6 +110,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
   return {
     theme: settings.theme,
     slideshow_interval_seconds: settings.slideshowIntervalSeconds,
+    slideshow_direction: settings.slideshowDirection,
     loop_slideshow: settings.loopSlideshow,
     shuffle_slideshow: settings.shuffleSlideshow,
     auto_fullscreen_on_slideshow: settings.autoFullscreenOnSlideshow,
@@ -157,6 +161,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       raw.slideshow_interval_seconds,
       DEFAULT_SETTINGS.slideshowIntervalSeconds
     ),
+    slideshowDirection: parseSlideshowDirection(raw.slideshow_direction),
     loopSlideshow: booleanSetting(raw.loop_slideshow, DEFAULT_SETTINGS.loopSlideshow),
     shuffleSlideshow: booleanSetting(raw.shuffle_slideshow, DEFAULT_SETTINGS.shuffleSlideshow),
     autoFullscreenOnSlideshow: booleanSetting(
@@ -218,6 +223,10 @@ function booleanSetting(value: unknown, fallback: boolean): boolean {
 
 function parseUpdateChannel(value: unknown): UpdateChannel {
   return value === 'preview' ? 'preview' : DEFAULT_SETTINGS.updateChannel;
+}
+
+function parseSlideshowDirection(value: unknown): SlideshowDirection {
+  return value === 'reverse' ? 'reverse' : DEFAULT_SETTINGS.slideshowDirection;
 }
 
 function optionalTrimmedString(value: unknown): string | undefined {

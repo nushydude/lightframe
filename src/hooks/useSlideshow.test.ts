@@ -46,6 +46,7 @@ describe('useSlideshow', () => {
         autoFullscreenOnSlideshow: false,
         loopSlideshow: false,
         shuffleSlideshow: false,
+        slideshowDirection: 'forward',
         slideshowIntervalSeconds: 4,
       },
     }));
@@ -94,6 +95,336 @@ describe('useSlideshow', () => {
 
     expect(useViewerStore.getState().viewMode).toBe('grid');
     expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+  });
+
+  it('advances to the previous image when direction is reverse', async () => {
+    useViewerStore.setState({
+      currentImagePath: images[2].path,
+      currentIndex: 2,
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        slideshowDirection: 'reverse',
+      },
+    }));
+
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('loops from the first image to the last image in reverse direction', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        loopSlideshow: true,
+        slideshowDirection: 'reverse',
+      },
+    }));
+
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('walks a shuffled slideshow backward without stopping on the first tick', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+        slideshowDirection: 'reverse',
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentIndex).not.toBe(0);
+      expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('does not replay the starting image before stopping a non-looping reverse shuffle', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+        slideshowDirection: 'reverse',
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/2.jpg');
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/3.jpg');
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState()).toMatchObject({
+        currentImagePath: 'C:/images/3.jpg',
+        isSlideshowActive: false,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('keeps moving when a running shuffled slideshow changes to reverse before the first tick', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            slideshowDirection: 'reverse',
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState()).toMatchObject({
+        currentIndex: 2,
+        isSlideshowActive: true,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('keeps looping when a shuffled slideshow changes direction at the end of a cycle', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        loopSlideshow: true,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(2);
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            slideshowDirection: 'reverse',
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState()).toMatchObject({
+        currentIndex: 0,
+        isSlideshowActive: true,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('keeps every slide reachable when a looped shuffled slideshow changes direction mid-cycle', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        loopSlideshow: true,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            slideshowDirection: 'reverse',
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      const visited = new Set([useViewerStore.getState().currentIndex]);
+      const sequenceAfterToggle: number[] = [];
+      for (let tick = 0; tick < 4; tick += 1) {
+        act(() => {
+          vi.advanceTimersByTime(4000);
+        });
+        const currentTickIndex = useViewerStore.getState().currentIndex;
+        sequenceAfterToggle.push(currentTickIndex);
+        visited.add(currentTickIndex);
+      }
+
+      expect(sequenceAfterToggle[0]).toBe(2);
+      expect(visited).toEqual(new Set([0, 1, 2]));
+      expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('creates a fresh shuffle order when shuffle is enabled during a later active slideshow', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      await act(async () => {
+        await result.current.stop();
+      });
+
+      await act(async () => {
+        useViewerStore.getState().setCurrentIndex(0);
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            shuffleSlideshow: false,
+          },
+        }));
+        await result.current.start();
+      });
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            shuffleSlideshow: true,
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState()).toMatchObject({
+        currentIndex: 1,
+        isSlideshowActive: true,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it('does not rerender when unrelated persisted mark settings change', () => {
@@ -150,6 +481,61 @@ describe('useSlideshow', () => {
       });
 
       expect(useViewerStore.getState().currentIndex).toBe(1);
+
+      act(() => {
+        useViewerStore.setState((state) => ({
+          images: [
+            ...state.images,
+            {
+              path: 'C:/images/4.jpg',
+              file_name: '4.jpg',
+              extension: 'jpg',
+              size_bytes: 1,
+              modified_at: '1',
+            },
+          ],
+        }));
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/3.jpg');
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/4.jpg');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('preserves reverse shuffle progress when new images are added mid-slideshow', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+        slideshowDirection: 'reverse',
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentImagePath).toBe('C:/images/2.jpg');
 
       act(() => {
         useViewerStore.setState((state) => ({
