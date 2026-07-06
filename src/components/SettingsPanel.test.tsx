@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { SettingsPanel } from './SettingsPanel';
@@ -63,6 +63,19 @@ describe('SettingsPanel', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Format Support')).toBeInTheDocument();
+    });
+  });
+
+  it('updates the slideshow direction setting', async () => {
+    render(<SettingsPanel />);
+
+    const select = screen.getByLabelText('Slideshow direction');
+    expect(select).toHaveValue('forward');
+
+    fireEvent.change(select, { target: { value: 'reverse' } });
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.slideshowDirection).toBe('reverse');
     });
   });
 });

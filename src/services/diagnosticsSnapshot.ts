@@ -47,6 +47,7 @@ export interface DiagnosticsSnapshot {
     promptProjectorGridOnOpen: boolean;
     openProjectorInGridView: boolean;
     slideshowIntervalSeconds: number;
+    slideshowDirection: AppSettings['slideshowDirection'];
     loopSlideshow: boolean;
     shuffleSlideshow: boolean;
     autoFullscreenOnSlideshow: boolean;
@@ -117,6 +118,7 @@ export function buildDiagnosticsSnapshot(
       promptProjectorGridOnOpen: options.settings.promptProjectorGridOnOpen,
       openProjectorInGridView: options.settings.openProjectorInGridView,
       slideshowIntervalSeconds: options.settings.slideshowIntervalSeconds,
+      slideshowDirection: options.settings.slideshowDirection,
       loopSlideshow: options.settings.loopSlideshow,
       shuffleSlideshow: options.settings.shuffleSlideshow,
       autoFullscreenOnSlideshow: options.settings.autoFullscreenOnSlideshow,

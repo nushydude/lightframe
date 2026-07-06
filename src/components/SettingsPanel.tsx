@@ -308,6 +308,25 @@ export function SettingsPanel() {
             </div>
 
             <div className="setting-row">
+              <span className="setting-label">Direction</span>
+              <select
+                className="setting-select"
+                value={settings.slideshowDirection}
+                aria-label="Slideshow direction"
+                onChange={(e) =>
+                  handleChange(
+                    'slideshowDirection',
+                    e.target.value as AppSettings['slideshowDirection']
+                  )
+                }
+                id="setting-slideshow-direction"
+              >
+                <option value="forward">Forward</option>
+                <option value="reverse">Reverse</option>
+              </select>
+            </div>
+
+            <div className="setting-row">
               <span className="setting-label">Loop slideshow</span>
               <label className="toggle-switch">
                 <input

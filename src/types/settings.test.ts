@@ -131,6 +131,17 @@ describe('settingsToRust', () => {
     });
   });
 
+  it('maps slideshow direction to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      slideshowDirection: 'reverse',
+    });
+
+    expect(rust).toMatchObject({
+      slideshow_direction: 'reverse',
+    });
+  });
+
   it('maps auto-refresh folder preference to rust payloads', () => {
     const rust = settingsToRust({
       ...DEFAULT_SETTINGS,
@@ -291,6 +302,14 @@ describe('settingsFromRust', () => {
     expect(settingsFromRust({ crop_save_mode: 'overwrite' }).cropSaveMode).toBe('overwrite');
     expect(settingsFromRust({ crop_save_mode: 'mystery' }).cropSaveMode).toBe('copy');
     expect(settingsFromRust({}).cropSaveMode).toBe('copy');
+  });
+
+  it('parses slideshow direction and falls back to forward', () => {
+    expect(settingsFromRust({ slideshow_direction: 'reverse' }).slideshowDirection).toBe('reverse');
+    expect(settingsFromRust({ slideshow_direction: 'sideways' }).slideshowDirection).toBe(
+      'forward'
+    );
+    expect(settingsFromRust({}).slideshowDirection).toBe('forward');
   });
 
   it('parses saved view presets and filters invalid values', () => {

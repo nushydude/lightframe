@@ -46,6 +46,7 @@ describe('useSlideshow', () => {
         autoFullscreenOnSlideshow: false,
         loopSlideshow: false,
         shuffleSlideshow: false,
+        slideshowDirection: 'forward',
         slideshowIntervalSeconds: 4,
       },
     }));
@@ -94,6 +95,84 @@ describe('useSlideshow', () => {
 
     expect(useViewerStore.getState().viewMode).toBe('grid');
     expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+  });
+
+  it('advances to the previous image when direction is reverse', async () => {
+    useViewerStore.setState({
+      currentImagePath: images[2].path,
+      currentIndex: 2,
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        slideshowDirection: 'reverse',
+      },
+    }));
+
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('loops from the first image to the last image in reverse direction', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        loopSlideshow: true,
+        slideshowDirection: 'reverse',
+      },
+    }));
+
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('walks a shuffled slideshow backward without stopping on the first tick', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+        slideshowDirection: 'reverse',
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState().currentIndex).not.toBe(0);
+      expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it('does not rerender when unrelated persisted mark settings change', () => {

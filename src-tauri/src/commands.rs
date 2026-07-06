@@ -120,6 +120,8 @@ enum RotationSaveStrategy {
 pub struct AppSettings {
     pub theme: String,
     pub slideshow_interval_seconds: u32,
+    #[serde(default = "default_slideshow_direction")]
+    pub slideshow_direction: String,
     pub loop_slideshow: bool,
     pub shuffle_slideshow: bool,
     pub auto_fullscreen_on_slideshow: bool,
@@ -257,6 +259,10 @@ fn default_crop_save_mode() -> String {
     "copy".to_string()
 }
 
+fn default_slideshow_direction() -> String {
+    "forward".to_string()
+}
+
 fn default_auto_refresh_folder() -> bool {
     true
 }
@@ -274,6 +280,7 @@ impl Default for AppSettings {
         AppSettings {
             theme: "dark".to_string(),
             slideshow_interval_seconds: 4,
+            slideshow_direction: default_slideshow_direction(),
             loop_slideshow: false,
             shuffle_slideshow: false,
             auto_fullscreen_on_slideshow: true,
@@ -3779,6 +3786,7 @@ mod tests {
         assert!(settings.window_bounds_by_display.is_empty());
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");
+        assert_eq!(settings.slideshow_direction, "forward");
         assert!(settings.auto_refresh_folder);
         assert_eq!(settings.update_channel, "stable");
         assert_eq!(
