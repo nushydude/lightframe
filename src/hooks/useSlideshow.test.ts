@@ -215,6 +215,47 @@ describe('useSlideshow', () => {
     }
   });
 
+  it('keeps moving when a running shuffled slideshow changes to reverse before the first tick', async () => {
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        shuffleSlideshow: true,
+      },
+    }));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    try {
+      const { result } = renderHook(() => useSlideshow());
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      await act(async () => {
+        useSettingsStore.setState((state) => ({
+          ...state,
+          settings: {
+            ...state.settings,
+            slideshowDirection: 'reverse',
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+
+      expect(useViewerStore.getState()).toMatchObject({
+        currentIndex: 2,
+        isSlideshowActive: true,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('does not rerender when unrelated persisted mark settings change', () => {
     let renderCount = 0;
 
