@@ -135,6 +135,7 @@ export function useSlideshow() {
     const previousImagePaths = previousImagePathsRef.current;
     const nextImagePaths = images.map((image) => image.path);
     const nextPathSet = new Set(nextImagePaths);
+    const nextPathIndexByPath = new Map(nextImagePaths.map((path, index) => [path, index]));
     const previousDirection = shuffleDirectionRef.current;
     const previousOrderPaths = shuffleOrderRef.current
       .map((index) => previousImagePaths[index])
@@ -174,8 +175,9 @@ export function useSlideshow() {
         ? [currentPath, ...newPaths, ...remainingPaths]
         : [currentPath, ...remainingPaths, ...newPaths];
     if (loopSlideshow) {
+      const nextOrderPathSet = new Set(nextOrderPaths);
       const cyclePaths = nextImagePaths.filter(
-        (path) => path !== currentPath && !nextOrderPaths.includes(path)
+        (path) => path !== currentPath && !nextOrderPathSet.has(path)
       );
       if (nextOrderPaths.length < Math.min(2, nextImagePaths.length)) {
         shufflePaths(cyclePaths);
@@ -186,7 +188,7 @@ export function useSlideshow() {
           : [...nextOrderPaths, ...cyclePaths];
     }
     shuffleOrderRef.current = nextOrderPaths
-      .map((path) => nextImagePaths.indexOf(path))
+      .map((path) => nextPathIndexByPath.get(path) ?? -1)
       .filter((index) => index >= 0);
     shuffleIndexRef.current = slideshowDirection === 'reverse' ? shuffleOrderRef.current.length : 0;
     shuffleDirectionRef.current = slideshowDirection;
