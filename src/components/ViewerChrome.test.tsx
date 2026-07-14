@@ -33,6 +33,7 @@ describe('ViewerChrome', () => {
     onRefreshFolder: vi.fn(),
     onGoHome: vi.fn(),
     onFirst: vi.fn(),
+    onLast: vi.fn(),
     onNext: vi.fn(),
     onPrev: vi.fn(),
     onStartSlideshow: vi.fn(),
@@ -206,7 +207,21 @@ describe('ViewerChrome', () => {
     expect(defaultProps.onFirst).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps next image beside previous before the slideshow control', () => {
+  it('should call onLast when last-image button is clicked', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo1.jpg' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const lastButton = screen.getByRole('button', { name: 'Last image' });
+    fireEvent.click(lastButton);
+
+    expect(lastButton).toHaveAttribute('id', 'btn-ctrl-last');
+    expect(lastButton).toHaveAttribute('title', 'Last image (End)');
+    expect(lastButton).toHaveAttribute('data-tooltip', 'Last image (End)');
+    expect(defaultProps.onLast).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders endpoint and adjacent navigation controls in order', () => {
     useViewerStore.setState({
       currentImagePath: 'C:/photo1.jpg',
       images: [
@@ -232,7 +247,12 @@ describe('ViewerChrome', () => {
       (button) => button.id
     );
 
-    expect(toolbarIds.indexOf('btn-ctrl-prev')).toBeLessThan(toolbarIds.indexOf('btn-ctrl-next'));
+    expect(toolbarIds.slice(0, 4)).toEqual([
+      'btn-ctrl-first',
+      'btn-ctrl-prev',
+      'btn-ctrl-next',
+      'btn-ctrl-last',
+    ]);
     expect(toolbarIds.indexOf('btn-ctrl-next')).toBeLessThan(
       toolbarIds.indexOf('btn-slideshow-shuffle')
     );
@@ -270,8 +290,12 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    fireEvent.click(screen.getByLabelText('Back to landing page'));
+    const startButton = screen.getByLabelText('Return to start screen');
+    fireEvent.click(startButton);
 
+    expect(startButton).toHaveTextContent('Start');
+    expect(startButton).toHaveAttribute('title', 'Return to start screen');
+    expect(startButton).toHaveAttribute('data-tooltip', 'Return to start screen');
     expect(defaultProps.onGoHome).toHaveBeenCalledTimes(1);
   });
 
@@ -481,7 +505,65 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    expect(screen.getByText(/▶ Slideshow/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Slideshow · Sequential · 4s');
+    expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('shows and updates all slideshow options from the toolbar disclosure', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/photo1.jpg',
+      images: [
+        {
+          path: 'C:/photo1.jpg',
+          file_name: 'photo1.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/photo2.jpg',
+          file_name: 'photo2.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '2',
+        },
+      ],
+    });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    const optionsTrigger = container.querySelector('.slideshow-options-trigger') as HTMLElement;
+    fireEvent.click(optionsTrigger);
+
+    expect(screen.getByLabelText('Slideshow order')).toHaveValue('sequential');
+    expect(screen.getByLabelText('Slideshow direction')).toHaveValue('forward');
+    expect(screen.getByLabelText('Slideshow repeat')).toHaveValue('off');
+    expect(screen.getByLabelText('Slideshow interval in seconds')).toHaveValue(4);
+    expect(screen.getByLabelText('Enter fullscreen automatically')).toBeChecked();
+
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Slideshow options' }), { key: 'Escape' });
+    expect(document.activeElement).toBe(optionsTrigger);
+    expect(optionsTrigger.parentElement).not.toHaveAttribute('open');
+    fireEvent.click(optionsTrigger);
+
+    fireEvent.change(screen.getByLabelText('Slideshow order'), { target: { value: 'shuffle' } });
+    fireEvent.change(screen.getByLabelText('Slideshow direction'), {
+      target: { value: 'reverse' },
+    });
+    fireEvent.change(screen.getByLabelText('Slideshow repeat'), { target: { value: 'on' } });
+    fireEvent.change(screen.getByLabelText('Slideshow interval in seconds'), {
+      target: { value: '12' },
+    });
+    fireEvent.click(screen.getByLabelText('Enter fullscreen automatically'));
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings).toMatchObject({
+        shuffleSlideshow: true,
+        slideshowDirection: 'reverse',
+        loopSlideshow: true,
+        slideshowIntervalSeconds: 12,
+        autoFullscreenOnSlideshow: false,
+      });
+    });
   });
 
   it('shows stop slideshow controls when slideshow is active', () => {

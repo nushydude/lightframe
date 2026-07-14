@@ -1,4 +1,5 @@
 import { useViewerStore } from '../state/viewerStore';
+import { useSettingsStore } from '../state/settingsStore';
 import { canSaveRotationForPath } from './viewerActions';
 import { CURATION_FILTER_OPTIONS } from './curationFilter';
 
@@ -245,6 +246,39 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       shortcut: 'F5',
       isEnabled: (state) => Boolean(state.currentImagePath) && !state.isSlideshowActive,
       run: () => options.startSlideshow(),
+    },
+    {
+      id: 'toggle-slideshow-shuffle',
+      label: 'Toggle Slideshow Shuffle',
+      keywords: ['slideshow', 'shuffle', 'random'],
+      isEnabled: (state) => state.images.length > 1,
+      run: () => {
+        const settings = useSettingsStore.getState();
+        return settings.updateSettings({ shuffleSlideshow: !settings.settings.shuffleSlideshow });
+      },
+    },
+    {
+      id: 'toggle-slideshow-repeat',
+      label: 'Toggle Slideshow Repeat',
+      keywords: ['slideshow', 'repeat', 'loop'],
+      isEnabled: (state) => state.images.length > 1,
+      run: () => {
+        const settings = useSettingsStore.getState();
+        return settings.updateSettings({ loopSlideshow: !settings.settings.loopSlideshow });
+      },
+    },
+    {
+      id: 'toggle-slideshow-direction',
+      label: 'Toggle Slideshow Direction',
+      keywords: ['slideshow', 'direction', 'forward', 'reverse'],
+      isEnabled: (state) => state.images.length > 1,
+      run: () => {
+        const settings = useSettingsStore.getState();
+        return settings.updateSettings({
+          slideshowDirection:
+            settings.settings.slideshowDirection === 'forward' ? 'reverse' : 'forward',
+        });
+      },
     },
     {
       id: 'toggle-mark-current',

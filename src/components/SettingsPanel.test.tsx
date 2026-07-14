@@ -78,4 +78,39 @@ describe('SettingsPanel', () => {
       expect(useSettingsStore.getState().settings.slideshowDirection).toBe('reverse');
     });
   });
+
+  it('shows saving state and a retryable save error', async () => {
+    const retrySaveSettings = vi.fn().mockResolvedValue(true);
+    useSettingsStore.setState({
+      saveStatus: 'saving',
+      saveError: null,
+      loadError: null,
+      retrySaveSettings,
+    });
+
+    render(<SettingsPanel />);
+    expect(screen.getByRole('status')).toHaveTextContent('Saving settings…');
+
+    useSettingsStore.setState({ saveStatus: 'error', saveError: 'disk full' });
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Settings could not be saved. disk full'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(retrySaveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows load errors separately without a save retry action', () => {
+    useSettingsStore.setState({
+      saveStatus: 'idle',
+      saveError: null,
+      loadError: 'settings file unavailable',
+    });
+
+    render(<SettingsPanel />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Saved settings could not be loaded. Defaults are in use. settings file unavailable'
+    );
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
 });

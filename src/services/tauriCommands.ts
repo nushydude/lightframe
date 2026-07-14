@@ -142,6 +142,16 @@ export interface FolderWatcherPayload {
 
 const FOLDER_WATCHER_EVENT = 'folder-watcher-changed';
 
+/** Prevent the display from sleeping while a slideshow is running. */
+export async function acquireSlideshowDisplayInhibition(): Promise<void> {
+  return invoke('acquire_slideshow_display_inhibition');
+}
+
+/** Release the slideshow display-sleep inhibition. */
+export async function releaseSlideshowDisplayInhibition(): Promise<void> {
+  return invoke('release_slideshow_display_inhibition');
+}
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });

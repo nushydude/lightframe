@@ -4,6 +4,28 @@ This folder converts the README roadmap into implementation-ready task plans for
 Each task is intentionally scoped as a single branch and pull request unless the orchestrator decides
 to split it further because the code diff becomes too broad.
 
+## Current Audit
+
+The current feature, performance, bug, and UI/UX audit is
+[`AUDIT-2026-07-14.md`](AUDIT-2026-07-14.md). It records the audited version and evidence, distinguishes
+features that already exist from missing behavior, assigns priorities, and defines the recommended
+execution order for active work.
+
+Tasks 01-41 are the original roadmap and audit backlog; some have already been implemented even
+though their task files remain as design history. Before starting any task, compare its “Current
+Code Context” with `main` and the current audit. Do not reimplement behavior already present.
+
+Tasks 42-49 were created by the July 2026 audit:
+
+42. `tasks/42-folder-sort-correctness.md`
+43. `tasks/43-folder-sort-controls-and-fields.md`
+44. `tasks/44-slideshow-mode-discoverability.md`
+45. `tasks/45-symmetric-first-last-navigation.md`
+46. `tasks/46-contact-sheet-filename-search.md`
+47. `tasks/47-keyboard-accessible-image-collections.md`
+48. `tasks/48-settings-validation-and-save-recovery.md`
+49. `tasks/49-slideshow-display-sleep-inhibition.md`
+
 ## Execution Order
 
 Use this order unless the user explicitly reprioritizes work:
@@ -49,6 +71,9 @@ Use this order unless the user explicitly reprioritizes work:
 39. `tasks/39-toolchain-install-hygiene.md`
 40. `tasks/40-tauri-capability-scope-hardening.md`
 41. `tasks/41-edit-queue-immutable-state-updates.md`
+
+For new work, use the priority order in `AUDIT-2026-07-14.md` instead of assuming numeric task order
+means unimplemented work.
 
 ## Shared Ground Rules
 

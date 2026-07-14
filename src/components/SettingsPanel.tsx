@@ -27,7 +27,7 @@ import { PERFORMANCE_MODE_LABELS } from '../services/performanceMode';
 
 interface RecentFoldersSettingsProps {
   settings: AppSettings;
-  updateSettings: (settings: Partial<AppSettings>) => Promise<void>;
+  updateSettings: (settings: Partial<AppSettings>) => Promise<boolean>;
 }
 
 function normalizedFolderKey(folderPath: string): string {
@@ -125,7 +125,8 @@ function SavedViewPresetsSettings({ settings, updateSettings }: RecentFoldersSet
 
 /** Settings panel overlay */
 export function SettingsPanel() {
-  const { settings, updateSettings } = useSettingsStore();
+  const { settings, updateSettings, saveStatus, saveError, loadError, retrySaveSettings } =
+    useSettingsStore();
   const setShowSettings = useViewerStore((s) => s.setShowSettings);
 
   const handleChange = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -217,6 +218,33 @@ export function SettingsPanel() {
             ✕
           </button>
         </div>
+
+        {(saveStatus === 'saving' || saveStatus === 'error' || loadError) && (
+          <div className="settings-status" aria-live="polite">
+            {saveStatus === 'saving' && (
+              <div className="settings-status-saving" role="status">
+                Saving settings…
+              </div>
+            )}
+            {saveStatus === 'error' && (
+              <div className="settings-status-error" role="alert">
+                <span>Settings could not be saved. {saveError || 'Unknown error'}</span>
+                <button
+                  className="setting-button-secondary"
+                  onClick={() => void retrySaveSettings()}
+                  type="button"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {loadError && (
+              <div className="settings-status-error" role="alert">
+                Saved settings could not be loaded. Defaults are in use. {loadError}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="settings-body">
           {/* Appearance */}
@@ -412,7 +440,7 @@ export function SettingsPanel() {
             </div>
 
             <div className="setting-row">
-              <span className="setting-label">Sort order</span>
+              <span className="setting-label">Default folder sort</span>
               <select
                 className="setting-select"
                 value={settings.sortOrder}
@@ -421,10 +449,27 @@ export function SettingsPanel() {
                 }
                 id="setting-sort-order"
               >
-                <option value="name">Name</option>
-                <option value="date">Date Modified</option>
+                <option value="name">Filename</option>
+                <option value="created">Date Created</option>
+                <option value="modified">Date Modified</option>
                 <option value="size">File Size</option>
                 <option value="random">Random</option>
+              </select>
+            </div>
+
+            <div className="setting-row">
+              <span className="setting-label">Direction</span>
+              <select
+                className="setting-select"
+                value={settings.sortDirection}
+                disabled={settings.sortOrder === 'random'}
+                onChange={(e) =>
+                  handleChange('sortDirection', e.target.value as AppSettings['sortDirection'])
+                }
+                id="setting-sort-direction"
+              >
+                <option value="ascending">Ascending</option>
+                <option value="descending">Descending</option>
               </select>
             </div>
 

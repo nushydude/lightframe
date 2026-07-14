@@ -4,6 +4,7 @@ export interface ImageFile {
   extension: string;
   size_bytes: number;
   modified_at: string | null;
+  created_at?: string | null;
 }
 
 export interface ImageMetadata {

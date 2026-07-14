@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FOLDER_INDEX_SCHEMA_VERSION: u32 = 2;
+const FOLDER_INDEX_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct PersistedFolderIndex {
@@ -31,6 +31,7 @@ struct PersistedImageRecord {
     extension: String,
     size_bytes: u64,
     modified_at: Option<String>,
+    created_at: Option<String>,
     #[serde(default)]
     width: Option<u32>,
     #[serde(default)]
@@ -49,7 +50,9 @@ impl PersistedImageRecord {
     ) -> Self {
         let preserve_metadata = previous
             .map(|record| {
-                record.size_bytes == image.size_bytes && record.modified_at == image.modified_at
+                record.size_bytes == image.size_bytes
+                    && record.modified_at == image.modified_at
+                    && record.created_at == image.created_at
             })
             .unwrap_or(false);
 
@@ -64,6 +67,7 @@ impl PersistedImageRecord {
             extension: image.extension.clone(),
             size_bytes: image.size_bytes,
             modified_at: image.modified_at.clone(),
+            created_at: image.created_at.clone(),
             width: previous.filter(|_| preserve_metadata).and_then(|record| record.width),
             height: previous.filter(|_| preserve_metadata).and_then(|record| record.height),
             format: previous.filter(|_| preserve_metadata).and_then(|record| record.format.clone()),
@@ -78,6 +82,7 @@ impl PersistedImageRecord {
             extension: self.extension.clone(),
             size_bytes: self.size_bytes,
             modified_at: self.modified_at.clone(),
+            created_at: self.created_at.clone(),
         }
     }
 }
@@ -310,6 +315,7 @@ mod tests {
                 .to_string(),
             size_bytes,
             modified_at: Some(modified_at.to_string()),
+            created_at: None,
         }
     }
 

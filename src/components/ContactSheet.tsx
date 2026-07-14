@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,7 +20,13 @@ import {
 import { closeSecondaryWindow, openSecondaryWindow } from '../services/tauriCommands';
 import { useThumbnailRefreshSignal } from '../hooks/useThumbnailRefreshSignal';
 import { useProjectorState } from '../hooks/useProjectorState';
+import { FolderSortMenu } from './FolderSortMenu';
 import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
+import {
+  normalizeContactSheetQuery,
+  searchContactSheetImages,
+  type ContactSheetSearchResult,
+} from '../services/contactSheetSearch';
 import {
   chooseQuickDestinationFolder,
   copyCurrentImage,
@@ -35,6 +42,7 @@ import { getCurationFilterCountLabel } from '../services/curationFilter';
 import type { QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
 import { ToolbarIcon } from './ToolbarIcon';
+import { isInteractiveTargetOutsideGrid } from '../services/keyboardTarget';
 
 const GRID_ITEM_SIZE = 140;
 const GRID_GAP = 20;
@@ -92,17 +100,29 @@ export function ContactSheet({
   const [columns, setColumns] = useState(1);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [bulkCurationPending, setBulkCurationPending] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
   const contactSheetRootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const scrollRafRef = useRef<number | null>(null);
   const bulkCurationPendingRef = useRef(false);
   const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
 
-  const totalRows = Math.ceil(images.length / columns);
-  const activeRow = currentIndex >= 0 ? Math.floor(currentIndex / columns) : 0;
+  const normalizedQuery = useMemo(() => normalizeContactSheetQuery(searchQuery), [searchQuery]);
+  const searchResults = useMemo(
+    () => searchContactSheetImages(images, normalizedQuery),
+    [images, normalizedQuery]
+  );
+  const displayedImages = useMemo(() => searchResults.map(({ image }) => image), [searchResults]);
+  const currentResultIndex = searchResults.findIndex(
+    ({ image }) => image.path === images[currentIndex]?.path
+  );
+  const totalRows = Math.ceil(searchResults.length / columns);
+  const activeRow = currentResultIndex >= 0 ? Math.floor(currentResultIndex / columns) : 0;
   const visibleRange = useMemo(() => {
     const firstRow = Math.max(0, Math.floor(scrollTop / GRID_ROW_HEIGHT) - GRID_OVERSCAN_ROWS);
     const rowCount = Math.ceil(viewportHeight / GRID_ROW_HEIGHT) + GRID_OVERSCAN_ROWS * 2;
@@ -110,15 +130,15 @@ export function ContactSheet({
 
     return {
       startIndex: firstRow * columns,
-      endIndex: Math.min(images.length, lastRow * columns),
+      endIndex: Math.min(searchResults.length, lastRow * columns),
       topHeight: firstRow * GRID_ROW_HEIGHT,
       bottomHeight: Math.max(0, (totalRows - lastRow) * GRID_ROW_HEIGHT),
     };
-  }, [columns, images.length, scrollTop, totalRows, viewportHeight]);
+  }, [columns, searchResults.length, scrollTop, totalRows, viewportHeight]);
 
-  const visibleImages = useMemo(
-    () => images.slice(visibleRange.startIndex, visibleRange.endIndex),
-    [images, visibleRange.endIndex, visibleRange.startIndex]
+  const visibleResults = useMemo(
+    () => searchResults.slice(visibleRange.startIndex, visibleRange.endIndex),
+    [searchResults, visibleRange.endIndex, visibleRange.startIndex]
   );
   const currentImagePath = currentIndex >= 0 ? (images[currentIndex]?.path ?? null) : null;
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
@@ -128,6 +148,14 @@ export function ContactSheet({
   const cropDisabledByRotation = rotation !== 0;
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
   const hasSelection = selectedPaths.length > 0;
+
+  useLayoutEffect(() => {
+    const focusPath = searchResults[currentResultIndex]?.image.path ?? displayedImages[0]?.path;
+    const activeCell = Array.from(
+      gridRef.current?.querySelectorAll<HTMLButtonElement>('[role="gridcell"]') ?? []
+    ).find((cell) => cell.dataset.imagePath === focusPath);
+    activeCell?.focus();
+  }, [currentResultIndex, displayedImages, searchResults]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -167,7 +195,7 @@ export function ContactSheet({
 
   useEffect(() => {
     preloadThumbnails(
-      visibleImages.map((image) => ({
+      visibleResults.map(({ image }) => ({
         path: image.path,
         sizeBytes: image.size_bytes,
         modifiedAt: image.modified_at,
@@ -181,17 +209,20 @@ export function ContactSheet({
 
     const keepStart = Math.max(0, visibleRange.startIndex - columns * GRID_OVERSCAN_ROWS * 4);
     const keepEnd = Math.min(
-      images.length,
+      searchResults.length,
       visibleRange.endIndex + columns * GRID_OVERSCAN_ROWS * 4
     );
-    const keepPaths = new Set(images.slice(keepStart, keepEnd).map((image) => image.path));
+    const keepPaths = new Set(
+      searchResults.slice(keepStart, keepEnd).map(({ image }) => image.path)
+    );
     evictThumbnailsExcept(keepPaths);
   }, [
     columns,
     handleThumbnailLoaded,
     images,
     isThumbnailConsumerActive,
-    visibleImages,
+    searchResults,
+    visibleResults,
     visibleRange.endIndex,
     visibleRange.startIndex,
   ]);
@@ -209,6 +240,16 @@ export function ContactSheet({
     setSelectedPaths((current) => current.filter((path) => validPaths.has(path)));
   }, [images]);
 
+  useEffect(() => {
+    const visiblePaths = new Set(searchResults.map(({ image }) => image.path));
+    setSelectedPaths((current) => current.filter((path) => visiblePaths.has(path)));
+    setLastSelectedIndex(null);
+    setScrollTop(0);
+    if (contentRef.current) {
+      contentRef.current.scrollTop = 0;
+    }
+  }, [normalizedQuery, searchResults]);
+
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const nextScrollTop = event.currentTarget.scrollTop;
     if (scrollRafRef.current !== null) return;
@@ -219,38 +260,47 @@ export function ContactSheet({
     });
   };
 
-  const handleSelect = (index: number) => {
-    setCurrentIndex(index);
-    setViewMode('viewer');
+  const handleSelect = useCallback(
+    (result: ContactSheetSearchResult) => {
+      setCurrentIndex(result.sourceIndex);
+      setViewMode('viewer');
+    },
+    [setCurrentIndex, setViewMode]
+  );
+
+  const handleSelectForProjector = (result: ContactSheetSearchResult) => {
+    setCurrentIndex(result.sourceIndex);
   };
 
-  const handleSelectForProjector = (index: number) => {
-    setCurrentIndex(index);
-  };
-
-  const handleGridItemClick = (event: MouseEvent<HTMLDivElement>, index: number, path: string) => {
+  const handleGridItemClick = (
+    event: MouseEvent<HTMLButtonElement>,
+    resultIndex: number,
+    result: ContactSheetSearchResult
+  ) => {
     if (event.shiftKey && lastSelectedIndex !== null) {
-      setSelectedPaths((current) => selectRangePaths(images, lastSelectedIndex, index, current));
-      setLastSelectedIndex(index);
-      setCurrentIndex(index);
+      setSelectedPaths((current) =>
+        selectRangePaths(displayedImages, lastSelectedIndex, resultIndex, current)
+      );
+      setLastSelectedIndex(resultIndex);
+      setCurrentIndex(result.sourceIndex);
       return;
     }
 
     if (event.ctrlKey || event.metaKey) {
-      setSelectedPaths((current) => toggleSelectionPath(current, path));
-      setLastSelectedIndex(index);
-      setCurrentIndex(index);
+      setSelectedPaths((current) => toggleSelectionPath(current, result.image.path));
+      setLastSelectedIndex(resultIndex);
+      setCurrentIndex(result.sourceIndex);
       return;
     }
 
-    setSelectedPaths([path]);
-    setLastSelectedIndex(index);
+    setSelectedPaths([result.image.path]);
+    setLastSelectedIndex(resultIndex);
     if (isProjectorOpen) {
-      handleSelectForProjector(index);
+      handleSelectForProjector(result);
       return;
     }
 
-    handleSelect(index);
+    handleSelect(result);
   };
 
   const removeMovedImages = (paths: string[]) => {
@@ -287,8 +337,8 @@ export function ContactSheet({
   };
 
   const handleSelectAll = () => {
-    setSelectedPaths(images.map((image) => image.path));
-    setLastSelectedIndex(Math.max(0, currentIndex));
+    setSelectedPaths(displayedImages.map((image) => image.path));
+    setLastSelectedIndex(Math.max(0, currentResultIndex));
   };
 
   const handleClearSelection = () => {
@@ -488,30 +538,75 @@ export function ContactSheet({
   useEffect(() => {
     // fallow-ignore-next-line complexity
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === 'Enter') {
+      const target = e.target as HTMLElement | null;
+      const isSearchInput = target === searchInputRef.current;
+
+      if (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+
+      if (isSearchInput && e.key !== 'Escape') {
+        return;
+      }
+
+      if (e.key === 'Escape' && normalizedQuery !== '') {
+        e.preventDefault();
+        setSearchQuery('');
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (e.key === 'Escape') {
         e.preventDefault();
         void onExitGridView();
         return;
       }
 
+      if (isInteractiveTargetOutsideGrid(e.target, gridRef.current)) return;
+      if (e.key === 'Enter') {
+        if (target?.closest('[role="gridcell"]')) {
+          e.preventDefault();
+          const result = searchResults[currentResultIndex];
+          if (result) handleSelect(result);
+        }
+        return;
+      }
+
+      const resultIndex = currentResultIndex >= 0 ? currentResultIndex : 0;
+      const moveTo = (destination: number) => {
+        const result = searchResults[destination];
+        if (!result) return;
+        if (e.shiftKey) {
+          const anchor = lastSelectedIndex ?? resultIndex;
+          setSelectedPaths((current) =>
+            selectRangePaths(displayedImages, anchor, destination, current)
+          );
+          setLastSelectedIndex(anchor);
+        }
+        setCurrentIndex(result.sourceIndex);
+      };
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        setCurrentIndex(Math.min(images.length - 1, currentIndex + 1));
+        moveTo(Math.min(searchResults.length - 1, resultIndex + 1));
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        setCurrentIndex(Math.max(0, currentIndex - 1));
+        moveTo(Math.max(0, resultIndex - 1));
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setCurrentIndex(Math.min(images.length - 1, currentIndex + columns));
+        moveTo(Math.min(searchResults.length - 1, resultIndex + columns));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setCurrentIndex(Math.max(0, currentIndex - columns));
+        moveTo(Math.max(0, resultIndex - columns));
       } else if (e.key === 'Home') {
         e.preventDefault();
-        setCurrentIndex(0);
+        if (searchResults[0]) setCurrentIndex(searchResults[0].sourceIndex);
       } else if (e.key === 'End') {
         e.preventDefault();
-        setCurrentIndex(images.length - 1);
+        const result = searchResults[searchResults.length - 1];
+        if (result) setCurrentIndex(result.sourceIndex);
       } else if (e.key === 'Delete') {
         e.preventDefault();
         void handleDeleteCurrent();
@@ -520,7 +615,19 @@ export function ContactSheet({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [columns, currentIndex, handleDeleteCurrent, images.length, onExitGridView, setCurrentIndex]);
+  }, [
+    columns,
+    currentResultIndex,
+    currentIndex,
+    displayedImages,
+    handleDeleteCurrent,
+    handleSelect,
+    normalizedQuery,
+    onExitGridView,
+    searchResults,
+    lastSelectedIndex,
+    setCurrentIndex,
+  ]);
 
   return (
     <div className="contact-sheet-overlay" ref={contactSheetRootRef}>
@@ -528,24 +635,53 @@ export function ContactSheet({
         <div className="header-left">
           <h2>Contact Sheet</h2>
           <span className="image-count">
-            {images.length} {getCurationFilterCountLabel(curationFilter)}
+            {normalizedQuery
+              ? `${searchResults.length} of ${images.length} images`
+              : `${images.length} ${getCurationFilterCountLabel(curationFilter)}`}
           </span>
           {selectedPaths.length > 0 && (
             <span className="image-count">{selectedPaths.length} selected</span>
           )}
+        </div>
+        <div className="contact-sheet-search">
+          <label htmlFor="contact-sheet-search-input">Search filenames</label>
+          <div className="contact-sheet-search-control">
+            <input
+              ref={searchInputRef}
+              id="contact-sheet-search-input"
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search filenames"
+              aria-label="Search filenames"
+            />
+            {searchQuery !== '' && (
+              <button
+                type="button"
+                className="contact-sheet-search-clear"
+                aria-label="Clear filename search"
+                onClick={() => {
+                  setSearchQuery('');
+                  searchInputRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
         </div>
         <div className="top-bar-right header-actions">
           <div className="top-bar-group" aria-label="Navigation actions">
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
               onClick={onGoHome}
-              data-tooltip="Back to landing page"
-              title="Back to landing page"
-              aria-label="Back to landing page"
+              data-tooltip="Return to start screen"
+              title="Return to start screen"
+              aria-label="Return to start screen"
               id="btn-home-grid"
             >
               <span className="top-bar-btn-icon">⌂</span>
-              <span className="top-bar-btn-label">Home</span>
+              <span className="top-bar-btn-label">Start</span>
             </button>
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
@@ -668,6 +804,7 @@ export function ContactSheet({
                 <span className="top-bar-btn-label">More</span>
               </summary>
               <div className="top-bar-menu-panel top-bar-menu-panel--stacked">
+                <FolderSortMenu />
                 <button className="top-bar-menu-item" onClick={onRefreshFolder} type="button">
                   Refresh
                 </button>
@@ -802,58 +939,90 @@ export function ContactSheet({
         </div>
       )}
       <div className="contact-sheet-content" ref={contentRef} onScroll={handleScroll}>
-        <div
-          className="contact-sheet-grid"
-          style={{
-            gridTemplateColumns: `repeat(${columns}, ${GRID_ITEM_SIZE}px)`,
-          }}
-        >
-          {visibleRange.topHeight > 0 && (
-            <div className="grid-spacer" style={{ height: visibleRange.topHeight }} />
-          )}
-          {/* fallow-ignore-next-line complexity */}
-          {visibleImages.map((image, visibleIndex) => {
-            const index = visibleRange.startIndex + visibleIndex;
-            const isActive = index === currentIndex;
-            const url = getCachedThumbnail({
-              path: image.path,
-              sizeBytes: image.size_bytes,
-              modifiedAt: image.modified_at,
-            });
-            const curation = curationByPath[image.path];
-            const isFavorite = Boolean(curation?.favorite);
-            const rating = curation?.rating ?? 0;
+        {searchResults.length === 0 && normalizedQuery ? (
+          <div className="contact-sheet-empty">No filenames match “{searchQuery.trim()}”.</div>
+        ) : (
+          <div
+            className="contact-sheet-grid"
+            ref={gridRef}
+            role="grid"
+            aria-label="Folder contact sheet"
+            style={{
+              gridTemplateColumns: `repeat(${columns}, ${GRID_ITEM_SIZE}px)`,
+            }}
+          >
+            {visibleRange.topHeight > 0 && (
+              <div className="grid-spacer" style={{ height: visibleRange.topHeight }} />
+            )}
+            {/* fallow-ignore-next-line complexity */}
+            {visibleResults.map((result, visibleIndex) => {
+              const resultIndex = visibleRange.startIndex + visibleIndex;
+              const { image } = result;
+              const isActive = image.path === currentImagePath && currentResultIndex >= 0;
+              const url = getCachedThumbnail({
+                path: image.path,
+                sizeBytes: image.size_bytes,
+                modifiedAt: image.modified_at,
+              });
+              const curation = curationByPath[image.path];
+              const isFavorite = Boolean(curation?.favorite);
+              const rating = curation?.rating ?? 0;
 
-            return (
-              <div
-                key={image.path}
-                className={`grid-item ${isActive ? 'active' : ''} ${selectedPathSet.has(image.path) ? 'selected' : ''}`}
-                onClick={(event) => handleGridItemClick(event, index, image.path)}
-                title={image.file_name}
-              >
-                <div className="grid-thumbnail-wrapper">
-                  {(isFavorite || rating > 0) && (
-                    <div className="grid-curation-badges" aria-hidden="true">
-                      {isFavorite && <span className="grid-curation-badge favorite">★</span>}
-                      {rating > 0 && <span className="grid-curation-badge rating">{rating}</span>}
-                    </div>
-                  )}
-                  {url ? (
-                    <img src={url} alt="" draggable={false} />
-                  ) : (
-                    <div className="grid-placeholder" />
-                  )}
-                </div>
-                <div className="grid-label" title={image.file_name}>
-                  {image.file_name}
-                </div>
-              </div>
-            );
-          })}
-          {visibleRange.bottomHeight > 0 && (
-            <div className="grid-spacer" style={{ height: visibleRange.bottomHeight }} />
-          )}
-        </div>
+              return (
+                <button
+                  key={image.path}
+                  className={`grid-item ${isActive ? 'active' : ''} ${selectedPathSet.has(image.path) ? 'selected' : ''}`}
+                  onClick={(event) => handleGridItemClick(event, resultIndex, result)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      handleSelect(result);
+                    } else if (event.key === ' ') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setSelectedPaths((current) => toggleSelectionPath(current, image.path));
+                      setLastSelectedIndex(resultIndex);
+                    }
+                  }}
+                  data-image-path={image.path}
+                  role="gridcell"
+                  aria-label={image.file_name}
+                  aria-selected={selectedPathSet.has(image.path)}
+                  aria-current={isActive ? 'true' : undefined}
+                  tabIndex={
+                    image.path ===
+                    (searchResults[currentResultIndex]?.image.path ?? displayedImages[0]?.path)
+                      ? 0
+                      : -1
+                  }
+                  type="button"
+                  title={image.file_name}
+                >
+                  <div className="grid-thumbnail-wrapper">
+                    {(isFavorite || rating > 0) && (
+                      <div className="grid-curation-badges" aria-hidden="true">
+                        {isFavorite && <span className="grid-curation-badge favorite">★</span>}
+                        {rating > 0 && <span className="grid-curation-badge rating">{rating}</span>}
+                      </div>
+                    )}
+                    {url ? (
+                      <img src={url} alt="" draggable={false} />
+                    ) : (
+                      <div className="grid-placeholder" />
+                    )}
+                  </div>
+                  <div className="grid-label" title={image.file_name}>
+                    {image.file_name}
+                  </div>
+                </button>
+              );
+            })}
+            {visibleRange.bottomHeight > 0 && (
+              <div className="grid-spacer" style={{ height: visibleRange.bottomHeight }} />
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

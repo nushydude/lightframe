@@ -3,6 +3,10 @@ import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { SlideshowDirection } from '../types/settings';
+import {
+  acquireSlideshowDisplayInhibition,
+  releaseSlideshowDisplayInhibition,
+} from '../services/tauriCommands';
 
 function getNextShuffleIndex(
   currentIndex: number,
@@ -139,6 +143,57 @@ export function useSlideshow() {
   const isShuffleOrderReadyRef = useRef(false);
   const currentIndexRef = useRef(currentIndex);
   const previousImagePathsRef = useRef(images.map((image) => image.path));
+  const inhibitionRevisionRef = useRef(0);
+  const inhibitionQueueRef = useRef(Promise.resolve());
+  const effectiveRunningRef = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    const effectiveRunning = isSlideshowActive && !isSlideshowPaused;
+    const previousEffectiveRunning = effectiveRunningRef.current;
+    effectiveRunningRef.current = effectiveRunning;
+    if (previousEffectiveRunning === null && !effectiveRunning) {
+      return;
+    }
+    if (previousEffectiveRunning === effectiveRunning) {
+      return;
+    }
+    const revision = ++inhibitionRevisionRef.current;
+
+    inhibitionQueueRef.current = inhibitionQueueRef.current.then(async () => {
+      if (revision !== inhibitionRevisionRef.current) {
+        return;
+      }
+
+      try {
+        if (effectiveRunning) {
+          await acquireSlideshowDisplayInhibition();
+        } else {
+          await releaseSlideshowDisplayInhibition();
+        }
+      } catch (error) {
+        console.warn(
+          `Failed to ${effectiveRunning ? 'acquire' : 'release'} slideshow display inhibition:`,
+          error
+        );
+      }
+    });
+  }, [isSlideshowActive, isSlideshowPaused]);
+
+  useEffect(() => {
+    return () => {
+      if (!effectiveRunningRef.current) {
+        return;
+      }
+
+      inhibitionQueueRef.current = inhibitionQueueRef.current.then(async () => {
+        try {
+          await releaseSlideshowDisplayInhibition();
+        } catch (error) {
+          console.warn('Failed to release slideshow display inhibition on unmount:', error);
+        }
+      });
+    };
+  }, []);
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;

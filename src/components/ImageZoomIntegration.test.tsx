@@ -118,6 +118,7 @@ const chromeProps = {
   onRefreshFolder: vi.fn(),
   onGoHome: vi.fn(),
   onFirst: vi.fn(),
+  onLast: vi.fn(),
   onNext: vi.fn(),
   onPrev: vi.fn(),
   onStartSlideshow: vi.fn(),

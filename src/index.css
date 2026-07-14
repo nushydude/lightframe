@@ -151,6 +151,15 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.thumbnail-item:focus-visible,
+.grid-item:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
 }
 
 .thumbnail-item:hover {
@@ -338,6 +347,68 @@ body,
 .image-count {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.contact-sheet-search {
+  display: grid;
+  gap: 4px;
+  min-width: min(280px, 28vw);
+  margin: 0 16px;
+}
+
+.contact-sheet-search label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.contact-sheet-search-control {
+  position: relative;
+}
+
+.contact-sheet-search input {
+  width: 100%;
+  height: 34px;
+  padding: 0 34px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.contact-sheet-search input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.contact-sheet-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.contact-sheet-search-clear:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.contact-sheet-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 .contact-sheet-bulk-bar {
@@ -541,6 +612,12 @@ body,
   cursor: pointer;
   transition: all var(--transition-fast);
   position: relative;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
 }
 
 .grid-thumbnail-wrapper {
@@ -1539,21 +1616,78 @@ body,
 }
 
 .quality-menu,
-.crop-actions-menu {
+.crop-actions-menu,
+.slideshow-options-menu {
   position: relative;
   flex: 0 0 auto;
 }
 
 .quality-menu > summary,
 .crop-actions-menu > summary,
-.bottom-controls-menu > summary {
+.bottom-controls-menu > summary,
+.slideshow-options-menu > summary {
   list-style: none;
 }
 
 .quality-menu > summary::-webkit-details-marker,
 .crop-actions-menu > summary::-webkit-details-marker,
-.bottom-controls-menu > summary::-webkit-details-marker {
+.bottom-controls-menu > summary::-webkit-details-marker,
+.slideshow-options-menu > summary::-webkit-details-marker {
   display: none;
+}
+
+.slideshow-options-trigger {
+  color: var(--text-secondary);
+}
+
+.slideshow-options-trigger[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.slideshow-options-panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 12px);
+  transform: translateX(-50%);
+  width: min(280px, calc(100vw - 32px));
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--text-primary);
+}
+
+.slideshow-options-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.slideshow-options-field select,
+.slideshow-options-field input[type='number'] {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+}
+
+.slideshow-options-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .bottom-controls-menu {
@@ -2265,6 +2399,36 @@ body,
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.settings-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 24px 0;
+}
+
+.settings-status-saving,
+.settings-status-error {
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.settings-status-saving {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.settings-status-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
+  background: rgba(180, 60, 60, 0.2);
+  border: 1px solid rgba(220, 100, 100, 0.5);
 }
 
 .settings-close {

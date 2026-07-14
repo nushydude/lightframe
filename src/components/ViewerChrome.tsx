@@ -49,6 +49,7 @@ import type { PinnableToolbarActionId, QuickDestination } from '../types/setting
 import { CurationFilterMenu } from './CurationFilterMenu';
 import { EditQueuePanel } from './EditQueuePanel';
 import { ToolbarIcon } from './ToolbarIcon';
+import { FolderSortMenu } from './FolderSortMenu';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -57,6 +58,7 @@ interface ViewerChromeProps {
   onRefreshFolder: () => void;
   onGoHome: () => void;
   onFirst: () => void;
+  onLast: () => void;
   onNext: () => void;
   onPrev: () => void;
   onStartSlideshow: () => void | Promise<void>;
@@ -147,6 +149,139 @@ interface MenuShortcutAction {
   label: string;
   icon?: Parameters<typeof ToolbarIcon>[0]['name'];
   shortcut?: string;
+}
+
+interface SlideshowOptionsProps {
+  canStart: boolean;
+  shuffle: boolean;
+  direction: 'forward' | 'reverse';
+  repeat: boolean;
+  interval: number;
+  autoFullscreen: boolean;
+  updateSettings: (partial: {
+    shuffleSlideshow?: boolean;
+    slideshowDirection?: 'forward' | 'reverse';
+    loopSlideshow?: boolean;
+    slideshowIntervalSeconds?: number;
+    autoFullscreenOnSlideshow?: boolean;
+  }) => Promise<boolean>;
+}
+
+function SlideshowOptions({
+  canStart,
+  shuffle,
+  direction,
+  repeat,
+  interval,
+  autoFullscreen,
+  updateSettings,
+}: SlideshowOptionsProps) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  const closeAndRestoreFocus = () => {
+    if (detailsRef.current?.open) {
+      detailsRef.current.open = false;
+      triggerRef.current?.focus();
+    }
+  };
+
+  return (
+    <details ref={detailsRef} className="slideshow-options-menu">
+      <summary
+        ref={triggerRef}
+        className="control-btn control-btn--text slideshow-options-trigger"
+        aria-label="Slideshow options"
+        aria-disabled={!canStart}
+        onClick={(event) => {
+          if (!canStart) event.preventDefault();
+        }}
+      >
+        Slideshow options
+      </summary>
+      <div
+        className="slideshow-options-panel"
+        role="group"
+        aria-label="Slideshow options"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            closeAndRestoreFocus();
+          }
+        }}
+      >
+        <label className="slideshow-options-field">
+          <span>Order</span>
+          <select
+            aria-label="Slideshow order"
+            value={shuffle ? 'shuffle' : 'sequential'}
+            onChange={(event) =>
+              void updateSettings({ shuffleSlideshow: event.target.value === 'shuffle' })
+            }
+          >
+            <option value="sequential">Sequential</option>
+            <option value="shuffle">Shuffle</option>
+          </select>
+        </label>
+        <label className="slideshow-options-field">
+          <span>Direction</span>
+          <select
+            aria-label="Slideshow direction"
+            value={direction}
+            onChange={(event) =>
+              void updateSettings({
+                slideshowDirection: event.target.value as 'forward' | 'reverse',
+              })
+            }
+          >
+            <option value="forward">Forward</option>
+            <option value="reverse">Reverse</option>
+          </select>
+        </label>
+        <label className="slideshow-options-field">
+          <span>Repeat</span>
+          <select
+            aria-label="Slideshow repeat"
+            value={repeat ? 'on' : 'off'}
+            onChange={(event) =>
+              void updateSettings({ loopSlideshow: event.target.value === 'on' })
+            }
+          >
+            <option value="off">Off</option>
+            <option value="on">On</option>
+          </select>
+        </label>
+        <label className="slideshow-options-field">
+          <span>Interval (seconds)</span>
+          <input
+            aria-label="Slideshow interval in seconds"
+            type="number"
+            min={1}
+            max={60}
+            step={1}
+            value={interval}
+            onChange={(event) => {
+              const next = Number.parseInt(event.target.value, 10);
+              if (Number.isInteger(next)) {
+                void updateSettings({ slideshowIntervalSeconds: Math.min(60, Math.max(1, next)) });
+              }
+            }}
+          />
+        </label>
+        <label className="slideshow-options-checkbox">
+          <input
+            aria-label="Enter fullscreen automatically"
+            type="checkbox"
+            checked={autoFullscreen}
+            onChange={(event) =>
+              void updateSettings({ autoFullscreenOnSlideshow: event.target.checked })
+            }
+          />
+          <span>Enter fullscreen automatically</span>
+        </label>
+      </div>
+    </details>
+  );
 }
 
 function MenuLabel({ label, icon, shortcut }: MenuShortcutAction) {
@@ -441,6 +576,7 @@ export function ViewerChrome({
   onRefreshFolder,
   onGoHome,
   onFirst,
+  onLast,
   onNext,
   onPrev,
   onStartSlideshow,
@@ -514,6 +650,13 @@ export function ViewerChrome({
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
   const shuffleSlideshow = useSettingsStore((state) => state.settings.shuffleSlideshow);
   const slideshowDirection = useSettingsStore((state) => state.settings.slideshowDirection);
+  const loopSlideshow = useSettingsStore((state) => state.settings.loopSlideshow);
+  const slideshowIntervalSeconds = useSettingsStore(
+    (state) => state.settings.slideshowIntervalSeconds
+  );
+  const autoFullscreenOnSlideshow = useSettingsStore(
+    (state) => state.settings.autoFullscreenOnSlideshow
+  );
   const promptProjectorGridOnOpen = useSettingsStore(
     (state) => state.settings.promptProjectorGridOnOpen
   );
@@ -1745,13 +1888,13 @@ export function ViewerChrome({
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
               onClick={onGoHome}
-              data-tooltip="Back to landing page"
-              title="Back to landing page"
-              aria-label="Back to landing page"
+              data-tooltip="Return to start screen"
+              title="Return to start screen"
+              aria-label="Return to start screen"
               id="btn-home"
             >
               <span className="top-bar-btn-icon">⌂</span>
-              <span className="top-bar-btn-label">Home</span>
+              <span className="top-bar-btn-label">Start</span>
             </button>
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"
@@ -1975,6 +2118,8 @@ export function ViewerChrome({
                 <span className="top-bar-btn-label">More</span>
               </summary>
               <div className="top-bar-menu-panel top-bar-menu-panel--stacked">
+                <FolderSortMenu />
+                <div className="context-menu-divider" role="separator" />
                 {SECONDARY_ACTION_GROUPS.map((group) => {
                   const groupedActions = secondaryActionDefinitions.filter(
                     (action) => action.group === group.id
@@ -2210,8 +2355,13 @@ export function ViewerChrome({
       )}
 
       {isSlideshowActive && (
-        <div className={`slideshow-indicator ${isSlideshowPaused ? 'paused' : ''}`}>
-          {isSlideshowPaused ? '⏸ Paused' : '▶ Slideshow'}
+        <div
+          className={`slideshow-indicator ${isSlideshowPaused ? 'paused' : ''}`}
+          role="status"
+          aria-live="polite"
+        >
+          {isSlideshowPaused ? 'Paused' : 'Slideshow'} ·{' '}
+          {shuffleSlideshow ? 'Shuffle' : 'Sequential'} · {slideshowIntervalSeconds}s
         </div>
       )}
 
@@ -2250,6 +2400,17 @@ export function ViewerChrome({
         </button>
 
         <button
+          className="control-btn has-tooltip"
+          onClick={onLast}
+          data-tooltip="Last image (End)"
+          title="Last image (End)"
+          aria-label="Last image"
+          id="btn-ctrl-last"
+        >
+          <ToolbarIcon name="last" />
+        </button>
+
+        <button
           className={`control-btn has-tooltip ${shuffleSlideshow ? 'active' : ''}`}
           onClick={handleToggleSlideshowShuffle}
           data-tooltip={slideshowShuffleLabel}
@@ -2274,6 +2435,16 @@ export function ViewerChrome({
         >
           <ToolbarIcon name={isReverseSlideshow ? 'slideshowReverse' : 'slideshowForward'} />
         </button>
+
+        <SlideshowOptions
+          canStart={canStartSlideshow}
+          shuffle={shuffleSlideshow}
+          direction={slideshowDirection}
+          repeat={loopSlideshow}
+          interval={slideshowIntervalSeconds}
+          autoFullscreen={autoFullscreenOnSlideshow}
+          updateSettings={updateSettings}
+        />
 
         {!isSlideshowActive ? (
           <button

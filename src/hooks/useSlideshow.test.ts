@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import { useSlideshow } from './useSlideshow';
@@ -53,6 +54,7 @@ describe('useSlideshow', () => {
   });
 
   afterEach(() => {
+    vi.mocked(invoke).mockReset();
     vi.useRealTimers();
   });
 
@@ -83,6 +85,124 @@ describe('useSlideshow', () => {
     });
 
     expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('acquires display inhibition once for a running slideshow', async () => {
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+      await Promise.resolve();
+    });
+
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === 'acquire_slideshow_display_inhibition')
+    ).toHaveLength(1);
+  });
+
+  it('releases on pause and reacquires on resume without reacting to slide changes', async () => {
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+      await Promise.resolve();
+    });
+    vi.mocked(invoke).mockClear();
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(vi.mocked(invoke).mock.calls).toHaveLength(0);
+
+    act(() => result.current.togglePause());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(vi.mocked(invoke).mock.calls).toEqual([['release_slideshow_display_inhibition']]);
+
+    vi.mocked(invoke).mockClear();
+    act(() => result.current.togglePause());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(vi.mocked(invoke).mock.calls).toEqual([['acquire_slideshow_display_inhibition']]);
+  });
+
+  it('releases when the slideshow stops or the hook unmounts', async () => {
+    const { result, unmount } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+      await Promise.resolve();
+    });
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      await result.current.stop();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(invoke).mock.calls).toEqual([['release_slideshow_display_inhibition']]);
+
+    await act(async () => {
+      await result.current.start();
+      await Promise.resolve();
+    });
+    vi.mocked(invoke).mockClear();
+    unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(vi.mocked(invoke).mock.calls).toEqual([['release_slideshow_display_inhibition']]);
+  });
+
+  it('keeps playing when native inhibition fails', async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'acquire_slideshow_display_inhibition') {
+        throw new Error('native failure');
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+      await Promise.resolve();
+    });
+
+    expect(useViewerStore.getState().isSlideshowActive).toBe(true);
+  });
+
+  it('releases after a delayed acquire is followed by pause', async () => {
+    let resolveAcquire!: () => void;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'acquire_slideshow_display_inhibition') {
+        return new Promise<void>((resolve) => {
+          resolveAcquire = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const { result } = renderHook(() => useSlideshow());
+
+    await act(async () => {
+      await result.current.start();
+      await Promise.resolve();
+    });
+    act(() => result.current.togglePause());
+    resolveAcquire();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+      'acquire_slideshow_display_inhibition',
+      'release_slideshow_display_inhibition',
+    ]);
   });
 
   it('starts without changing view mode because App owns grid-exit cleanup', async () => {

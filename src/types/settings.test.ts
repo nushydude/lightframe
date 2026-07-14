@@ -327,6 +327,83 @@ describe('settingsFromRust', () => {
 
     expect(settings.savedViewPresets).toEqual([]);
   });
+
+  it('accepts every currently supported enum value and rejects invalid values independently', () => {
+    expect(
+      settingsFromRust({
+        theme: 'system',
+        slideshow_direction: 'forward',
+        crop_save_mode: 'copy',
+        mouse_wheel_behavior: 'navigate',
+        default_fit_mode: 'actual',
+        sort_order: 'random',
+        performance_mode: 'lowMemory',
+        update_channel: 'preview',
+        saved_view_presets: ['unreviewed'],
+      })
+    ).toMatchObject({
+      theme: 'system',
+      slideshowDirection: 'forward',
+      cropSaveMode: 'copy',
+      mouseWheelBehavior: 'navigate',
+      defaultFitMode: 'actual',
+      sortOrder: 'random',
+      performanceMode: 'lowMemory',
+      updateChannel: 'preview',
+      savedViewPresets: ['unreviewed'],
+    });
+
+    expect(
+      settingsFromRust({
+        theme: 'invalid',
+        mouse_wheel_behavior: 'invalid',
+        default_fit_mode: 'invalid',
+        sort_order: 'invalid',
+        update_channel: 'invalid',
+        saved_view_presets: ['invalid', 'favorites'],
+      })
+    ).toMatchObject({
+      theme: DEFAULT_SETTINGS.theme,
+      mouseWheelBehavior: DEFAULT_SETTINGS.mouseWheelBehavior,
+      defaultFitMode: DEFAULT_SETTINGS.defaultFitMode,
+      sortOrder: DEFAULT_SETTINGS.sortOrder,
+      updateChannel: DEFAULT_SETTINGS.updateChannel,
+      savedViewPresets: ['favorites'],
+    });
+  });
+
+  it('defaults invalid slideshow intervals and drops invalid numeric bounds and timestamps', () => {
+    for (const interval of [0, 61, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        settingsFromRust({ slideshow_interval_seconds: interval }).slideshowIntervalSeconds
+      ).toBe(DEFAULT_SETTINGS.slideshowIntervalSeconds);
+    }
+
+    const settings = settingsFromRust({
+      window_x: Number.NaN,
+      window_y: Number.POSITIVE_INFINITY,
+      window_width: 0,
+      window_height: -1,
+      recent_folders: [
+        { path: 'valid', opened_at: 12 },
+        { path: 'invalid', opened_at: Number.NaN },
+      ],
+      persisted_marked_folders: [
+        { folder_path: 'valid', marked_paths: [], updated_at: 42 },
+        { folder_path: 'invalid', marked_paths: [], updated_at: Number.POSITIVE_INFINITY },
+      ],
+    });
+
+    expect(settings.windowX).toBeUndefined();
+    expect(settings.windowY).toBeUndefined();
+    expect(settings.windowWidth).toBeUndefined();
+    expect(settings.windowHeight).toBeUndefined();
+    expect(settings.recentFolders).toEqual([{ path: 'valid', label: 'valid', openedAt: 12 }]);
+    expect(settings.persistedMarkedFolders).toEqual([
+      { folderPath: 'valid', markedPaths: [], updatedAt: 42 },
+      { folderPath: 'invalid', markedPaths: [], updatedAt: 0 },
+    ]);
+  });
 });
 
 describe('rememberRecentFolder', () => {

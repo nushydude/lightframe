@@ -10,6 +10,7 @@ type ToolbarIconName =
   | 'fit'
   | 'folder'
   | 'info'
+  | 'last'
   | 'more'
   | 'move'
   | 'next'
@@ -49,6 +50,7 @@ const ICON_PATHS: Record<ToolbarIconName, string[]> = {
   fit: ['M5 9V5h4', 'M15 5h4v4', 'M19 15v4h-4', 'M9 19H5v-4'],
   folder: ['M3 7h6l2 2h10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z', 'M3 9h18'],
   info: ['M12 8h.01', 'M11 12h2v5h-2', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z'],
+  last: ['M18 6v12', 'M6 6l8 6-8 6V6Z'],
   more: ['M5 12h.01', 'M12 12h.01', 'M19 12h.01'],
   move: ['M13 5h6v6', 'M19 5 10 14', 'M5 9v10h10'],
   next: ['M9 6l6 6-6 6'],
