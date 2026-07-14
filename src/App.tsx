@@ -964,6 +964,7 @@ function App() {
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onFirst={goFirst}
+                onLast={goLast}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}
@@ -982,6 +983,7 @@ function App() {
                 onRefreshFolder={refreshFolder}
                 onGoHome={handleGoHome}
                 onFirst={goFirst}
+                onLast={goLast}
                 onNext={() => goNext()}
                 onPrev={() => goPrev()}
                 onStartSlideshow={handleStartSlideshow}

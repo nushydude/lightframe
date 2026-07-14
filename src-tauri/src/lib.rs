@@ -1,4 +1,5 @@
 mod commands;
+mod display_inhibition;
 mod folder_index;
 mod folder_watcher;
 mod native_codecs;
@@ -7,7 +8,21 @@ mod thumbnails;
 mod update_channels;
 mod windows_shortcuts;
 
-use tauri::Manager;
+use tauri::{Manager, State};
+
+#[tauri::command]
+fn acquire_slideshow_display_inhibition(
+    inhibition: State<'_, display_inhibition::DisplayInhibition>,
+) -> Result<(), String> {
+    inhibition.inner().acquire()
+}
+
+#[tauri::command]
+fn release_slideshow_display_inhibition(
+    inhibition: State<'_, display_inhibition::DisplayInhibition>,
+) -> Result<(), String> {
+    inhibition.inner().release()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,6 +39,7 @@ pub fn run() {
     }
 
     builder
+        .manage(display_inhibition::DisplayInhibition::default())
         .setup(|_| {
             windows_shortcuts::repair_lightframe_shortcuts_async();
             Ok(())
@@ -34,6 +50,11 @@ pub fn run() {
             }
 
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                if let Some(inhibition) =
+                    window.app_handle().try_state::<display_inhibition::DisplayInhibition>()
+                {
+                    let _ = inhibition.inner().release();
+                }
                 folder_watcher::unwatch_active_folder();
                 if let Some(projector_window) = window.app_handle().get_webview_window("secondary")
                 {
@@ -74,6 +95,8 @@ pub fn run() {
             commands::save_scaled_copy,
             commands::overwrite_with_crop,
             commands::get_thumbnail,
+            acquire_slideshow_display_inhibition,
+            release_slideshow_display_inhibition,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

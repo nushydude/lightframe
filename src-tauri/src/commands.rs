@@ -26,6 +26,7 @@ pub struct ImageFile {
     pub extension: String,
     pub size_bytes: u64,
     pub modified_at: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -143,6 +144,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub window_bounds_by_display: HashMap<String, WindowBounds>,
     pub sort_order: String,
+    #[serde(default)]
+    pub sort_direction: Option<String>,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
     #[serde(default = "default_prompt_projector_grid_on_open")]
@@ -295,6 +298,7 @@ impl Default for AppSettings {
             last_window_display_key: None,
             window_bounds_by_display: HashMap::new(),
             sort_order: "name".to_string(),
+            sort_direction: Some("ascending".to_string()),
             show_thumbnails: default_show_thumbnails(),
             prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
             open_projector_in_grid_view: false,
@@ -429,9 +433,13 @@ pub(crate) fn image_file_from_metadata(
         let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         format!("{}", duration.as_secs())
     });
+    let created_at = metadata.created().ok().map(|t| {
+        let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        format!("{}", duration.as_secs())
+    });
     let path = file_path.to_string_lossy().to_string();
 
-    Some(ImageFile { path, file_name, extension, size_bytes, modified_at })
+    Some(ImageFile { path, file_name, extension, size_bytes, modified_at, created_at })
 }
 
 /// Check if a path is a directory
@@ -3026,6 +3034,7 @@ mod tests {
                     extension: "jpg".to_string(),
                     size_bytes: 0,
                     modified_at: None,
+                    created_at: None,
                 },
             },
             ScannedImage {
@@ -3037,6 +3046,7 @@ mod tests {
                     extension: "jpg".to_string(),
                     size_bytes: 0,
                     modified_at: None,
+                    created_at: None,
                 },
             },
         ];

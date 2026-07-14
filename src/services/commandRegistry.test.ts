@@ -1,10 +1,78 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createViewerCommands } from './commandRegistry';
 import { useViewerStore } from '../state/viewerStore';
+import { useSettingsStore } from '../state/settingsStore';
+import { DEFAULT_SETTINGS } from '../types/settings';
 
 describe('createViewerCommands', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
+    useSettingsStore.setState((state) => ({ ...state, settings: { ...DEFAULT_SETTINGS } }));
+  });
+
+  it('provides live slideshow setting toggle commands for multi-image viewers', async () => {
+    useViewerStore.setState({
+      images: [
+        {
+          path: 'one.jpg',
+          file_name: 'one.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: null,
+        },
+        {
+          path: 'two.jpg',
+          file_name: 'two.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: null,
+        },
+      ],
+    });
+    const commands = createViewerCommands({
+      openFilePicker: vi.fn(),
+      openFolderPicker: vi.fn(),
+      goNext: vi.fn(),
+      goPrev: vi.fn(),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      toggleFullscreen: vi.fn().mockResolvedValue(undefined),
+      saveRotation: vi.fn().mockResolvedValue(undefined),
+      revealCurrentImage: vi.fn().mockResolvedValue(undefined),
+      openCurrentImageInEditor: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImage: vi.fn().mockResolvedValue(undefined),
+      copyCurrentImagePath: vi.fn().mockResolvedValue(undefined),
+      deleteCurrentImage: vi.fn().mockResolvedValue(undefined),
+      toggleProjector: vi.fn().mockResolvedValue(undefined),
+      enterCropMode: vi.fn(),
+      startSlideshow: vi.fn(),
+      toggleCompareMode: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      resetPerformanceTelemetry: vi.fn(),
+    });
+
+    for (const id of [
+      'toggle-slideshow-shuffle',
+      'toggle-slideshow-repeat',
+      'toggle-slideshow-direction',
+    ]) {
+      const command = commands.find((item) => item.id === id);
+      expect(command?.isEnabled(useViewerStore.getState())).toBe(true);
+      await command?.run();
+    }
+    expect(useSettingsStore.getState().settings).toMatchObject({
+      shuffleSlideshow: true,
+      loopSlideshow: true,
+      slideshowDirection: 'reverse',
+    });
+
+    useViewerStore.setState({ images: [useViewerStore.getState().images[0]] });
+    expect(
+      commands
+        .find((item) => item.id === 'toggle-slideshow-shuffle')
+        ?.isEnabled(useViewerStore.getState())
+    ).toBe(false);
   });
 
   it('executes file actions directly in grid mode', async () => {

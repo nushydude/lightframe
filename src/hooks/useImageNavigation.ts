@@ -16,7 +16,7 @@ import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { sortImages } from '../services/imageSorting';
 import { reconcileFolderWatcherPayload } from '../services/folderWatcherReconciliation';
-import { rememberRecentFolder } from '../types/settings';
+import { rememberRecentFolder, type AppSettings } from '../types/settings';
 import type { CurationFilter } from '../services/curationFilter';
 import {
   beginFolderOpenTelemetry,
@@ -184,9 +184,15 @@ export function useImageNavigation() {
   const setViewMode = useViewerStore((state) => state.setViewMode);
 
   const sortOrder = useSettingsStore((state) => state.settings.sortOrder);
+  const sortDirection = useSettingsStore((state) => state.settings.sortDirection);
   const autoRefreshFolder = useSettingsStore((state) => state.settings.autoRefreshFolder);
   const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
   const pendingWatcherRefreshFolderRef = useRef<string | null>(null);
+  const randomOrderRef = useRef<string[] | null>(null);
+  const randomSortKeyRef = useRef<string | null>(null);
+  const randomFolderRef = useRef<string | null>(null);
+  const effectiveSortDirectionRef = useRef(sortDirection);
+  const lastSortOrderRef = useRef<AppSettings['sortOrder'] | null>(null);
 
   const isCurrentGeneration = useCallback(
     (generation: number) => useViewerStore.getState().loadGeneration === generation,
@@ -195,26 +201,81 @@ export function useImageNavigation() {
 
   useEffect(() => {
     const sourceImages = allImages.length > 0 ? allImages : images;
-    if (sourceImages.length === 0 || sortOrder === 'name') return;
+    if (sourceImages.length === 0) return;
 
-    const sorted = sortImages([...sourceImages], sortOrder);
+    if (randomFolderRef.current !== folderPath) {
+      randomFolderRef.current = folderPath;
+      randomOrderRef.current = null;
+      randomSortKeyRef.current = null;
+    }
+    const sortKey = `${sortOrder}:${sortDirection}`;
+    const effectiveSortDirection =
+      lastSortOrderRef.current !== sortOrder &&
+      sortOrder !== 'name' &&
+      sortDirection === 'ascending'
+        ? 'descending'
+        : sortDirection;
+    effectiveSortDirectionRef.current = effectiveSortDirection;
+    lastSortOrderRef.current = sortOrder;
+    if (randomSortKeyRef.current !== sortKey) {
+      randomSortKeyRef.current = sortKey;
+      randomOrderRef.current = null;
+    }
+
+    const sorted = sortImages(
+      sourceImages,
+      sortOrder,
+      effectiveSortDirection,
+      randomOrderRef.current
+    );
+    if (sortOrder === 'random' && randomOrderRef.current === null) {
+      randomOrderRef.current = sorted.map((image) => image.path);
+    }
     const hasOrderChanged = sorted.some((image, index) => image.path !== sourceImages[index]?.path);
     if (!hasOrderChanged) return;
 
-    const currentPath = useViewerStore.getState().currentImagePath;
     setImages(sorted);
+  }, [allImages, folderPath, images, setImages, sortDirection, sortOrder]);
 
-    if (currentPath) {
-      const visibleImages = useViewerStore.getState().images;
-      const newIndex = visibleImages.findIndex((image) => image.path === currentPath);
-      if (newIndex >= 0 && newIndex !== currentIndex) {
-        setCurrentIndex(newIndex);
-      }
+  useEffect(() => {
+    const handleReshuffle = () => {
+      if (useSettingsStore.getState().settings.sortOrder !== 'random') return;
+      randomOrderRef.current = null;
+      const source =
+        useViewerStore.getState().allImages.length > 0
+          ? useViewerStore.getState().allImages
+          : useViewerStore.getState().images;
+      const sorted = sortImages(source, 'random');
+      randomOrderRef.current = sorted.map((image) => image.path);
+      setImages(sorted);
+    };
+    window.addEventListener('lightframe-reshuffle-folder', handleReshuffle);
+    return () => window.removeEventListener('lightframe-reshuffle-folder', handleReshuffle);
+  }, [setImages]);
+
+  const applyActiveSortOrder = useCallback((folderImages: ImageFile[], nextFolderPath?: string) => {
+    if (nextFolderPath !== undefined && randomFolderRef.current !== nextFolderPath) {
+      randomFolderRef.current = nextFolderPath;
+      randomOrderRef.current = null;
+      randomSortKeyRef.current = null;
     }
-  }, [allImages, currentIndex, images, setCurrentIndex, setImages, sortOrder]);
 
-  const applyActiveSortOrder = useCallback((folderImages: ImageFile[]) => {
-    return sortImages(folderImages, useSettingsStore.getState().settings.sortOrder);
+    const settings = useSettingsStore.getState().settings;
+    const sortKey = `${settings.sortOrder}:${settings.sortDirection}`;
+    if (randomSortKeyRef.current !== sortKey) {
+      randomSortKeyRef.current = sortKey;
+      randomOrderRef.current = null;
+    }
+    const sorted = sortImages(
+      folderImages,
+      settings.sortOrder,
+      effectiveSortDirectionRef.current,
+      randomOrderRef.current
+    );
+    if (settings.sortOrder === 'random') {
+      randomOrderRef.current = sorted.map((image) => image.path);
+    }
+    return sorted;
   }, []);
 
   const applyFolderImages = useCallback(
@@ -266,7 +327,7 @@ export function useImageNavigation() {
         return null;
       }
 
-      folderImages = applyActiveSortOrder(folderImages);
+      folderImages = applyActiveSortOrder(folderImages, nextFolderPath);
       if (!isCurrentGeneration(loadGeneration)) {
         return null;
       }
@@ -285,7 +346,7 @@ export function useImageNavigation() {
         );
         recordFolderOpenIndexReadTelemetry(getNow() - indexReadStartedAt);
         const folderImages = Array.isArray(cachedResult) ? cachedResult : [];
-        return applyActiveSortOrder(folderImages);
+        return applyActiveSortOrder(folderImages, nextFolderPath);
       } catch (err) {
         console.warn('Failed to read folder index, falling back to live scan:', err);
         return [];
@@ -384,7 +445,7 @@ export function useImageNavigation() {
         );
         if (!isCurrentGeneration(loadGeneration)) return;
 
-        folderImages = applyActiveSortOrder(folderImages);
+        folderImages = applyActiveSortOrder(folderImages, parentFolder);
         if (!isCurrentGeneration(loadGeneration)) return;
 
         const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
@@ -626,7 +687,7 @@ export function useImageNavigation() {
       );
       if (!isCurrentGeneration(loadGeneration)) return;
 
-      refreshedImages = applyActiveSortOrder(refreshedImages);
+      refreshedImages = applyActiveSortOrder(refreshedImages, snapshot.activeFolderPath);
       if (!isCurrentGeneration(loadGeneration)) return;
 
       const invalidatedPaths = collectFullRefreshInvalidatedPaths(
@@ -685,11 +746,17 @@ export function useImageNavigation() {
         currentIndex: state.currentIndex,
         currentImagePath: state.currentImagePath,
         sortOrder: useSettingsStore.getState().settings.sortOrder,
+        sortDirection: useSettingsStore.getState().settings.sortDirection,
+        randomOrder: randomOrderRef.current,
       });
 
       if (reconciliation.requiresFullRefresh) {
         void refreshFolderFromDisk();
         return;
+      }
+
+      if (useSettingsStore.getState().settings.sortOrder === 'random') {
+        randomOrderRef.current = reconciliation.images.map((image) => image.path);
       }
 
       for (const path of reconciliation.invalidatedPaths) {

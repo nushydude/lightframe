@@ -261,6 +261,23 @@ export function ThumbnailStrip() {
     scheduleVirtualMetricsUpdate(container.scrollLeft, container.clientWidth);
   };
 
+  useLayoutEffect(() => {
+    const activeElement = document.activeElement;
+    if (
+      activeElement !== document.body &&
+      !containerRef.current?.contains(activeElement) &&
+      !activeElement?.matches('[role="option"]')
+    ) {
+      return;
+    }
+
+    const activePath = images[currentIndex]?.path;
+    const activeButton = Array.from(
+      containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []
+    ).find((button) => button.dataset.imagePath === activePath);
+    activeButton?.focus();
+  }, [currentIndex, endIndex, images, startIndex]);
+
   if (images.length <= 1) return null;
 
   const stripWidth = getStripWidth(containerWidth, images.length);
@@ -269,6 +286,8 @@ export function ThumbnailStrip() {
     <div
       className="thumbnail-strip-container"
       ref={containerRef}
+      role="listbox"
+      aria-label="Folder images"
       onScroll={handleScroll}
       onWheel={handleWheel}
     >
@@ -283,11 +302,32 @@ export function ThumbnailStrip() {
           });
 
           return (
-            <div
+            <button
               key={image.path}
               className={`thumbnail-item ${isActive ? 'active' : ''}`}
               data-image-path={image.path}
               onClick={() => setCurrentIndex(index)}
+              onKeyDown={(event) => {
+                const nextIndex =
+                  event.key === 'ArrowLeft'
+                    ? Math.max(0, index - 1)
+                    : event.key === 'ArrowRight'
+                      ? Math.min(images.length - 1, index + 1)
+                      : event.key === 'Home'
+                        ? 0
+                        : event.key === 'End'
+                          ? images.length - 1
+                          : null;
+                if (nextIndex !== null) {
+                  event.preventDefault();
+                  setCurrentIndex(nextIndex);
+                }
+              }}
+              role="option"
+              aria-label={image.file_name}
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              type="button"
               style={{ left: THUMBNAIL_STRIP_PADDING + index * THUMBNAIL_ITEM_PITCH }}
               title={image.file_name}
             >
@@ -296,7 +336,7 @@ export function ThumbnailStrip() {
               ) : (
                 <div className="thumbnail-placeholder" />
               )}
-            </div>
+            </button>
           );
         })}
       </div>

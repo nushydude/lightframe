@@ -149,7 +149,11 @@ describe('ContactSheet', () => {
       />
     );
 
-    expect(screen.getByRole('button', { name: 'Back to landing page' })).toBeInTheDocument();
+    const startButton = screen.getByRole('button', { name: 'Return to start screen' });
+    expect(startButton).toBeInTheDocument();
+    expect(startButton).toHaveTextContent('Start');
+    expect(startButton).toHaveAttribute('title', 'Return to start screen');
+    expect(startButton).toHaveAttribute('data-tooltip', 'Return to start screen');
     expect(screen.getByRole('button', { name: 'Open file' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open folder' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Toggle favorite' })).toBeInTheDocument();
@@ -158,6 +162,204 @@ describe('ContactSheet', () => {
     expect(screen.getByRole('button', { name: 'Toggle compare view' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Toggle crop mode' })).toBeInTheDocument();
     expect(screen.getByText('More')).toBeInTheDocument();
+  });
+
+  it('searches filenames and opens a result using its source index', () => {
+    useViewerStore.setState({
+      currentIndex: 0,
+      images: [
+        {
+          path: 'first',
+          file_name: 'first.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'hidden',
+          file_name: 'hidden.jpg',
+          extension: 'jpg',
+          size_bytes: 2,
+          modified_at: '2',
+        },
+        {
+          path: 'target',
+          file_name: 'target.png',
+          extension: 'png',
+          size_bytes: 3,
+          modified_at: '3',
+        },
+      ],
+    });
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    const input = screen.getByRole('searchbox', {
+      name: 'Search filenames',
+    }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'target' } });
+    expect(screen.getByText('1 of 3 images')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('target.png'));
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('uses displayed result order for shift selection and removes hidden selections', () => {
+    useViewerStore.setState({
+      currentIndex: 0,
+      images: [
+        {
+          path: 'match-a',
+          file_name: 'match-a.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'hidden',
+          file_name: 'hidden.jpg',
+          extension: 'jpg',
+          size_bytes: 2,
+          modified_at: '2',
+        },
+        {
+          path: 'match-b',
+          file_name: 'match-b.jpg',
+          extension: 'jpg',
+          size_bytes: 3,
+          modified_at: '3',
+        },
+      ],
+    });
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    const input = screen.getByRole('searchbox', { name: 'Search filenames' });
+    fireEvent.change(input, { target: { value: 'match' } });
+    fireEvent.click(screen.getByText('match-a.jpg'), { ctrlKey: true });
+    fireEvent.click(screen.getByText('match-b.jpg'), { shiftKey: true });
+    expect(screen.getAllByText('2 selected')[0]).toBeInTheDocument();
+    expect(screen.queryByText('hidden.jpg')).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'match-b' } });
+    expect(screen.getAllByText('1 selected')[0]).toBeInTheDocument();
+  });
+
+  it('focuses search on Ctrl+F and clears before exiting on Escape', () => {
+    const onExitGridView = vi.fn(async () => true);
+    render(
+      <ContactSheet
+        onExitGridView={onExitGridView}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+    const input = screen.getByRole('searchbox', { name: 'Search filenames' });
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: 'current' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input).toHaveValue('');
+    expect(onExitGridView).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onExitGridView).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps search focused while typing multiple characters', () => {
+    useViewerStore.setState({
+      currentIndex: 0,
+      images: Array.from({ length: 8 }, (_, index) => ({
+        path: `C:/images/${index}.jpg`,
+        file_name: `photo-${index}.jpg`,
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: String(index),
+      })),
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    const input = screen.getByRole('searchbox', { name: 'Search filenames' }) as HTMLInputElement;
+    input.focus();
+    for (const character of 'photo-7') {
+      fireEvent.change(input, { target: { value: input.value + character } });
+      expect(document.activeElement).toBe(input);
+    }
+    expect(input).toHaveValue('photo-7');
+  });
+
+  it('focuses an off-screen target after End and Home virtualize it', () => {
+    const images = Array.from({ length: 40 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({ currentIndex: 0, images });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.keyDown(window, { key: 'End' });
+    const lastCell = screen.getByRole('gridcell', { name: '39.jpg' });
+    expect(document.activeElement).toBe(lastCell);
+
+    fireEvent.keyDown(lastCell, { key: 'Home' });
+    const firstCell = screen.getByRole('gridcell', { name: '0.jpg' });
+    expect(document.activeElement).toBe(firstCell);
+  });
+
+  it('shows the no-match message while keeping search available', () => {
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+    const input = screen.getByRole('searchbox', { name: 'Search filenames' });
+    fireEvent.change(input, { target: { value: 'missing' } });
+    expect(screen.getByText('No filenames match “missing”.')).toBeInTheDocument();
+    expect(input).toBeInTheDocument();
   });
 
   it('can open projector mode from grid view actions', () => {

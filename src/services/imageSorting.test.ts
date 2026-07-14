@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sortImages } from './imageSorting';
+import { shuffleImages, sortImages } from './imageSorting';
 import type { ImageFile } from '../types/image';
 
 const images: ImageFile[] = [
@@ -11,6 +11,41 @@ describe('sortImages', () => {
   it('sorts by date descending', () => {
     const sorted = sortImages(images, 'date');
     expect(sorted.map((item) => item.file_name)).toEqual(['b.jpg', 'a.jpg']);
+  });
+
+  it('puts invalid and missing dates last', () => {
+    const dateImages = [
+      { ...images[0], file_name: 'old.jpg', path: 'c:/old.jpg', modified_at: '100' },
+      { ...images[0], file_name: 'invalid.jpg', path: 'c:/invalid.jpg', modified_at: 'nope' },
+      { ...images[0], file_name: 'new.jpg', path: 'c:/new.jpg', modified_at: '200' },
+      { ...images[0], file_name: 'missing.jpg', path: 'c:/missing.jpg', modified_at: null },
+    ];
+
+    expect(sortImages(dateImages, 'date').map((image) => image.file_name)).toEqual([
+      'new.jpg',
+      'old.jpg',
+      'invalid.jpg',
+      'missing.jpg',
+    ]);
+  });
+
+  it('uses natural name order to resolve equal dates and sizes', () => {
+    const tiedImages = [
+      { ...images[0], file_name: 'image10.jpg', path: 'c:/image10.jpg', modified_at: '100' },
+      { ...images[0], file_name: 'image2.jpg', path: 'c:/image2.jpg', modified_at: '100' },
+      { ...images[0], file_name: 'image1.jpg', path: 'c:/image1.jpg', modified_at: '100' },
+    ];
+
+    expect(sortImages(tiedImages, 'date').map((image) => image.file_name)).toEqual([
+      'image1.jpg',
+      'image2.jpg',
+      'image10.jpg',
+    ]);
+    expect(sortImages(tiedImages, 'size').map((image) => image.file_name)).toEqual([
+      'image1.jpg',
+      'image2.jpg',
+      'image10.jpg',
+    ]);
   });
 
   it('sorts by size descending', () => {
@@ -33,10 +68,41 @@ describe('sortImages', () => {
     ]);
   });
 
-  it('uses random comparator for random mode', () => {
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.9);
-    sortImages(images, 'random');
-    expect(randomSpy).toHaveBeenCalled();
-    randomSpy.mockRestore();
+  it('uses an injected Fisher-Yates sequence without mutating the input', () => {
+    const randomValues = [0.5, 0, 0.9];
+    const original = [
+      { ...images[0], file_name: 'a.jpg', path: 'c:/a.jpg' },
+      { ...images[1], file_name: 'b.jpg', path: 'c:/b.jpg' },
+      { ...images[0], file_name: 'c.jpg', path: 'c:/c.jpg' },
+      { ...images[1], file_name: 'd.jpg', path: 'c:/d.jpg' },
+    ];
+    const sorted = shuffleImages(original, () => randomValues.shift() ?? 0);
+
+    expect(sorted.map((image) => image.file_name)).toEqual(['d.jpg', 'b.jpg', 'a.jpg', 'c.jpg']);
+    expect(original.map((image) => image.file_name)).toEqual(['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg']);
+  });
+
+  it('does not use Array.sort for random shuffling', () => {
+    const sortSpy = vi.spyOn(Array.prototype, 'sort');
+    shuffleImages(images, () => 0);
+    expect(sortSpy).not.toHaveBeenCalled();
+    sortSpy.mockRestore();
+  });
+
+  it('reconciles random order with normalized paths', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const randomImages = [
+      { ...images[0], path: 'C:/Images/retained.jpg', file_name: 'retained.jpg' },
+      { ...images[1], path: 'C:/Images/added.jpg', file_name: 'added.jpg' },
+    ];
+
+    try {
+      const reconciled = sortImages(randomImages, 'random', undefined, [
+        'c:\\images\\retained.jpg',
+      ]);
+      expect(reconciled.map((image) => image.file_name)).toEqual(['added.jpg', 'retained.jpg']);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 });

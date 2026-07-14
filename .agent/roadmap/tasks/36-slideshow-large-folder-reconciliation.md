@@ -1,52 +1,93 @@
 # 36 - Slideshow Large-Folder Reconciliation
 
-## Roadmap Item
+## Priority and Type
 
-Audit follow-up: remove avoidable full-list work from slideshow render and shuffle reconciliation.
+- Priority: P1
+- Type: slideshow performance
+- Dependency: task 35
 
 ## Goal
 
-Slideshow logic should not perform O(n) path mapping and string joining during unrelated renders,
-and shuffle reconciliation should not become quadratic for large folders.
+Normal slideshow renders and slide advances must not map or join every image path. Rebuilding shuffle
+state after an actual folder-list change must remain O(n), never O(n²).
 
-## Current Code Context
+## Confirmed Cost
 
-- `useSlideshow` subscribes to the whole viewer store.
-- `previousImagePathsRef` and `imageOrderSignature` are built from `images.map(...)`.
-- `imageOrderSignature` joins every image path during render.
-- Reconciliation maps paths back to indexes with repeated `indexOf` calls.
+`useRef(images.map((image) => image.path))` evaluates the `images.map` expression on every render,
+even though React ignores the initializer after the first render. Current-index changes therefore do
+avoidable O(n) work for large folders.
+
+## Required Design
+
+- Consume `imageListRevision` and `visibleImageIndexByPath` from task 35.
+- Keep one `previousImagePathsRef` snapshot, but update it only when `imageListRevision` changes or a
+  new shuffled slideshow starts.
+- Do not create an image-path signature string.
+- Do not depend on `currentIndex` in the timer effect merely to refresh a closure. Maintain the
+  existing `currentIndexRef` instead.
+- Shuffle reconciliation may allocate one next-path array, one Set, and one Map per actual list
+  revision. It must not call `indexOf` inside a loop.
 
 ## Implementation Steps
 
-1. Replace broad store subscription with narrow selectors for slideshow fields and actions.
-2. Introduce a viewer-store image list revision or equivalent stable signal that changes only when
-   image ordering/content changes.
-3. Replace `imageOrderSignature` string joins with the revision signal.
-4. During shuffle reconciliation, build a single `Map<string, number>` for the next image paths and
-   use it for path-to-index conversion.
-5. Keep shuffle semantics:
-   - current image stays first after folder changes.
-   - already-seen images stay skipped where possible.
-   - newly added images enter the remaining shuffled pool.
-6. Add tests that exercise large-list reconciliation behavior without relying on timing.
+1. Replace the eager `useRef(images.map(...))` initializer with `useRef<string[]>([])`.
+2. Subscribe narrowly to `imageListRevision` from viewerStore.
+3. Initialize path snapshot when starting Shuffle and mark the revision that snapshot represents.
+4. Run reconciliation only when all are true:
+   - slideshow is active.
+   - shuffle is enabled.
+   - at least two visible images exist.
+   - current `imageListRevision` differs from the reconciled revision.
+5. During reconciliation:
+   - build `nextImagePaths` once.
+   - build `nextPathSet` once.
+   - use `visibleImageIndexByPath` from the store rather than constructing another index map.
+   - preserve current image at the cursor.
+   - retain already-seen status for paths still present.
+   - remove missing paths.
+   - shuffle only newly added remaining paths.
+6. After reconciliation, store paths/revision refs atomically before the next timer tick can use
+   them.
+7. Remove `currentIndex` from timer-effect dependencies if tests prove the ref supplies the current
+   value. Keep interval, active, paused, image count, and effective advance callback dependencies.
+
+## Required Semantics
+
+- Starting image is not replayed before all other cycle images in a non-looping shuffled slideshow.
+- Current image remains current after a folder change.
+- Added images enter the unvisited portion.
+- Removed images disappear from order.
+- Direction changes preserve the existing reverse/forward tests.
+- Loop begins a fresh complete cycle only after the current cycle is exhausted.
+
+## Required Tests
+
+- Instrument a path getter or helper call count to prove current-index-only rerenders do not map the
+  full list. Do not use wall-clock timing.
+- Revision change triggers exactly one reconciliation.
+- Metadata-only update without list revision does not rebuild shuffle order.
+- Add, remove, reorder, filter, and unfilter preserve the required semantics.
+- A synthetic 10,000-image reconciliation performs no `indexOf` path lookup inside iteration.
+- All existing forward/reverse, loop, pause, fullscreen, and mid-cycle setting tests pass.
 
 ## Acceptance Criteria
 
-- `useSlideshow` no longer maps and joins every image path during normal render.
-- Shuffle reconciliation is O(n) for list changes, not O(n^2).
-- Slideshow start, pause, loop, shuffle, fullscreen, and folder-change behavior remain unchanged.
-- The implementation does not introduce visible UI changes.
+- Slide advance is O(1) with respect to folder size, excluding image loading itself.
+- Unrelated renders do not enumerate image paths.
+- Actual list reconciliation is O(n).
+- Visible behavior is unchanged.
 
-## Tests
+## Validation Commands
 
-- Run `pnpm run test:run -- src/hooks/useSlideshow.test.ts`.
-- Add or update tests for shuffle order reconciliation after image add/remove/reorder.
-- Run `pnpm run test:run`.
-- Run `pnpm run build`.
+```powershell
+pnpm run test:run -- src/hooks/useSlideshow.test.ts src/state/viewerStore.test.ts
+pnpm run test:run
+pnpm run build
+```
 
-## Reviewer Focus
+## Non-Goals
 
-- Confirm the new revision signal updates on every image-list mutation that matters.
-- Confirm current index refs remain fresh during timer callbacks.
-- Confirm no stale closure is introduced around slideshow settings.
-- Confirm large-list improvements are covered by a focused regression test.
+- No UI changes.
+- No slideshow option changes.
+- No folder catalog paging.
+- No alternate random-number generator.

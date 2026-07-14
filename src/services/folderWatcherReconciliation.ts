@@ -20,6 +20,8 @@ export interface FolderWatcherReconciliationOptions {
   currentIndex: number;
   currentImagePath: string | null;
   sortOrder: AppSettings['sortOrder'];
+  sortDirection?: AppSettings['sortDirection'];
+  randomOrder?: string[] | null;
 }
 
 export interface FolderWatcherReconciliationResult {
@@ -33,13 +35,21 @@ export interface FolderWatcherReconciliationResult {
 export function reconcileFolderWatcherPayload(
   options: FolderWatcherReconciliationOptions
 ): FolderWatcherReconciliationResult {
-  const { payload, images, currentIndex, currentImagePath, sortOrder } = options;
+  const {
+    payload,
+    images,
+    currentIndex,
+    currentImagePath,
+    sortOrder,
+    sortDirection = sortOrder === 'name' ? 'ascending' : 'descending',
+    randomOrder,
+  } = options;
   if (requiresFullRefresh(payload)) {
     return fullRefreshResult(images, currentIndex, currentImagePath);
   }
 
   const draft = applyFolderWatcherChanges(images, payload.changes, currentImagePath);
-  return reconcileDraft(draft, currentIndex, sortOrder);
+  return reconcileDraft(draft, currentIndex, sortOrder, sortDirection, randomOrder);
 }
 
 function requiresFullRefresh(payload: FolderWatcherPayload): boolean {
@@ -104,9 +114,16 @@ function applyFolderWatcherChange(
 function reconcileDraft(
   draft: FolderWatcherReconciliationDraft,
   currentIndex: number,
-  sortOrder: AppSettings['sortOrder']
+  sortOrder: AppSettings['sortOrder'],
+  sortDirection: AppSettings['sortDirection'],
+  randomOrder?: string[] | null
 ): FolderWatcherReconciliationResult {
-  const nextImages = sortImages(Array.from(draft.imagesByPath.values()), sortOrder);
+  const nextImages = sortImages(
+    Array.from(draft.imagesByPath.values()),
+    sortOrder,
+    sortDirection,
+    randomOrder
+  );
   const preferredIndex = resolvePreferredIndex(nextImages, currentIndex, draft.preferredPath);
   const preferredPath = draft.preferredPath;
   const resolvedPreferredPath =

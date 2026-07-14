@@ -21,6 +21,7 @@ vi.mock('../services/tauriCommands', () => ({
   scanFolder: vi.fn(),
   readFolderIndex: vi.fn(),
   refreshFolderIndex: vi.fn(),
+  writeSettings: vi.fn().mockResolvedValue(undefined),
   watchFolder: vi.fn().mockResolvedValue(undefined),
   unwatchFolder: vi.fn().mockResolvedValue(undefined),
   listenToFolderWatcherChanges: vi.fn().mockResolvedValue(vi.fn()),
@@ -68,7 +69,11 @@ describe('useImageNavigation', () => {
   beforeEach(() => {
     useViewerStore.getState().reset();
     useSettingsStore.setState({
-      settings: { ...useSettingsStore.getState().settings, sortOrder: 'name' },
+      settings: {
+        ...useSettingsStore.getState().settings,
+        sortOrder: 'name',
+        sortDirection: 'ascending',
+      },
     });
     vi.clearAllMocks();
     mockSetTitle.mockResolvedValue(undefined);
@@ -275,6 +280,62 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().viewMode).toBe('viewer');
     expect(useViewerStore.getState().currentImagePath).toBe('c:/test/img1.jpg');
     expect(refreshFolderIndex).toHaveBeenCalledWith('c:/test');
+  });
+
+  it('keeps a newly opened random folder order stable and selects its first image', async () => {
+    const folderImages = [
+      {
+        path: 'c:/random/a.jpg',
+        file_name: 'a.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/random/b.jpg',
+        file_name: 'b.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+      {
+        path: 'c:/random/c.jpg',
+        file_name: 'c.jpg',
+        extension: 'jpg',
+        size_bytes: 300,
+        modified_at: '3000',
+      },
+    ];
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        sortOrder: 'random',
+      },
+    });
+    (readFolderIndex as any).mockResolvedValue(folderImages);
+    (refreshFolderIndex as any).mockResolvedValue(folderImages);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      const { result } = renderHook(() => useImageNavigation());
+
+      await act(async () => {
+        await result.current.openFolder('c:/random');
+      });
+
+      await waitFor(() => {
+        expect(useViewerStore.getState().isFolderScanning).toBe(false);
+      });
+      expect(useViewerStore.getState().images.map((image) => image.file_name)).toEqual([
+        'b.jpg',
+        'c.jpg',
+        'a.jpg',
+      ]);
+      expect(useViewerStore.getState().currentIndex).toBe(0);
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/random/b.jpg');
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it('updates the title when opening an empty folder', async () => {
@@ -566,13 +627,81 @@ describe('useImageNavigation', () => {
 
     act(() => {
       useSettingsStore.setState({
-        settings: { ...useSettingsStore.getState().settings, sortOrder: 'size' },
+        settings: {
+          ...useSettingsStore.getState().settings,
+          sortOrder: 'size',
+          sortDirection: 'descending',
+        },
       });
     });
 
     // Wait for useEffect to run
     await waitFor(() => {
       expect(useViewerStore.getState().images[0].file_name).toBe('img2.jpg'); // Largest first
+    });
+  });
+
+  it('sorts back to name order and preserves the selected path and new index', async () => {
+    const mockImages = [
+      {
+        path: 'c:/photos/a-small.jpg',
+        file_name: 'a-small.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/photos/b-large.jpg',
+        file_name: 'b-large.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+
+    act(() => {
+      useViewerStore.getState().setImages(mockImages);
+      useViewerStore.getState().setCurrentIndex(0);
+    });
+
+    renderHook(() => useImageNavigation());
+
+    act(() => {
+      useSettingsStore.setState({
+        settings: {
+          ...useSettingsStore.getState().settings,
+          sortOrder: 'size',
+          sortDirection: 'descending',
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().images.map((image) => image.file_name)).toEqual([
+        'b-large.jpg',
+        'a-small.jpg',
+      ]);
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/photos/a-small.jpg');
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+    });
+
+    act(() => {
+      useSettingsStore.setState({
+        settings: {
+          ...useSettingsStore.getState().settings,
+          sortOrder: 'name',
+          sortDirection: 'ascending',
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().images.map((image) => image.file_name)).toEqual([
+        'a-small.jpg',
+        'b-large.jpg',
+      ]);
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/photos/a-small.jpg');
+      expect(useViewerStore.getState().currentIndex).toBe(0);
     });
   });
 
@@ -769,7 +898,11 @@ describe('useImageNavigation', () => {
   it('refresh applies non-name sort order', async () => {
     act(() => {
       useSettingsStore.setState({
-        settings: { ...useSettingsStore.getState().settings, sortOrder: 'size' },
+        settings: {
+          ...useSettingsStore.getState().settings,
+          sortOrder: 'size',
+          sortDirection: 'descending',
+        },
       });
       useViewerStore.getState().setFolderPath('c:/test');
       useViewerStore.getState().setImages([

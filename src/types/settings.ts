@@ -61,7 +61,8 @@ export interface AppSettings {
   windowHeight?: number;
   lastWindowDisplayKey?: string;
   windowBoundsByDisplay: Record<string, WindowBounds>;
-  sortOrder: 'name' | 'date' | 'size' | 'random';
+  sortOrder: 'name' | 'date' | 'created' | 'modified' | 'size' | 'random';
+  sortDirection: 'ascending' | 'descending';
   showThumbnails: boolean;
   promptProjectorGridOnOpen: boolean;
   openProjectorInGridView: boolean;
@@ -90,6 +91,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   rememberWindowBounds: true,
   windowBoundsByDisplay: {},
   sortOrder: 'name',
+  sortDirection: 'ascending',
   showThumbnails: true,
   promptProjectorGridOnOpen: true,
   openProjectorInGridView: false,
@@ -125,6 +127,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     last_window_display_key: settings.lastWindowDisplayKey,
     window_bounds_by_display: settings.windowBoundsByDisplay,
     sort_order: settings.sortOrder,
+    sort_direction: settings.sortDirection,
     show_thumbnails: settings.showThumbnails,
     prompt_projector_grid_on_open: settings.promptProjectorGridOnOpen,
     open_projector_in_grid_view: settings.openProjectorInGridView,
@@ -156,7 +159,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
 /** Convert Rust snake_case settings to frontend camelCase format */
 export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
   return {
-    theme: stringSetting(raw.theme, DEFAULT_SETTINGS.theme),
+    theme: parseTheme(raw.theme),
     slideshowIntervalSeconds: numberSetting(
       raw.slideshow_interval_seconds,
       DEFAULT_SETTINGS.slideshowIntervalSeconds
@@ -168,23 +171,20 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       raw.auto_fullscreen_on_slideshow,
       DEFAULT_SETTINGS.autoFullscreenOnSlideshow
     ),
-    cropSaveMode: raw.crop_save_mode === 'overwrite' ? 'overwrite' : DEFAULT_SETTINGS.cropSaveMode,
-    mouseWheelBehavior: stringSetting(
-      raw.mouse_wheel_behavior,
-      DEFAULT_SETTINGS.mouseWheelBehavior
-    ),
-    defaultFitMode: stringSetting(raw.default_fit_mode, DEFAULT_SETTINGS.defaultFitMode),
+    cropSaveMode: parseCropSaveMode(raw.crop_save_mode),
+    mouseWheelBehavior: parseMouseWheelBehavior(raw.mouse_wheel_behavior),
+    defaultFitMode: parseDefaultFitMode(raw.default_fit_mode),
     rememberWindowBounds: booleanSetting(
       raw.remember_window_bounds,
       DEFAULT_SETTINGS.rememberWindowBounds
     ),
-    windowX: raw.window_x as number | undefined,
-    windowY: raw.window_y as number | undefined,
-    windowWidth: raw.window_width as number | undefined,
-    windowHeight: raw.window_height as number | undefined,
+    windowX: finiteNumberSetting(raw.window_x),
+    windowY: finiteNumberSetting(raw.window_y),
+    windowWidth: positiveFiniteNumberSetting(raw.window_width),
+    windowHeight: positiveFiniteNumberSetting(raw.window_height),
     lastWindowDisplayKey: optionalTrimmedString(raw.last_window_display_key),
     windowBoundsByDisplay: parseWindowBoundsByDisplay(raw.window_bounds_by_display),
-    sortOrder: stringSetting(raw.sort_order, DEFAULT_SETTINGS.sortOrder),
+    ...parseSortSettings(raw.sort_order, raw.sort_direction),
     showThumbnails: booleanSetting(raw.show_thumbnails, DEFAULT_SETTINGS.showThumbnails),
     promptProjectorGridOnOpen: booleanSetting(
       raw.prompt_projector_grid_on_open,
@@ -209,12 +209,9 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
   };
 }
 
-function stringSetting<T extends string>(value: unknown, fallback: T): T {
-  return typeof value === 'string' && value.trim() ? (value as T) : fallback;
-}
-
 function numberSetting(value: unknown, fallback: number): number {
-  return typeof value === 'number' ? value : fallback;
+  const number = typeof value === 'number' ? value : Number.NaN;
+  return Number.isInteger(number) && number >= 1 && number <= 60 ? number : fallback;
 }
 
 function booleanSetting(value: unknown, fallback: boolean): boolean {
@@ -225,8 +222,63 @@ function parseUpdateChannel(value: unknown): UpdateChannel {
   return value === 'preview' ? 'preview' : DEFAULT_SETTINGS.updateChannel;
 }
 
+function parseTheme(value: unknown): AppSettings['theme'] {
+  return value === 'system' || value === 'dark' || value === 'light'
+    ? value
+    : DEFAULT_SETTINGS.theme;
+}
+
 function parseSlideshowDirection(value: unknown): SlideshowDirection {
   return value === 'reverse' ? 'reverse' : DEFAULT_SETTINGS.slideshowDirection;
+}
+
+function parseCropSaveMode(value: unknown): AppSettings['cropSaveMode'] {
+  return value === 'copy' || value === 'overwrite' ? value : DEFAULT_SETTINGS.cropSaveMode;
+}
+
+function parseMouseWheelBehavior(value: unknown): AppSettings['mouseWheelBehavior'] {
+  return value === 'navigate' || value === 'zoom' ? value : DEFAULT_SETTINGS.mouseWheelBehavior;
+}
+
+function parseDefaultFitMode(value: unknown): AppSettings['defaultFitMode'] {
+  return value === 'fit' || value === 'fill' || value === 'actual'
+    ? value
+    : DEFAULT_SETTINGS.defaultFitMode;
+}
+
+function parseSortSettings(
+  criterion: unknown,
+  direction: unknown
+): Pick<AppSettings, 'sortOrder' | 'sortDirection'> {
+  const legacyDate = criterion === 'date';
+  const sortOrder =
+    criterion === 'date'
+      ? 'modified'
+      : criterion === 'created' ||
+          criterion === 'modified' ||
+          criterion === 'name' ||
+          criterion === 'size' ||
+          criterion === 'random'
+        ? criterion
+        : DEFAULT_SETTINGS.sortOrder;
+  const defaultDirection =
+    sortOrder === 'name' ? 'ascending' : sortOrder === 'random' ? 'ascending' : 'descending';
+  const sortDirection =
+    direction === 'ascending' || direction === 'descending'
+      ? direction
+      : legacyDate
+        ? 'descending'
+        : defaultDirection;
+  return { sortOrder, sortDirection };
+}
+
+function finiteNumberSetting(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function positiveFiniteNumberSetting(value: unknown): number | undefined {
+  const number = finiteNumberSetting(value);
+  return number !== undefined && number > 0 ? number : undefined;
 }
 
 function optionalTrimmedString(value: unknown): string | undefined {
@@ -300,18 +352,11 @@ function parseWindowBoundsByDisplay(raw: unknown): Record<string, WindowBounds> 
     }
 
     const bounds = value as Record<string, unknown>;
-    const x = Number(bounds.x);
-    const y = Number(bounds.y);
-    const width = Number(bounds.width);
-    const height = Number(bounds.height);
-    if (
-      Number.isFinite(x) &&
-      Number.isFinite(y) &&
-      Number.isFinite(width) &&
-      Number.isFinite(height) &&
-      width > 0 &&
-      height > 0
-    ) {
+    const x = finiteNumberSetting(bounds.x);
+    const y = finiteNumberSetting(bounds.y);
+    const width = positiveFiniteNumberSetting(bounds.width);
+    const height = positiveFiniteNumberSetting(bounds.height);
+    if (x !== undefined && y !== undefined && width !== undefined && height !== undefined) {
       parsed[key] = { x, y, width, height };
     }
   }
@@ -360,7 +405,7 @@ function parsePersistedMarkedFolders(raw: unknown): PersistedMarkedFolder[] {
     folders.push({
       folderPath,
       markedPaths,
-      updatedAt: typeof entry.updated_at === 'number' ? entry.updated_at : 0,
+      updatedAt: finiteNumberSetting(entry.updated_at) ?? 0,
     });
   }
 
@@ -377,8 +422,12 @@ function parseRecentFolders(raw: unknown): RecentFolder[] {
       const folder = value as Record<string, unknown>;
       const path = String(folder.path ?? '').trim();
       const label = String(folder.label ?? '').trim() || folderLabelFromPath(path);
-      const openedAt = Number(folder.opened_at ?? folder.openedAt ?? 0);
-      if (!path || !Number.isFinite(openedAt)) {
+      const openedAtValue = folder.opened_at ?? folder.openedAt;
+      const openedAt =
+        typeof openedAtValue === 'number' && Number.isFinite(openedAtValue)
+          ? openedAtValue
+          : undefined;
+      if (!path || openedAt === undefined) {
         return null;
       }
       return { path, label, openedAt };

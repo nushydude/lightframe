@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThumbnailStrip } from './ThumbnailStrip';
 import { ContactSheet } from './ContactSheet';
@@ -197,6 +197,27 @@ describe('thumbnail consumers', () => {
       | undefined;
     expect(firstPreloadRequest?.some((request) => request.path === images[80].path)).toBe(true);
     expect(firstPreloadRequest?.some((request) => request.path === images[0].path)).toBe(false);
+  });
+
+  it('focuses off-screen thumbnails after Home and End virtualize their slice', () => {
+    const images = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({ currentIndex: 0, images });
+
+    render(<ThumbnailStrip />);
+    const firstThumbnail = screen.getByRole('option', { name: '0.jpg' });
+    fireEvent.keyDown(firstThumbnail, { key: 'End' });
+
+    const lastThumbnail = screen.getByRole('option', { name: '99.jpg' });
+    expect(document.activeElement).toBe(lastThumbnail);
+
+    fireEvent.keyDown(lastThumbnail, { key: 'Home' });
+    expect(document.activeElement).toBe(screen.getByRole('option', { name: '0.jpg' }));
   });
 
   it('recomputes the preload window when a mounted strip receives a new image list', () => {
