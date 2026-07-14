@@ -282,6 +282,62 @@ describe('useImageNavigation', () => {
     expect(refreshFolderIndex).toHaveBeenCalledWith('c:/test');
   });
 
+  it('keeps a newly opened random folder order stable and selects its first image', async () => {
+    const folderImages = [
+      {
+        path: 'c:/random/a.jpg',
+        file_name: 'a.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1000',
+      },
+      {
+        path: 'c:/random/b.jpg',
+        file_name: 'b.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+      {
+        path: 'c:/random/c.jpg',
+        file_name: 'c.jpg',
+        extension: 'jpg',
+        size_bytes: 300,
+        modified_at: '3000',
+      },
+    ];
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        sortOrder: 'random',
+      },
+    });
+    (readFolderIndex as any).mockResolvedValue(folderImages);
+    (refreshFolderIndex as any).mockResolvedValue(folderImages);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      const { result } = renderHook(() => useImageNavigation());
+
+      await act(async () => {
+        await result.current.openFolder('c:/random');
+      });
+
+      await waitFor(() => {
+        expect(useViewerStore.getState().isFolderScanning).toBe(false);
+      });
+      expect(useViewerStore.getState().images.map((image) => image.file_name)).toEqual([
+        'b.jpg',
+        'c.jpg',
+        'a.jpg',
+      ]);
+      expect(useViewerStore.getState().currentIndex).toBe(0);
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/random/b.jpg');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('updates the title when opening an empty folder', async () => {
     useViewerStore.setState({
       folderPath: 'c:/old',

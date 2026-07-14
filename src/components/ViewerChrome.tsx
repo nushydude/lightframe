@@ -2361,7 +2361,8 @@ export function ViewerChrome({
           aria-live="polite"
         >
           {isSlideshowPaused ? 'Paused' : 'Slideshow'} ·{' '}
-          {shuffleSlideshow ? 'Shuffle' : 'Sequential'} · {slideshowIntervalSeconds}s
+          {shuffleSlideshow ? 'Shuffle' : slideshowDirection === 'reverse' ? 'Reverse' : 'Forward'}{' '}
+          · {slideshowIntervalSeconds}s
         </div>
       )}
 

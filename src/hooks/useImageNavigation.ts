@@ -253,15 +253,28 @@ export function useImageNavigation() {
     return () => window.removeEventListener('lightframe-reshuffle-folder', handleReshuffle);
   }, [setImages]);
 
-  const applyActiveSortOrder = useCallback((folderImages: ImageFile[]) => {
+  const applyActiveSortOrder = useCallback((folderImages: ImageFile[], nextFolderPath?: string) => {
+    if (nextFolderPath !== undefined && randomFolderRef.current !== nextFolderPath) {
+      randomFolderRef.current = nextFolderPath;
+      randomOrderRef.current = null;
+      randomSortKeyRef.current = null;
+    }
+
     const settings = useSettingsStore.getState().settings;
+    const sortKey = `${settings.sortOrder}:${settings.sortDirection}`;
+    if (randomSortKeyRef.current !== sortKey) {
+      randomSortKeyRef.current = sortKey;
+      randomOrderRef.current = null;
+    }
     const sorted = sortImages(
       folderImages,
       settings.sortOrder,
       effectiveSortDirectionRef.current,
       randomOrderRef.current
     );
-    if (settings.sortOrder === 'random') randomOrderRef.current = sorted.map((image) => image.path);
+    if (settings.sortOrder === 'random') {
+      randomOrderRef.current = sorted.map((image) => image.path);
+    }
     return sorted;
   }, []);
 
@@ -314,7 +327,7 @@ export function useImageNavigation() {
         return null;
       }
 
-      folderImages = applyActiveSortOrder(folderImages);
+      folderImages = applyActiveSortOrder(folderImages, nextFolderPath);
       if (!isCurrentGeneration(loadGeneration)) {
         return null;
       }
@@ -333,7 +346,7 @@ export function useImageNavigation() {
         );
         recordFolderOpenIndexReadTelemetry(getNow() - indexReadStartedAt);
         const folderImages = Array.isArray(cachedResult) ? cachedResult : [];
-        return applyActiveSortOrder(folderImages);
+        return applyActiveSortOrder(folderImages, nextFolderPath);
       } catch (err) {
         console.warn('Failed to read folder index, falling back to live scan:', err);
         return [];
@@ -432,7 +445,7 @@ export function useImageNavigation() {
         );
         if (!isCurrentGeneration(loadGeneration)) return;
 
-        folderImages = applyActiveSortOrder(folderImages);
+        folderImages = applyActiveSortOrder(folderImages, parentFolder);
         if (!isCurrentGeneration(loadGeneration)) return;
 
         const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
@@ -674,7 +687,7 @@ export function useImageNavigation() {
       );
       if (!isCurrentGeneration(loadGeneration)) return;
 
-      refreshedImages = applyActiveSortOrder(refreshedImages);
+      refreshedImages = applyActiveSortOrder(refreshedImages, snapshot.activeFolderPath);
       if (!isCurrentGeneration(loadGeneration)) return;
 
       const invalidatedPaths = collectFullRefreshInvalidatedPaths(

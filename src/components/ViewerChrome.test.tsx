@@ -505,8 +505,16 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    expect(screen.getByRole('status')).toHaveTextContent('Slideshow · Sequential · 4s');
+    expect(screen.getByRole('status')).toHaveTextContent('Slideshow · Forward · 4s');
     expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite');
+
+    act(() => {
+      useSettingsStore.setState((state) => ({
+        settings: { ...state.settings, slideshowDirection: 'reverse' },
+      }));
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('Slideshow · Reverse · 4s');
   });
 
   it('shows and updates all slideshow options from the toolbar disclosure', async () => {
