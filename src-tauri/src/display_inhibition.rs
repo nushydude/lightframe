@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use std::sync::Mutex;
 
 #[cfg(windows)]

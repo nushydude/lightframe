@@ -3,7 +3,7 @@ import type { AppSettings } from '../types/settings';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { readSettings, writeSettings } from '../services/tauriCommands';
 
-export interface SettingsState {
+interface SettingsState {
   settings: AppSettings;
   isLoaded: boolean;
   saveStatus: 'idle' | 'saving' | 'error';

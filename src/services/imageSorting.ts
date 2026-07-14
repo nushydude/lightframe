@@ -3,7 +3,7 @@ import type { AppSettings } from '../types/settings';
 
 const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-export function compareImagesByName(a: ImageFile, b: ImageFile): number {
+function compareImagesByName(a: ImageFile, b: ImageFile): number {
   return naturalNameCollator.compare(a.file_name, b.file_name) || a.path.localeCompare(b.path);
 }
 
@@ -11,6 +11,10 @@ function parseTimestamp(value: string | null | undefined): number | null {
   if (value == null || value.trim() === '') return null;
   const timestamp = Number(value);
   return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function normalizePathKey(path: string): string {
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 export function shuffleImages(
@@ -25,19 +29,18 @@ export function shuffleImages(
   return shuffled;
 }
 
-export function reconcileRandomImages(
+function reconcileRandomImages(
   images: ImageFile[],
   previousOrder: string[] | null,
   random: () => number = Math.random
 ): ImageFile[] {
   if (!previousOrder) return shuffleImages(images, random);
-  const byPath = new Map(images.map((image) => [image.path.toLowerCase(), image]));
+  const previousPaths = new Set(previousOrder.map(normalizePathKey));
+  const byPath = new Map(images.map((image) => [normalizePathKey(image.path), image]));
   const retained = previousOrder
-    .map((path) => byPath.get(path.toLowerCase()))
+    .map((path) => byPath.get(normalizePathKey(path)))
     .filter((image): image is ImageFile => Boolean(image));
-  const added = images.filter(
-    (image) => !previousOrder.some((path) => path.toLowerCase() === image.path.toLowerCase())
-  );
+  const added = images.filter((image) => !previousPaths.has(normalizePathKey(image.path)));
   const result = [...retained];
   for (const image of shuffleImages(added, random)) {
     result.splice(Math.floor(random() * (result.length + 1)), 0, image);
@@ -55,19 +58,33 @@ export function sortImages(
     return randomOrder ? reconcileRandomImages(images, randomOrder) : shuffleImages(images);
   }
   const direction = sortDirection === 'ascending' ? 1 : -1;
-  return [...images].sort((a, b) => {
-    if (sortOrder === 'name') return compareImagesByName(a, b) * direction;
-    if (sortOrder === 'size') {
-      const comparison = a.size_bytes - b.size_bytes;
-      return comparison * direction || compareImagesByName(a, b);
-    } else {
-      const field = sortOrder === 'created' ? 'created_at' : 'modified_at';
-      const da = parseTimestamp(a[field]);
-      const db = parseTimestamp(b[field]);
-      if (da == null && db != null) return 1;
-      if (da != null && db == null) return -1;
-      const comparison = da == null || db == null ? 0 : da - db;
-      return comparison * direction || compareImagesByName(a, b);
-    }
-  });
+  return [...images].sort(createImageComparator(sortOrder, direction));
+}
+
+function compareImagesBySize(a: ImageFile, b: ImageFile, direction: number): number {
+  return (a.size_bytes - b.size_bytes) * direction || compareImagesByName(a, b);
+}
+
+function compareImagesByDate(
+  a: ImageFile,
+  b: ImageFile,
+  field: 'created_at' | 'modified_at',
+  direction: number
+): number {
+  const da = parseTimestamp(a[field]);
+  const db = parseTimestamp(b[field]);
+  if (da == null && db != null) return 1;
+  if (da != null && db == null) return -1;
+  const comparison = da == null || db == null ? 0 : da - db;
+  return comparison * direction || compareImagesByName(a, b);
+}
+
+function createImageComparator(
+  sortOrder: Exclude<AppSettings['sortOrder'], 'random'>,
+  direction: number
+): (a: ImageFile, b: ImageFile) => number {
+  if (sortOrder === 'name') return (a, b) => compareImagesByName(a, b) * direction;
+  if (sortOrder === 'size') return (a, b) => compareImagesBySize(a, b, direction);
+  const field = sortOrder === 'created' ? 'created_at' : 'modified_at';
+  return (a, b) => compareImagesByDate(a, b, field, direction);
 }

@@ -88,4 +88,21 @@ describe('sortImages', () => {
     expect(sortSpy).not.toHaveBeenCalled();
     sortSpy.mockRestore();
   });
+
+  it('reconciles random order with normalized paths', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const randomImages = [
+      { ...images[0], path: 'C:/Images/retained.jpg', file_name: 'retained.jpg' },
+      { ...images[1], path: 'C:/Images/added.jpg', file_name: 'added.jpg' },
+    ];
+
+    try {
+      const reconciled = sortImages(randomImages, 'random', undefined, [
+        'c:\\images\\retained.jpg',
+      ]);
+      expect(reconciled.map((image) => image.file_name)).toEqual(['added.jpg', 'retained.jpg']);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
 });

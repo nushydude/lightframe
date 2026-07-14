@@ -202,7 +202,9 @@ describe('ContactSheet', () => {
       />
     );
 
-    const input = screen.getByRole('searchbox', { name: 'Search filenames' });
+    const input = screen.getByRole('searchbox', {
+      name: 'Search filenames',
+    }) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'target' } });
     expect(screen.getByText('1 of 3 images')).toBeInTheDocument();
     fireEvent.click(screen.getByText('target.png'));
@@ -279,6 +281,68 @@ describe('ContactSheet', () => {
     expect(onExitGridView).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(onExitGridView).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps search focused while typing multiple characters', () => {
+    useViewerStore.setState({
+      currentIndex: 0,
+      images: Array.from({ length: 8 }, (_, index) => ({
+        path: `C:/images/${index}.jpg`,
+        file_name: `photo-${index}.jpg`,
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: String(index),
+      })),
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    const input = screen.getByRole('searchbox', { name: 'Search filenames' }) as HTMLInputElement;
+    input.focus();
+    for (const character of 'photo-7') {
+      fireEvent.change(input, { target: { value: input.value + character } });
+      expect(document.activeElement).toBe(input);
+    }
+    expect(input).toHaveValue('photo-7');
+  });
+
+  it('focuses an off-screen target after End and Home virtualize it', () => {
+    const images = Array.from({ length: 40 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({ currentIndex: 0, images });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.keyDown(window, { key: 'End' });
+    const lastCell = screen.getByRole('gridcell', { name: '39.jpg' });
+    expect(document.activeElement).toBe(lastCell);
+
+    fireEvent.keyDown(lastCell, { key: 'Home' });
+    const firstCell = screen.getByRole('gridcell', { name: '0.jpg' });
+    expect(document.activeElement).toBe(firstCell);
   });
 
   it('shows the no-match message while keeping search available', () => {

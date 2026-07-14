@@ -150,12 +150,28 @@ export function ContactSheet({
   const hasSelection = selectedPaths.length > 0;
 
   useLayoutEffect(() => {
+    const activeElement = document.activeElement;
+    if (
+      activeElement === searchInputRef.current ||
+      (activeElement !== document.body &&
+        !gridRef.current?.contains(activeElement) &&
+        !activeElement?.matches('[role="gridcell"]'))
+    ) {
+      return;
+    }
+
     const focusPath = searchResults[currentResultIndex]?.image.path ?? displayedImages[0]?.path;
     const activeCell = Array.from(
       gridRef.current?.querySelectorAll<HTMLButtonElement>('[role="gridcell"]') ?? []
     ).find((cell) => cell.dataset.imagePath === focusPath);
     activeCell?.focus();
-  }, [currentResultIndex, displayedImages, searchResults]);
+  }, [
+    currentResultIndex,
+    displayedImages,
+    searchResults,
+    visibleRange.endIndex,
+    visibleRange.startIndex,
+  ]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -186,10 +202,12 @@ export function ContactSheet({
     const viewBottom = viewTop + contentRef.current.clientHeight;
 
     if (targetTop < viewTop || targetBottom > viewBottom) {
+      const nextScrollTop = Math.max(0, targetTop - GRID_ROW_HEIGHT);
       contentRef.current.scrollTo({
-        top: Math.max(0, targetTop - GRID_ROW_HEIGHT),
+        top: nextScrollTop,
         behavior: 'auto',
       });
+      setScrollTop(nextScrollTop);
     }
   }, [activeRow, currentIndex]);
 

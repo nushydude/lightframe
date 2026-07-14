@@ -262,12 +262,21 @@ export function ThumbnailStrip() {
   };
 
   useLayoutEffect(() => {
+    const activeElement = document.activeElement;
+    if (
+      activeElement !== document.body &&
+      !containerRef.current?.contains(activeElement) &&
+      !activeElement?.matches('[role="option"]')
+    ) {
+      return;
+    }
+
     const activePath = images[currentIndex]?.path;
     const activeButton = Array.from(
       containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []
     ).find((button) => button.dataset.imagePath === activePath);
     activeButton?.focus();
-  }, [currentIndex, images]);
+  }, [currentIndex, endIndex, images, startIndex]);
 
   if (images.length <= 1) return null;
 
