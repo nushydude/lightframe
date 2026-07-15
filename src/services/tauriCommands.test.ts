@@ -4,6 +4,7 @@ import {
   acquireSlideshowDisplayInhibition,
   getParentFolder,
   releaseSlideshowDisplayInhibition,
+  updateRecentFoldersJumpList,
 } from './tauriCommands';
 
 describe('tauriCommands path helpers', () => {
@@ -30,6 +31,23 @@ describe('tauriCommands display inhibition wrappers', () => {
     expect(vi.mocked(invoke).mock.calls.slice(-2)).toEqual([
       ['acquire_slideshow_display_inhibition'],
       ['release_slideshow_display_inhibition'],
+    ]);
+  });
+});
+
+describe('tauriCommands recent folder wrappers', () => {
+  it('updates the native Jump List using the persisted folder shape', async () => {
+    vi.mocked(invoke).mockResolvedValue(['C:/Removed']);
+
+    await expect(
+      updateRecentFoldersJumpList([{ path: 'C:/Images', label: 'Images', openedAt: 123 }])
+    ).resolves.toEqual(['C:/Removed']);
+
+    expect(vi.mocked(invoke).mock.calls[vi.mocked(invoke).mock.calls.length - 1]).toEqual([
+      'update_recent_folders_jump_list',
+      {
+        recentFolders: [{ path: 'C:/Images', label: 'Images', opened_at: 123 }],
+      },
     ]);
   });
 });

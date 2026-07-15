@@ -70,6 +70,11 @@
           "name": "file",
           "index": 1,
           "takesValue": true
+        },
+        {
+          "name": "folder",
+          "short": "f",
+          "takesValue": true
         }
       ]
     },

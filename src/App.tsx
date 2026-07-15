@@ -54,6 +54,7 @@ import {
   isDirectory,
   openSecondaryWindow,
   requestStateSync,
+  updateRecentFoldersJumpList,
 } from './services/tauriCommands';
 import { resolveStartupDecision } from './services/startup';
 import {
@@ -203,6 +204,40 @@ function App() {
   }, [settings.theme]);
 
   useEffect(() => {
+    if (!isMainWindowRef.current || !isLoaded) {
+      return;
+    }
+
+    let isCancelled = false;
+    void updateRecentFoldersJumpList(settings.recentFolders)
+      .then(async (removedPaths) => {
+        if (isCancelled || removedPaths.length === 0) {
+          return;
+        }
+
+        const removedKeys = new Set(
+          removedPaths.map((path) => path.replace(/\\/g, '/').toLowerCase())
+        );
+        const currentSettings = useSettingsStore.getState().settings;
+        const nextRecentFolders = currentSettings.recentFolders.filter(
+          (folder) => !removedKeys.has(folder.path.replace(/\\/g, '/').toLowerCase())
+        );
+        if (nextRecentFolders.length !== currentSettings.recentFolders.length) {
+          await updateSettings({ recentFolders: nextRecentFolders });
+        }
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          console.warn('Failed to update Windows recent folders Jump List:', error);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isLoaded, settings.recentFolders, updateSettings]);
+
+  useEffect(() => {
     const profile = getPerformanceModeProfile(settings.performanceMode);
     configureImageAssetCache({ previewCacheBudgetBytes: profile.previewCacheBudgetBytes });
     configureThumbnailCache({ cacheBudgetBytes: profile.thumbnailCacheBudgetBytes });
@@ -244,10 +279,12 @@ function App() {
         if (isMainWindowRef.current) {
           const cliResolveStartedAt = performance.now();
           const matches = await getMatches();
-          const startupDecision = resolveStartupDecision(matches.args.file);
+          const startupDecision = resolveStartupDecision(matches.args.file, matches.args.folder);
           recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
-          if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
+          if (startupDecision.mode === 'open-folder' && startupDecision.folderPath) {
+            await openFolder(startupDecision.folderPath);
+          } else if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
             const startupImageOpenStartedAt = performance.now();
             await openImageForStartup(startupDecision.filePath);
             recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
@@ -284,6 +321,7 @@ function App() {
     isProjectorWindow,
     loadCuration,
     loadSettings,
+    openFolder,
     openImage,
     openImageForStartup,
     restoreMainWindowBounds,

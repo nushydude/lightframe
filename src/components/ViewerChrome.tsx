@@ -6,6 +6,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
   type ReactNode,
 } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -152,6 +153,7 @@ interface MenuShortcutAction {
 }
 
 interface SlideshowOptionsProps {
+  menuRef: RefObject<HTMLDetailsElement | null>;
   canStart: boolean;
   shuffle: boolean;
   direction: 'forward' | 'reverse';
@@ -168,6 +170,7 @@ interface SlideshowOptionsProps {
 }
 
 function SlideshowOptions({
+  menuRef,
   canStart,
   shuffle,
   direction,
@@ -176,18 +179,17 @@ function SlideshowOptions({
   autoFullscreen,
   updateSettings,
 }: SlideshowOptionsProps) {
-  const detailsRef = useRef<HTMLDetailsElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
   const closeAndRestoreFocus = () => {
-    if (detailsRef.current?.open) {
-      detailsRef.current.open = false;
+    if (menuRef.current?.open) {
+      menuRef.current.open = false;
       triggerRef.current?.focus();
     }
   };
 
   return (
-    <details ref={detailsRef} className="slideshow-options-menu">
+    <details ref={menuRef} className="slideshow-options-menu">
       <summary
         ref={triggerRef}
         className="control-btn control-btn--text slideshow-options-trigger"
@@ -691,6 +693,7 @@ export function ViewerChrome({
   const editQueueMenuRef = useRef<HTMLDetailsElement | null>(null);
   const cropActionsMenuRef = useRef<HTMLDetailsElement | null>(null);
   const compactBottomMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const slideshowOptionsMenuRef = useRef<HTMLDetailsElement | null>(null);
   const shouldUseCompactBottomControls = useMediaQuery(COMPACT_BOTTOM_CONTROLS_QUERY);
   const shouldMoveRotateControls = useMediaQuery(COMPACT_ROTATE_CONTROLS_QUERY);
 
@@ -718,6 +721,7 @@ export function ViewerChrome({
       editQueueMenuRef,
       cropActionsMenuRef,
       compactBottomMenuRef,
+      slideshowOptionsMenuRef,
     ],
     []
   );
@@ -753,15 +757,7 @@ export function ViewerChrome({
 
       if (
         target.closest(
-          '.top-bar-menu, .top-bar-submenu, .quality-menu, .crop-actions-menu, .bottom-controls-menu, .edit-queue-menu, .context-menu'
-        )
-      ) {
-        return;
-      }
-
-      if (
-        target.closest(
-          '.top-bar, .bottom-controls, .thumbnail-strip, .nav-arrow, .slideshow-indicator'
+          '.top-bar-menu, .top-bar-submenu, .quality-menu, .crop-actions-menu, .bottom-controls-menu, .edit-queue-menu, .slideshow-options-menu, .context-menu'
         )
       ) {
         return;
@@ -865,10 +861,6 @@ export function ViewerChrome({
   const slideshowShuffleLabel = shuffleSlideshow
     ? 'Turn slideshow shuffle off'
     : 'Shuffle slideshow';
-  const isReverseSlideshow = slideshowDirection === 'reverse';
-  const slideshowDirectionLabel = isReverseSlideshow
-    ? 'Run slideshow forward'
-    : 'Run slideshow in reverse';
   const markedPathSet = useMemo(() => new Set(markedPaths), [markedPaths]);
   const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
   const contextMenuPath = contextMenu.path;
@@ -887,12 +879,6 @@ export function ViewerChrome({
     } catch (err) {
       console.error('Failed to toggle fullscreen:', err);
     }
-  };
-
-  const handleToggleSlideshowDirection = () => {
-    void updateSettings({
-      slideshowDirection: isReverseSlideshow ? 'forward' : 'reverse',
-    });
   };
 
   const handleToggleSlideshowShuffle = () => {
@@ -2424,20 +2410,8 @@ export function ViewerChrome({
           <ToolbarIcon name="shuffle" />
         </button>
 
-        <button
-          className={`control-btn has-tooltip ${isReverseSlideshow ? 'active' : ''}`}
-          onClick={handleToggleSlideshowDirection}
-          data-tooltip={slideshowDirectionLabel}
-          title={slideshowDirectionLabel}
-          aria-label={slideshowDirectionLabel}
-          id="btn-slideshow-direction"
-          disabled={!canStartSlideshow}
-          type="button"
-        >
-          <ToolbarIcon name={isReverseSlideshow ? 'slideshowReverse' : 'slideshowForward'} />
-        </button>
-
         <SlideshowOptions
+          menuRef={slideshowOptionsMenuRef}
           canStart={canStartSlideshow}
           shuffle={shuffleSlideshow}
           direction={slideshowDirection}

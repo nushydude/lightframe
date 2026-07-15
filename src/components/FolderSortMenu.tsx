@@ -28,8 +28,9 @@ export function FolderSortMenu() {
     <div className="folder-sort-menu" aria-label="Folder sort">
       <div className="top-bar-menu-section-label">{summary}</div>
       <label className="folder-sort-field">
-        Sort by
+        <span>Sort by</span>
         <select
+          className="folder-sort-select"
           aria-label="Sort by"
           value={settings.sortOrder}
           onChange={(event) =>
@@ -44,8 +45,9 @@ export function FolderSortMenu() {
         </select>
       </label>
       <label className="folder-sort-field">
-        Direction
+        <span>Direction</span>
         <select
+          className="folder-sort-select"
           aria-label="Direction"
           value={settings.sortDirection}
           disabled={settings.sortOrder === 'random'}
