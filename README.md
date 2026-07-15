@@ -153,7 +153,9 @@ Settings check that manifest instead of the stable `/latest` release.
 - `src/` contains the React app, Zustand stores, hooks, UI components, image loading, curation,
   editing queue, telemetry, and tests.
 - `src-tauri/` contains the Tauri shell, Rust commands, folder watching, native Windows codec
-  integration, generated asset caches, image editing operations, and Rust tests.
+  integration, generated asset caches, image editing operations, and Rust tests. Curation metadata
+  uses 256 incrementally updated shards with a write-ahead journal; legacy `curation.json` data is
+  migrated automatically and retained as a backup.
 - `.github/workflows/ci.yml` runs frontend, Rust, and Windows packaged-startup quality gates.
 - `.github/workflows/release.yml` builds draft Windows stable and prerelease packages from version
   tags.

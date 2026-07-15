@@ -1,4 +1,6 @@
+mod atomic_file;
 mod commands;
+mod curation;
 mod display_inhibition;
 mod folder_index;
 mod folder_watcher;
