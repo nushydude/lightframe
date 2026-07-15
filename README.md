@@ -135,6 +135,12 @@ CI also runs a Windows packaged-startup smoke job for pull requests, `main`, and
 branches. It builds the release executable, launches it with seeded window-position settings, and
 fails if the app exits, never shows a main window, or records a fresh Windows crash event.
 
+Pull requests also run two dependency gates: OSV-Scanner `v2.3.8` checks `pnpm-lock.yaml`, and
+RustSec `audit-check@v2.0.0` checks `src-tauri/Cargo.lock`. Both fail on any reported vulnerability.
+There are currently no ignored advisories. Any future exception must include a linked tracking issue,
+an applicability rationale, and a review-by date next to the ignore entry. Dependabot owns weekly
+updates for GitHub Actions, npm, and Cargo pins.
+
 The repository installs local git hooks with `pnpm install`. The pre-commit hook runs
 `pnpm run commit:gate`, and the commit-msg hook enforces Conventional Commit messages.
 
