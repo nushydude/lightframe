@@ -127,8 +127,13 @@ mod imp {
         let mut paths = Vec::new();
 
         for index in 0..count {
-            let shell_link: IShellLinkW = unsafe { removed_destinations.GetAt(index) }
-                .map_err(|error| format!("failed to read removed Jump List item: {error}"))?;
+            let removed_object: windows::core::IUnknown =
+                unsafe { removed_destinations.GetAt(index) }
+                    .map_err(|error| format!("failed to read removed Jump List item: {error}"))?;
+            let shell_link: IShellLinkW = match removed_object.cast() {
+                Ok(shell_link) => shell_link,
+                Err(_) => continue,
+            };
             let mut arguments = vec![0u16; 32_768];
             unsafe {
                 shell_link
