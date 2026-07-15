@@ -140,6 +140,8 @@ RustSec `audit-check@v2.0.0` checks `src-tauri/Cargo.lock`. Both fail on any rep
 There are currently no ignored advisories. Any future exception must include a linked tracking issue,
 an applicability rationale, and a review-by date next to the ignore entry. Dependabot owns weekly
 updates for GitHub Actions, npm, and Cargo pins.
+The pnpm `esbuild` override keeps Vite 7 on the first patched `0.28.x` release; remove it only when
+Vite's declared range includes a non-vulnerable release and the OSV gate remains green.
 
 The repository installs local git hooks with `pnpm install`. The pre-commit hook runs
 `pnpm run commit:gate`, and the commit-msg hook enforces Conventional Commit messages.
