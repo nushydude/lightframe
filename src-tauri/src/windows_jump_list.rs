@@ -9,11 +9,14 @@ mod imp {
     use std::path::Path;
 
     use windows::core::{Interface, PCWSTR};
+    use windows::Win32::Storage::EnhancedStorage::PKEY_Title;
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::UI::Shell::{
         DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, ShellLink,
     };
@@ -50,6 +53,7 @@ mod imp {
         let collection: IObjectCollection =
             unsafe { CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|error| format!("failed to create Jump List item collection: {error}"))?;
+        let mut added_count = 0;
 
         for folder in recent_folders {
             if !Path::new(&folder.path).is_dir()
@@ -62,9 +66,12 @@ mod imp {
                 unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
                     .map_err(|error| format!("failed to create Jump List folder link: {error}"))?;
             let executable_wide = wide_string(executable_path.as_os_str());
-            let arguments_wide =
-                wide_string(format!("{FOLDER_ARGUMENT} \"{}\"", folder.path.replace('"', "\\\"")));
+            let arguments_wide = wide_string(format!(
+                "{FOLDER_ARGUMENT} {}",
+                quote_windows_command_line_argument(&folder.path)
+            ));
             let label_wide = wide_string(&folder.label);
+            let title = PROPVARIANT::from(folder.label.as_str());
 
             unsafe {
                 shell_link
@@ -76,6 +83,18 @@ mod imp {
                 shell_link
                     .SetDescription(PCWSTR(label_wide.as_ptr()))
                     .map_err(|error| format!("failed to set Jump List folder label: {error}"))?;
+                shell_link
+                    .SetIconLocation(PCWSTR(executable_wide.as_ptr()), 0)
+                    .map_err(|error| format!("failed to set Jump List folder icon: {error}"))?;
+                let property_store: IPropertyStore = shell_link.cast().map_err(|error| {
+                    format!("failed to open Jump List folder properties: {error}")
+                })?;
+                property_store
+                    .SetValue(&PKEY_Title, &title)
+                    .map_err(|error| format!("failed to set Jump List folder title: {error}"))?;
+                property_store.Commit().map_err(|error| {
+                    format!("failed to commit Jump List folder properties: {error}")
+                })?;
                 let shell_link_unknown: windows::core::IUnknown = shell_link
                     .cast()
                     .map_err(|error| format!("failed to cast Jump List folder link: {error}"))?;
@@ -83,14 +102,17 @@ mod imp {
                     .AddObject(&shell_link_unknown)
                     .map_err(|error| format!("failed to add folder to Jump List: {error}"))?;
             }
+            added_count += 1;
         }
 
         unsafe {
-            destination_list
-                .AppendCategory(PCWSTR(wide_string(CATEGORY_NAME).as_ptr()), &collection)
-                .map_err(|error| {
-                    format!("failed to append Recent Folders Jump List category: {error}")
-                })?;
+            if added_count > 0 {
+                destination_list
+                    .AppendCategory(PCWSTR(wide_string(CATEGORY_NAME).as_ptr()), &collection)
+                    .map_err(|error| {
+                        format!("failed to append Recent Folders Jump List category: {error}")
+                    })?;
+            }
             destination_list
                 .CommitList()
                 .map_err(|error| format!("failed to commit Windows Jump List: {error}"))?;
@@ -123,9 +145,56 @@ mod imp {
 
     fn parse_folder_argument(arguments: &str) -> Option<String> {
         let prefix = format!("{FOLDER_ARGUMENT} ");
-        let value = arguments.strip_prefix(&prefix)?.trim();
-        let path = value.strip_prefix('"')?.strip_suffix('"')?;
-        (!path.is_empty()).then(|| path.replace("\\\"", "\""))
+        let value = arguments.strip_prefix(&prefix)?.trim_start();
+        let value = value.strip_prefix('"')?;
+        let mut backslash_count = 0;
+
+        for (index, character) in value.char_indices() {
+            if character == '\\' {
+                backslash_count += 1;
+                continue;
+            }
+
+            if character == '"' && backslash_count % 2 == 0 {
+                let quoted_path = &value[..index];
+                let trailing_backslashes =
+                    quoted_path.chars().rev().take_while(|character| *character == '\\').count();
+                let prefix_length = quoted_path.len() - trailing_backslashes;
+                let mut path = quoted_path[..prefix_length].to_string();
+                path.extend(std::iter::repeat_n('\\', trailing_backslashes / 2));
+                return (!path.is_empty()).then_some(path);
+            }
+
+            backslash_count = 0;
+        }
+
+        None
+    }
+
+    fn quote_windows_command_line_argument(value: &str) -> String {
+        let mut quoted = String::with_capacity(value.len() + 2);
+        let mut backslash_count = 0;
+        quoted.push('"');
+
+        for character in value.chars() {
+            if character == '\\' {
+                backslash_count += 1;
+                continue;
+            }
+
+            if character == '"' {
+                quoted.extend(std::iter::repeat_n('\\', backslash_count * 2 + 1));
+                quoted.push('"');
+            } else {
+                quoted.extend(std::iter::repeat_n('\\', backslash_count));
+                quoted.push(character);
+            }
+            backslash_count = 0;
+        }
+
+        quoted.extend(std::iter::repeat_n('\\', backslash_count * 2));
+        quoted.push('"');
+        quoted
     }
 
     fn normalize_path(path: &str) -> String {
@@ -170,6 +239,22 @@ mod imp {
                 parse_folder_argument(r#"--folder "C:\Images\Summer""#),
                 Some(r"C:\Images\Summer".to_string())
             );
+        }
+
+        #[test]
+        fn quotes_drive_root_without_escaping_the_closing_quote() {
+            let arguments = format!("--folder {}", quote_windows_command_line_argument(r#"C:\"#));
+
+            assert_eq!(arguments, format!("--folder \"C:{}\"", r"\\"));
+            assert_eq!(parse_folder_argument(&arguments), Some(r#"C:\"#.to_string()));
+        }
+
+        #[test]
+        fn preserves_trailing_separators_when_quoting_and_parsing() {
+            for path in [r#"C:\Images\"#, r#"C:\Images\\"#] {
+                let arguments = format!("--folder {}", quote_windows_command_line_argument(path));
+                assert_eq!(parse_folder_argument(&arguments), Some(path.to_string()));
+            }
         }
 
         #[test]
