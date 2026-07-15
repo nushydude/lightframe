@@ -50,8 +50,9 @@ LightFrame scans and works with common image formats:
   the matching Windows codecs are installed. Without native support, LightFrame falls back to browser
   rendering or clear placeholders where appropriate.
 - RAW review files: DNG, CR2, CR3, NEF, NRW, ARW, SRF, SR2, RAF, ORF, RW2, PEF, and SRW appear in
-  scanned folders. On Windows, previews and thumbnails are attempted through native codecs; XMP
-  sidecar metadata is shown in the info panel when available.
+  scanned folders and direct-open surfaces, including Windows file associations. On Windows,
+  previews and thumbnails are attempted through native codecs; XMP sidecar metadata is shown in the
+  info panel when available. `supported-image-extensions.json` is the canonical direct-open list.
 
 Full-detail rendering is intentionally conservative for formats that are expensive or unsafe to
 decode at original size. In those cases the app prefers generated previews, placeholders, or tiled

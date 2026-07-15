@@ -2713,6 +2713,25 @@ mod tests {
     }
 
     #[test]
+    fn test_supported_extension_manifest_matches_scanner_and_file_associations() {
+        let manifest: Vec<String> =
+            serde_json::from_str(include_str!("../../supported-image-extensions.json")).unwrap();
+        let scanner: Vec<String> =
+            SUPPORTED_EXTENSIONS.iter().map(|extension| (*extension).to_string()).collect();
+        let tauri_config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let associations: Vec<String> = tauri_config["bundle"]["fileAssociations"][0]["ext"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|extension| extension.as_str().unwrap().to_string())
+            .collect();
+
+        assert_eq!(manifest, scanner, "Rust scanner drifted from the canonical manifest");
+        assert_eq!(manifest, associations, "desktop file associations drifted from the manifest");
+    }
+
+    #[test]
     fn test_apply_curation_update_clamps_rating_to_five() {
         let mut metadata = std::collections::HashMap::new();
 

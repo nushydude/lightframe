@@ -29,6 +29,7 @@ import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
 import type { CurationFilter } from './services/curationFilter';
+import { applyThemePreference } from './services/themePreference';
 import {
   recordStartupFirstImageKnownTelemetry,
   recordStartupCliResolveTelemetry,
@@ -194,13 +195,7 @@ function App() {
 
   // Apply theme
   useEffect(() => {
-    const root = document.documentElement;
-    if (settings.theme === 'system') {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-    } else {
-      root.setAttribute('data-theme', settings.theme);
-    }
+    return applyThemePreference(settings.theme);
   }, [settings.theme]);
 
   useEffect(() => {

@@ -55,7 +55,20 @@
           "heic",
           "heif",
           "avif",
-          "svg"
+          "svg",
+          "dng",
+          "cr2",
+          "cr3",
+          "nef",
+          "nrw",
+          "arw",
+          "srf",
+          "sr2",
+          "raf",
+          "orf",
+          "rw2",
+          "pef",
+          "srw"
         ],
         "mimeType": "image/*",
         "name": "Image File"
