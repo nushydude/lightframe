@@ -24,6 +24,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+      # Required by the reusable workflow's static permission contract.
+      security-events: write
 
   rust-advisory:
     name: Rust Dependency Advisory Gate
