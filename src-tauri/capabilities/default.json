@@ -5,12 +5,7 @@
   "windows": ["main", "secondary"],
   "permissions": [
     "core:default",
-    "opener:default",
     "opener:allow-reveal-item-in-dir",
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**", "app": true }]
-    },
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -20,9 +15,6 @@
       ]
     },
     "dialog:default",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-read-dir",
     "cli:default",
     "core:window:allow-close",
     "core:window:allow-show",
@@ -34,10 +26,6 @@
     "core:window:allow-set-title",
     "core:webview:allow-create-webview-window",
     "updater:default",
-    "process:allow-restart",
-    {
-      "identifier": "fs:scope",
-      "allow": [{ "path": "**" }]
-    }
+    "process:allow-restart"
   ]
 }

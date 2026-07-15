@@ -128,15 +128,13 @@ function normalizeRequest(request: string | ThumbnailRequest): ThumbnailRequest 
   return request;
 }
 
-function parseModifiedAtSeconds(value: string | null | undefined): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
-  return Math.floor(parsed);
+function normalizeModifiedAt(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
 }
 
 function metadataToken(request: ThumbnailRequest): string {
-  return `${request.sizeBytes ?? ''}|${parseModifiedAtSeconds(request.modifiedAt) ?? ''}`;
+  return `${request.sizeBytes ?? ''}|${normalizeModifiedAt(request.modifiedAt) ?? ''}`;
 }
 
 function requestKey(path: string, token: string): string {

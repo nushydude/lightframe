@@ -2519,7 +2519,6 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-cli",
  "tauri-plugin-dialog",
- "tauri-plugin-fs",
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",

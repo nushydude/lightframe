@@ -942,10 +942,13 @@ fn placeholder_preview_svg(extension: &str) -> String {
 }
 
 fn parse_modified_epoch_nanos(value: &str) -> Option<u128> {
-    value
-        .parse::<u128>()
-        .ok()
-        .map(|seconds_since_epoch| seconds_since_epoch.saturating_mul(1_000_000_000))
+    const MIN_NANOSECOND_TIMESTAMP: u128 = 1_000_000_000_000_000;
+    let timestamp = value.parse::<u128>().ok()?;
+    Some(if timestamp >= MIN_NANOSECOND_TIMESTAMP {
+        timestamp
+    } else {
+        timestamp.saturating_mul(1_000_000_000)
+    })
 }
 
 fn ensure_cache_root(cache_root: &Path) -> bool {
@@ -1429,6 +1432,15 @@ mod tests {
             build_cache_key(path, &SourceMetadata { size_bytes: 42, modified_epoch_nanos: 124 });
         assert_ne!(key_a, key_b);
         assert_ne!(key_a, key_c);
+    }
+
+    #[test]
+    fn modified_timestamp_parser_accepts_legacy_seconds_and_nanoseconds() {
+        assert_eq!(parse_modified_epoch_nanos("1700000000"), Some(1_700_000_000_000_000_000));
+        assert_eq!(
+            parse_modified_epoch_nanos("1700000000123456789"),
+            Some(1_700_000_000_123_456_789)
+        );
     }
 
     #[test]

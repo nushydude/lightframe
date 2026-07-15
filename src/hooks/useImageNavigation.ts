@@ -364,10 +364,13 @@ export function useImageNavigation() {
   const applyOpenedFolderImages = useCallback(
     async (loadGeneration: number, nextFolderPath: string, folderImages: ImageFile[]) => {
       if (folderImages.length === 0) {
-        setMarkedPaths([]);
+        applyFolderImages(folderImages, {
+          emptyMessage: emptyFolderOpenMessage,
+          preferredIndex: 0,
+          preferredPath: null,
+        });
         setFolderPath(nextFolderPath);
         clearPendingFolderOpenTelemetry(loadGeneration);
-        setError(emptyFolderOpenMessage);
         return false;
       }
 
@@ -392,14 +395,7 @@ export function useImageNavigation() {
 
       return true;
     },
-    [
-      applyFolderImages,
-      isCurrentGeneration,
-      setError,
-      setFolderPath,
-      setFolderWindowTitle,
-      setMarkedPaths,
-    ]
+    [applyFolderImages, isCurrentGeneration, setFolderPath, setFolderWindowTitle, setMarkedPaths]
   );
 
   const startBackgroundFolderRefresh = useCallback(

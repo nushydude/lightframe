@@ -132,6 +132,36 @@ describe('thumbnailCache', () => {
     clearThumbnailCacheForTests();
   });
 
+  it('distinguishes sub-second metadata tokens for same-size images', async () => {
+    const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
+      await loadThumbnailCacheModule();
+    const firstRequest = {
+      path: 'C:/images/rapid-edit.jpg',
+      sizeBytes: 100,
+      modifiedAt: '1700000000123456789',
+    };
+    const secondRequest = {
+      ...firstRequest,
+      modifiedAt: '1700000000123456790',
+    };
+
+    getThumbnailMock
+      .mockResolvedValueOnce({ file_path: 'C:/cache/old.jpg', cache_key: 'OLD' })
+      .mockResolvedValueOnce({ file_path: 'C:/cache/new.jpg', cache_key: 'NEW' });
+
+    await loadThumbnail(firstRequest);
+    expect(getCachedThumbnail(secondRequest)).toBeUndefined();
+    await loadThumbnail(secondRequest);
+
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(
+      2,
+      secondRequest.path,
+      secondRequest.sizeBytes,
+      secondRequest.modifiedAt
+    );
+    clearThumbnailCacheForTests();
+  });
+
   it('ignores stale in-flight completions when metadata changes mid-flight', async () => {
     const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
       await loadThumbnailCacheModule();

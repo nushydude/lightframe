@@ -429,17 +429,15 @@ pub(crate) fn image_file_from_metadata(
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     let size_bytes = metadata.len();
-    let modified_at = metadata.modified().ok().map(|t| {
-        let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        format!("{}", duration.as_secs())
-    });
-    let created_at = metadata.created().ok().map(|t| {
-        let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        format!("{}", duration.as_secs())
-    });
+    let modified_at = metadata.modified().ok().map(filesystem_timestamp_token);
+    let created_at = metadata.created().ok().map(filesystem_timestamp_token);
     let path = file_path.to_string_lossy().to_string();
 
     Some(ImageFile { path, file_name, extension, size_bytes, modified_at, created_at })
+}
+
+fn filesystem_timestamp_token(timestamp: SystemTime) -> String {
+    timestamp.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().to_string()
 }
 
 /// Check if a path is a directory
@@ -1161,7 +1159,7 @@ fn write_curation_metadata_to_path(
 ) -> Result<(), String> {
     let content = serde_json::to_string_pretty(metadata)
         .map_err(|e| format!("Failed to serialize curation metadata: {}", e))?;
-    fs::write(path, content).map_err(|e| format!("Failed to write curation metadata: {}", e))
+    write_text_file_atomically(path, &content, "curation metadata")
 }
 
 fn apply_curation_update(
@@ -2846,6 +2844,17 @@ mod tests {
         assert!(entry.favorite);
         assert_eq!(entry.rating, 4);
         assert_eq!(entry.updated_at, 77);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn test_filesystem_timestamp_token_preserves_subsecond_precision() {
+        let first = UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_700);
+        let second = UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_800);
+
+        assert_eq!(filesystem_timestamp_token(first), "1700000000123456700");
+        assert_eq!(filesystem_timestamp_token(second), "1700000000123456800");
+        assert_ne!(filesystem_timestamp_token(first), filesystem_timestamp_token(second));
     }
 
     #[test]
