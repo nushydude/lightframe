@@ -1671,15 +1671,64 @@ body,
 }
 
 .slideshow-options-field select,
-.slideshow-options-field input[type='number'] {
+.slideshow-options-field input[type='number'],
+.folder-sort-select {
   width: 100%;
   min-width: 0;
   height: 32px;
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
+  font: inherit;
+  color-scheme: dark;
+  outline: none;
+}
+
+.slideshow-options-field select:hover,
+.slideshow-options-field input[type='number']:hover,
+.folder-sort-select:hover {
+  border-color: var(--border-hover);
+}
+
+.slideshow-options-field select:focus,
+.slideshow-options-field input[type='number']:focus,
+.folder-sort-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.slideshow-options-field select option,
+.folder-sort-select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.slideshow-options-field select:disabled,
+.folder-sort-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.folder-sort-menu {
+  display: grid;
+  gap: 10px;
+  min-width: 220px;
+  padding: 4px;
+}
+
+.folder-sort-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+[data-theme='light'] .slideshow-options-field select,
+[data-theme='light'] .slideshow-options-field input[type='number'],
+[data-theme='light'] .folder-sort-select {
+  color-scheme: light;
 }
 
 .slideshow-options-checkbox {

@@ -152,6 +152,19 @@ export async function releaseSlideshowDisplayInhibition(): Promise<void> {
   return invoke('release_slideshow_display_inhibition');
 }
 
+/** Refresh the Windows taskbar Jump List with recent folders. */
+export async function updateRecentFoldersJumpList(
+  recentFolders: Array<{ path: string; label: string; openedAt: number }>
+): Promise<string[]> {
+  return invoke<string[]>('update_recent_folders_jump_list', {
+    recentFolders: recentFolders.map((folder) => ({
+      path: folder.path,
+      label: folder.label,
+      opened_at: folder.openedAt,
+    })),
+  });
+}
+
 /** Check if a path is a directory */
 export async function isDirectory(path: string): Promise<boolean> {
   return invoke<boolean>('is_dir', { path });

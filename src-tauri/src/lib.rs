@@ -6,6 +6,7 @@ mod native_codecs;
 mod path_normalization;
 mod thumbnails;
 mod update_channels;
+mod windows_jump_list;
 mod windows_shortcuts;
 
 use tauri::{Manager, State};
@@ -22,6 +23,17 @@ fn release_slideshow_display_inhibition(
     inhibition: State<'_, display_inhibition::DisplayInhibition>,
 ) -> Result<(), String> {
     inhibition.inner().release()
+}
+
+#[tauri::command]
+async fn update_recent_folders_jump_list(
+    recent_folders: Vec<commands::RecentFolder>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        windows_jump_list::update_recent_folders_jump_list(recent_folders)
+    })
+    .await
+    .map_err(|error| format!("Recent folders Jump List worker failed: {error}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -97,6 +109,7 @@ pub fn run() {
             commands::get_thumbnail,
             acquire_slideshow_display_inhibition,
             release_slideshow_display_inhibition,
+            update_recent_folders_jump_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,18 +4,27 @@ export interface StartupCliFileArg {
 
 export interface StartupDecision {
   filePath: string | null;
-  mode: 'open-image' | 'empty';
+  folderPath: string | null;
+  mode: 'open-image' | 'open-folder' | 'empty';
 }
 
 export function resolveStartupDecision(
-  fileArg: StartupCliFileArg | null | undefined
+  fileArg: StartupCliFileArg | null | undefined,
+  folderArg?: StartupCliFileArg | null
 ): StartupDecision {
-  if (fileArg && typeof fileArg.value === 'string') {
-    const filePath = fileArg.value.trim();
-    if (filePath.length > 0) {
-      return { filePath, mode: 'open-image' };
+  if (folderArg && typeof folderArg.value === 'string') {
+    const folderPath = folderArg.value.trim();
+    if (folderPath.length > 0) {
+      return { filePath: null, folderPath, mode: 'open-folder' };
     }
   }
 
-  return { filePath: null, mode: 'empty' };
+  if (fileArg && typeof fileArg.value === 'string') {
+    const filePath = fileArg.value.trim();
+    if (filePath.length > 0) {
+      return { filePath, folderPath: null, mode: 'open-image' };
+    }
+  }
+
+  return { filePath: null, folderPath: null, mode: 'empty' };
 }

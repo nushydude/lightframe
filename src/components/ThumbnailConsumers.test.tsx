@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThumbnailStrip } from './ThumbnailStrip';
 import { ContactSheet } from './ContactSheet';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
@@ -218,6 +219,51 @@ describe('thumbnail consumers', () => {
 
     fireEvent.keyDown(lastThumbnail, { key: 'Home' });
     expect(document.activeElement).toBe(screen.getByRole('option', { name: '0.jpg' }));
+  });
+
+  it('does not navigate twice when an active thumbnail handles an arrow key', () => {
+    const images = Array.from({ length: 3 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: String(index),
+    }));
+    const keyboardHandlers = {
+      openFilePicker: vi.fn(),
+      openCurrentImageInEditor: vi.fn(),
+      copyCurrentImagePath: vi.fn(),
+      goNext: vi.fn(() => useViewerStore.getState().navigateNext()),
+      goPrev: vi.fn(() => useViewerStore.getState().navigatePrev()),
+      goFirst: vi.fn(),
+      goLast: vi.fn(),
+      refreshFolder: vi.fn(),
+      deleteCurrentImage: vi.fn(),
+      startSlideshow: vi.fn(),
+      stopSlideshow: vi.fn(),
+      toggleSlideshowPause: vi.fn(),
+      openCommandPalette: vi.fn(),
+      toggleGridView: vi.fn(),
+      togglePerformanceTelemetry: vi.fn(),
+      toggleFavoriteCurrent: vi.fn(),
+      toggleMarkedCurrent: vi.fn(),
+      setRatingCurrent: vi.fn(),
+    };
+
+    useViewerStore.setState({
+      currentIndex: 0,
+      currentImagePath: images[0].path,
+      images,
+    });
+
+    render(<ThumbnailStrip />);
+    renderHook(() => useKeyboardShortcuts(keyboardHandlers));
+
+    const activeThumbnail = screen.getByRole('option', { name: '0.jpg' });
+    fireEvent.keyDown(activeThumbnail, { key: 'ArrowRight' });
+
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+    expect(keyboardHandlers.goNext).not.toHaveBeenCalled();
   });
 
   it('recomputes the preload window when a mounted strip receives a new image list', () => {

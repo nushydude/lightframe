@@ -320,6 +320,7 @@ export function ThumbnailStrip() {
                           : null;
                 if (nextIndex !== null) {
                   event.preventDefault();
+                  event.stopPropagation();
                   setCurrentIndex(nextIndex);
                 }
               }}
