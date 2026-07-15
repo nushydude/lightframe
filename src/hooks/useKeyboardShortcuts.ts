@@ -2,33 +2,13 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { nudgeCropRectInDirection } from '../services/cropMath';
-import {
-  beginNavigationKeydownTelemetry,
-  cancelPendingNavigationKeydownTelemetry,
-} from '../services/performanceTelemetry';
 import { revealCurrentImage } from '../services/viewerActions';
-
-interface KeyboardHandlers {
-  openFilePicker: () => void;
-  openCurrentImageInEditor: () => void | Promise<void>;
-  copyCurrentImagePath: () => void | Promise<void>;
-  goNext: (loop?: boolean) => boolean;
-  goPrev: (loop?: boolean) => boolean;
-  goFirst: () => void;
-  goLast: () => void;
-  refreshFolder: () => void;
-  deleteCurrentImage: () => void | Promise<void>;
-  startSlideshow: () => void;
-  stopSlideshow: () => void | Promise<void>;
-  toggleSlideshowPause: () => void;
-  openCommandPalette: () => void;
-  toggleGridView: () => void;
-  togglePerformanceTelemetry: () => void;
-  toggleFavoriteCurrent: () => void;
-  toggleMarkedCurrent: () => void;
-  setRatingCurrent: (rating: number) => void;
-}
+import {
+  dispatchCompareShortcut,
+  dispatchCropShortcut,
+  dispatchViewerShortcut,
+  type KeyboardHandlers,
+} from '../services/keyboardShortcutDispatcher';
 
 /** Hook for handling all keyboard shortcuts */
 export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
@@ -132,72 +112,25 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         return;
       }
 
-      if (isCropMode) {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          exitCropMode();
-          return;
-        }
+      const cropResult = dispatchCropShortcut(e, {
+        isCropMode,
+        cropRect,
+        updateCropRect,
+        applyCropPreview,
+        exitCropMode,
+      });
+      if (cropResult !== 'unmatched') return;
 
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          applyCropPreview();
-          return;
-        }
-
-        if (!cropRect) {
-          return;
-        }
-
-        const activeImage = document.querySelector('.image-canvas img') as HTMLImageElement | null;
-        const imageWidth = activeImage?.naturalWidth ?? activeImage?.width ?? 1;
-        const imageHeight = activeImage?.naturalHeight ?? activeImage?.height ?? 1;
-
-        if (
-          e.key === 'ArrowUp' ||
-          e.key === 'ArrowDown' ||
-          e.key === 'ArrowLeft' ||
-          e.key === 'ArrowRight'
-        ) {
-          e.preventDefault();
-          const stepPx = e.shiftKey ? 10 : 1;
-          updateCropRect(
-            nudgeCropRectInDirection(cropRect, e.key, stepPx, imageWidth, imageHeight)
-          );
-          return;
-        }
-      }
-
-      if (viewMode === 'compare') {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          exitCompareMode();
-          return;
-        }
-
-        if (e.key === 'Tab') {
-          e.preventDefault();
-          switchCompareFocus();
-          return;
-        }
-
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          moveCompareFocusedCandidate(-1);
-          return;
-        }
-
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          moveCompareFocusedCandidate(1);
-          return;
-        }
-
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          promoteFocusedComparePane();
-          return;
-        }
+      if (
+        dispatchCompareShortcut(e, {
+          isCompareMode: viewMode === 'compare',
+          exitCompareMode,
+          switchCompareFocus,
+          moveCompareFocusedCandidate,
+          promoteFocusedComparePane,
+        })
+      ) {
+        return;
       }
 
       // Ctrl + 0: Reset zoom to fit
@@ -321,115 +254,17 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
         return;
       }
 
-      if (viewMode === 'grid') {
-        return;
-      }
-
-      // Delete: move current image to trash
-      if (e.key === 'Delete') {
-        e.preventDefault();
-        if (currentImagePath) {
-          await handlers.deleteCurrentImage();
-        }
-        return;
-      }
-
-      // Space: next image OR pause/resume slideshow
-      if (e.key === ' ' || e.code === 'Space') {
-        e.preventDefault();
-        if (isSlideshowActive) {
-          handlers.toggleSlideshowPause();
-        } else {
-          beginNavigationKeydownTelemetry('next');
-          if (!handlers.goNext()) {
-            cancelPendingNavigationKeydownTelemetry();
-          }
-        }
-        return;
-      }
-
-      // Right Arrow: next image
-      if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        beginNavigationKeydownTelemetry('next');
-        if (!handlers.goNext(loopSlideshow)) {
-          cancelPendingNavigationKeydownTelemetry();
-        }
-        return;
-      }
-
-      // Left Arrow: previous image
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        beginNavigationKeydownTelemetry('prev');
-        if (!handlers.goPrev(loopSlideshow)) {
-          cancelPendingNavigationKeydownTelemetry();
-        }
-        return;
-      }
-
-      // Home: first image
-      if (e.key === 'Home') {
-        e.preventDefault();
-        handlers.goFirst();
-        return;
-      }
-
-      // End: last image
-      if (e.key === 'End') {
-        e.preventDefault();
-        handlers.goLast();
-        return;
-      }
-
-      // 0: Recenter and fit
-      if (e.key === '0' && !e.ctrlKey) {
-        e.preventDefault();
-        resetZoom();
-        return;
-      }
-
-      // 1: Actual size
-      if (e.key === '1' && !e.ctrlKey) {
-        e.preventDefault();
-        setZoomMode('actual');
-        return;
-      }
-
-      // + or =: Zoom in
-      if (e.key === '+' || e.key === '=') {
-        e.preventDefault();
-        zoomIn();
-        return;
-      }
-
-      // -: Zoom out
-      if (e.key === '-' && !e.ctrlKey) {
-        e.preventDefault();
-        zoomOut();
-        return;
-      }
-
-      // I: Toggle image info / EXIF panel
-      if (e.key === 'i' || e.key === 'I') {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent('toggle-exif'));
-        return;
-      }
-
-      // L: Rotate counter-clockwise
-      if (e.key === 'l' || e.key === 'L') {
-        e.preventDefault();
-        useViewerStore.getState().rotateCounterClockwise();
-        return;
-      }
-
-      // R: Rotate clockwise
-      if (e.key === 'r' || e.key === 'R') {
-        e.preventDefault();
-        useViewerStore.getState().rotateClockwise();
-        return;
-      }
+      dispatchViewerShortcut(e, {
+        viewMode,
+        currentImagePath,
+        isSlideshowActive,
+        loopSlideshow,
+        handlers,
+        resetZoom,
+        setZoomMode,
+        zoomIn,
+        zoomOut,
+      });
     },
     [
       handlers,
