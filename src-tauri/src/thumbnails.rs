@@ -5,6 +5,7 @@ use libjpeg_turbo_rs::{CropRegion, Subsampling};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -285,7 +286,12 @@ pub fn build_tile_cache_key(
 pub fn hash_cache_key(cache_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(cache_key.as_bytes());
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(&mut output, "{:02x}", byte);
+    }
+    output
 }
 
 pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
