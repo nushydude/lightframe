@@ -5,7 +5,7 @@ LightFrame is a fast, Windows-first desktop image viewer and photo review app bu
 startup, responsive keyboard navigation, large-folder review, and practical curation tools without
 turning the viewer into a full photo manager.
 
-The app is currently at version `8.4.0`.
+The app is currently at version `8.5.0`.
 
 ## Current State
 
