@@ -54,7 +54,7 @@
     "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
+    "eslint-plugin-react-refresh": "^0.5.3",
     "fallow": "^2.69.0",
     "globals": "^17.6.0",
     "jsdom": "^29.1.1",
