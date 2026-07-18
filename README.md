@@ -50,8 +50,9 @@ LightFrame scans and works with common image formats:
   the matching Windows codecs are installed. Without native support, LightFrame falls back to browser
   rendering or clear placeholders where appropriate.
 - RAW review files: DNG, CR2, CR3, NEF, NRW, ARW, SRF, SR2, RAF, ORF, RW2, PEF, and SRW appear in
-  scanned folders. On Windows, previews and thumbnails are attempted through native codecs; XMP
-  sidecar metadata is shown in the info panel when available.
+  scanned folders and direct-open surfaces, including Windows file associations. On Windows,
+  previews and thumbnails are attempted through native codecs; XMP sidecar metadata is shown in the
+  info panel when available. `supported-image-extensions.json` is the canonical direct-open list.
 
 Full-detail rendering is intentionally conservative for formats that are expensive or unsafe to
 decode at original size. In those cases the app prefers generated previews, placeholders, or tiled
@@ -134,6 +135,16 @@ CI also runs a Windows packaged-startup smoke job for pull requests, `main`, and
 branches. It builds the release executable, launches it with seeded window-position settings, and
 fails if the app exits, never shows a main window, or records a fresh Windows crash event.
 
+Pull requests also run two dependency gates: OSV-Scanner `v2.3.8` checks `pnpm-lock.yaml`, and
+RustSec `audit-check@v2.0.0` checks `src-tauri/Cargo.lock`. Both fail on every non-exempt
+vulnerability. RustSec advisories `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` are temporarily
+exempt because the latest `little_exif` release pins the affected `quick-xml` line; issue #101 tracks
+its upgrade or replacement and the exception must be reviewed by 2026-10-15. Any future exception
+must likewise include a linked tracking issue, an applicability rationale, and a review-by date next
+to the ignore entry. Dependabot owns weekly updates for GitHub Actions, npm, and Cargo pins.
+The pnpm `esbuild` override keeps Vite 7 on the first patched `0.28.x` release; remove it only when
+Vite's declared range includes a non-vulnerable release and the OSV gate remains green.
+
 The repository installs local git hooks with `pnpm install`. The pre-commit hook runs
 `pnpm run commit:gate`, and the commit-msg hook enforces Conventional Commit messages.
 
@@ -152,7 +163,9 @@ Settings check that manifest instead of the stable `/latest` release.
 - `src/` contains the React app, Zustand stores, hooks, UI components, image loading, curation,
   editing queue, telemetry, and tests.
 - `src-tauri/` contains the Tauri shell, Rust commands, folder watching, native Windows codec
-  integration, generated asset caches, image editing operations, and Rust tests.
+  integration, generated asset caches, image editing operations, and Rust tests. Curation metadata
+  uses 256 incrementally updated shards with a write-ahead journal; legacy `curation.json` data is
+  migrated automatically and retained as a backup.
 - `.github/workflows/ci.yml` runs frontend, Rust, and Windows packaged-startup quality gates.
 - `.github/workflows/release.yml` builds draft Windows stable and prerelease packages from version
   tags.

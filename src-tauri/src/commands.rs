@@ -1,3 +1,7 @@
+use crate::atomic_file::{
+    build_unique_sibling_path, replace_file_safely, write_text_file_atomically,
+};
+use crate::curation::{self, ImageCuration, ImageCurationUpdate};
 use crate::{folder_index, native_codecs, thumbnails};
 use image::GenericImageView;
 use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
@@ -194,22 +198,6 @@ pub struct PersistedMarkedFolder {
     pub folder_path: String,
     pub marked_paths: Vec<String>,
     pub updated_at: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ImageCuration {
-    pub path: String,
-    pub favorite: bool,
-    pub rating: u8,
-    pub updated_at: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageCurationUpdate {
-    pub file_path: String,
-    pub favorite: bool,
-    pub rating: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -429,17 +417,15 @@ pub(crate) fn image_file_from_metadata(
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     let size_bytes = metadata.len();
-    let modified_at = metadata.modified().ok().map(|t| {
-        let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        format!("{}", duration.as_secs())
-    });
-    let created_at = metadata.created().ok().map(|t| {
-        let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        format!("{}", duration.as_secs())
-    });
+    let modified_at = metadata.modified().ok().map(filesystem_timestamp_token);
+    let created_at = metadata.created().ok().map(filesystem_timestamp_token);
     let path = file_path.to_string_lossy().to_string();
 
     Some(ImageFile { path, file_name, extension, size_bytes, modified_at, created_at })
+}
+
+fn filesystem_timestamp_token(timestamp: SystemTime) -> String {
+    timestamp.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().to_string()
 }
 
 /// Check if a path is a directory
@@ -1062,11 +1048,11 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir.join("settings.json"))
 }
 
-fn curation_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn curation_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let config_dir =
         app.path().app_config_dir().map_err(|e| format!("Failed to get config dir: {}", e))?;
     fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    Ok(config_dir.join("curation.json"))
+    Ok(config_dir)
 }
 
 static CURATION_METADATA_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1086,125 +1072,8 @@ fn lock_settings_io() -> Result<MutexGuard<'static, ()>, String> {
         .map_err(|_| "Settings I/O lock poisoned".to_string())
 }
 
-fn clamp_rating(rating: i32) -> u8 {
-    rating.clamp(0, 5) as u8
-}
-
 fn unix_timestamp_seconds() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
-}
-
-fn normalize_curation_metadata(
-    metadata: HashMap<String, ImageCuration>,
-) -> HashMap<String, ImageCuration> {
-    let mut normalized = HashMap::new();
-
-    for (key, mut value) in metadata {
-        let normalized_path = if value.path.trim().is_empty() {
-            key.trim().to_string()
-        } else {
-            value.path.trim().to_string()
-        };
-
-        if normalized_path.is_empty() {
-            continue;
-        }
-
-        value.path = normalized_path.clone();
-        value.rating = value.rating.min(5);
-
-        if !value.favorite && value.rating == 0 {
-            continue;
-        }
-
-        normalized.insert(normalized_path, value);
-    }
-
-    normalized
-}
-
-fn read_curation_metadata_from_path(path: &Path) -> HashMap<String, ImageCuration> {
-    if !path.exists() {
-        return HashMap::new();
-    }
-
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) => {
-            eprintln!(
-                "Failed to read curation metadata from '{}': {}. Falling back to empty state.",
-                path.display(),
-                err
-            );
-            return HashMap::new();
-        }
-    };
-
-    let parsed = match serde_json::from_str::<HashMap<String, ImageCuration>>(&content) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            eprintln!(
-                "Failed to parse curation metadata from '{}': {}. Falling back to empty state.",
-                path.display(),
-                err
-            );
-            return HashMap::new();
-        }
-    };
-
-    normalize_curation_metadata(parsed)
-}
-
-fn write_curation_metadata_to_path(
-    path: &Path,
-    metadata: &HashMap<String, ImageCuration>,
-) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(metadata)
-        .map_err(|e| format!("Failed to serialize curation metadata: {}", e))?;
-    fs::write(path, content).map_err(|e| format!("Failed to write curation metadata: {}", e))
-}
-
-fn apply_curation_update(
-    metadata: &mut HashMap<String, ImageCuration>,
-    file_path: String,
-    favorite: bool,
-    rating: i32,
-    updated_at: u64,
-) {
-    let clamped_rating = clamp_rating(rating);
-    if !favorite && clamped_rating == 0 {
-        metadata.remove(&file_path);
-        return;
-    }
-
-    metadata.insert(
-        file_path.clone(),
-        ImageCuration { path: file_path, favorite, rating: clamped_rating, updated_at },
-    );
-}
-
-fn apply_curation_updates(
-    metadata: &mut HashMap<String, ImageCuration>,
-    updates: Vec<ImageCurationUpdate>,
-    updated_at: u64,
-) -> usize {
-    let mut applied = 0;
-    for update in updates {
-        let normalized_path = update.file_path.trim().to_string();
-        if normalized_path.is_empty() {
-            continue;
-        }
-
-        apply_curation_update(
-            metadata,
-            normalized_path,
-            update.favorite,
-            update.rating,
-            updated_at,
-        );
-        applied += 1;
-    }
-    applied
 }
 
 /// Read application settings
@@ -1279,8 +1148,8 @@ pub async fn read_curation_metadata(
     app: AppHandle,
 ) -> Result<HashMap<String, ImageCuration>, String> {
     let _lock = lock_curation_metadata()?;
-    let path = curation_path(&app)?;
-    Ok(read_curation_metadata_from_path(&path))
+    let config_dir = curation_config_dir(&app)?;
+    curation::read_curation_metadata(&config_dir)
 }
 
 #[tauri::command]
@@ -1296,16 +1165,12 @@ pub async fn write_image_curation(
     }
 
     let _lock = lock_curation_metadata()?;
-    let path = curation_path(&app)?;
-    let mut metadata = read_curation_metadata_from_path(&path);
-    apply_curation_update(
-        &mut metadata,
-        normalized_path,
-        favorite,
-        rating,
+    let config_dir = curation_config_dir(&app)?;
+    curation::write_curation_updates(
+        &config_dir,
+        vec![ImageCurationUpdate { file_path: normalized_path, favorite, rating }],
         unix_timestamp_seconds(),
-    );
-    write_curation_metadata_to_path(&path, &metadata)
+    )
 }
 
 #[tauri::command]
@@ -1314,14 +1179,8 @@ pub async fn write_image_curation_batch(
     updates: Vec<ImageCurationUpdate>,
 ) -> Result<(), String> {
     let _lock = lock_curation_metadata()?;
-    let path = curation_path(&app)?;
-    let mut metadata = read_curation_metadata_from_path(&path);
-    let applied = apply_curation_updates(&mut metadata, updates, unix_timestamp_seconds());
-    if applied == 0 {
-        return Ok(());
-    }
-
-    write_curation_metadata_to_path(&path, &metadata)
+    let config_dir = curation_config_dir(&app)?;
+    curation::write_curation_updates(&config_dir, updates, unix_timestamp_seconds())
 }
 
 #[tauri::command]
@@ -1332,10 +1191,12 @@ pub async fn clear_image_curation(app: AppHandle, file_path: String) -> Result<(
     }
 
     let _lock = lock_curation_metadata()?;
-    let path = curation_path(&app)?;
-    let mut metadata = read_curation_metadata_from_path(&path);
-    metadata.remove(&normalized_path);
-    write_curation_metadata_to_path(&path, &metadata)
+    let config_dir = curation_config_dir(&app)?;
+    curation::write_curation_updates(
+        &config_dir,
+        vec![ImageCurationUpdate { file_path: normalized_path, favorite: false, rating: 0 }],
+        unix_timestamp_seconds(),
+    )
 }
 
 fn build_copy_name(file_stem: &str, extension: &str, attempt: u32) -> String {
@@ -2191,79 +2052,6 @@ fn build_crop_temp_path(source_path: &Path) -> Result<PathBuf, String> {
     build_unique_sibling_path(source_path, "lightframe-crop")
 }
 
-fn build_unique_sibling_path(source_path: &Path, label: &str) -> Result<PathBuf, String> {
-    let parent_dir = source_path
-        .parent()
-        .ok_or_else(|| "Source path must include a parent directory".to_string())?;
-    let stem = source_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Source file name is invalid".to_string())?;
-    let extension = source_path.extension().and_then(|value| value.to_str()).unwrap_or("img");
-    let unique_suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-
-    let mut attempt = 0_u32;
-    loop {
-        let candidate = parent_dir
-            .join(format!("{}.{}-{}-{}.{}", stem, label, unique_suffix, attempt, extension));
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
-        attempt = attempt.saturating_add(1);
-    }
-}
-
-fn write_text_file_atomically(path: &Path, content: &str, label: &str) -> Result<(), String> {
-    let parent_dir =
-        path.parent().ok_or_else(|| format!("{} path must include a parent directory", label))?;
-    fs::create_dir_all(parent_dir)
-        .map_err(|e| format!("Failed to create {} directory: {}", label, e))?;
-
-    let temp_path = build_unique_sibling_path(path, &format!("lightframe-{}", label))?;
-    fs::write(&temp_path, content)
-        .map_err(|e| format!("Failed to write temporary {} file: {}", label, e))?;
-
-    if path.exists() {
-        replace_file_safely(&temp_path, path)
-    } else {
-        fs::rename(&temp_path, path).map_err(|e| {
-            let _ = fs::remove_file(&temp_path);
-            format!("Failed to finalize {} file: {}", label, e)
-        })
-    }
-}
-
-fn replace_file_safely(temp_path: &Path, destination_path: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let backup_path = build_unique_sibling_path(destination_path, "lightframe-backup")?;
-
-        fs::rename(destination_path, &backup_path)
-            .map_err(|e| format!("Failed to stage original file for replacement: {}", e))?;
-
-        match fs::rename(temp_path, destination_path) {
-            Ok(()) => {
-                let _ = fs::remove_file(&backup_path);
-                Ok(())
-            }
-            Err(err) => {
-                let _ = fs::rename(&backup_path, destination_path);
-                let _ = fs::remove_file(temp_path);
-                Err(format!("Failed to replace original image: {}", err))
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        fs::rename(temp_path, destination_path)
-            .map_err(|e| format!("Failed to replace original image: {}", e))
-    }
-}
-
 fn overwrite_with_crop_blocking(
     file_path: String,
     crop_rect: CropRect,
@@ -2715,137 +2503,32 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_curation_update_clamps_rating_to_five() {
-        let mut metadata = std::collections::HashMap::new();
+    fn test_supported_extension_manifest_matches_scanner_and_file_associations() {
+        let manifest: Vec<String> =
+            serde_json::from_str(include_str!("../../supported-image-extensions.json")).unwrap();
+        let scanner: Vec<String> =
+            SUPPORTED_EXTENSIONS.iter().map(|extension| (*extension).to_string()).collect();
+        let tauri_config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let associations: Vec<String> = tauri_config["bundle"]["fileAssociations"][0]["ext"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|extension| extension.as_str().unwrap().to_string())
+            .collect();
 
-        apply_curation_update(&mut metadata, "C:/images/photo.jpg".to_string(), true, 9, 42);
-
-        let entry = metadata.get("C:/images/photo.jpg").unwrap();
-        assert_eq!(entry.path, "C:/images/photo.jpg");
-        assert!(entry.favorite);
-        assert_eq!(entry.rating, 5);
-        assert_eq!(entry.updated_at, 42);
+        assert_eq!(manifest, scanner, "Rust scanner drifted from the canonical manifest");
+        assert_eq!(manifest, associations, "desktop file associations drifted from the manifest");
     }
 
     #[test]
-    fn test_apply_curation_update_removes_default_state_entries() {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(
-            "C:/images/photo.jpg".to_string(),
-            ImageCuration {
-                path: "C:/images/photo.jpg".to_string(),
-                favorite: true,
-                rating: 3,
-                updated_at: 10,
-            },
-        );
+    fn test_filesystem_timestamp_token_preserves_subsecond_precision() {
+        let first = UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_700);
+        let second = UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_800);
 
-        apply_curation_update(&mut metadata, "C:/images/photo.jpg".to_string(), false, 0, 44);
-
-        assert!(!metadata.contains_key("C:/images/photo.jpg"));
-    }
-
-    #[test]
-    fn test_apply_curation_updates_applies_multiple_paths_once() {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(
-            "C:/images/existing.jpg".to_string(),
-            ImageCuration {
-                path: "C:/images/existing.jpg".to_string(),
-                favorite: true,
-                rating: 2,
-                updated_at: 10,
-            },
-        );
-
-        let applied = apply_curation_updates(
-            &mut metadata,
-            vec![
-                ImageCurationUpdate {
-                    file_path: " C:/images/new.jpg ".to_string(),
-                    favorite: true,
-                    rating: 7,
-                },
-                ImageCurationUpdate {
-                    file_path: "C:/images/existing.jpg".to_string(),
-                    favorite: false,
-                    rating: 0,
-                },
-                ImageCurationUpdate { file_path: " ".to_string(), favorite: true, rating: 5 },
-            ],
-            88,
-        );
-
-        assert_eq!(applied, 2);
-        let new_entry = metadata.get("C:/images/new.jpg").unwrap();
-        assert!(new_entry.favorite);
-        assert_eq!(new_entry.rating, 5);
-        assert_eq!(new_entry.updated_at, 88);
-        assert!(!metadata.contains_key("C:/images/existing.jpg"));
-    }
-
-    #[test]
-    fn test_read_curation_metadata_from_path_returns_empty_for_corrupt_json() {
-        let dir = tempdir().unwrap();
-        let curation_path = dir.path().join("curation.json");
-        fs::write(&curation_path, "{not-valid-json").unwrap();
-
-        let metadata = read_curation_metadata_from_path(&curation_path);
-        assert!(metadata.is_empty());
-    }
-
-    #[test]
-    fn test_read_curation_metadata_from_path_normalizes_invalid_entries() {
-        let dir = tempdir().unwrap();
-        let curation_path = dir.path().join("curation.json");
-        fs::write(
-            &curation_path,
-            r#"{
-                "C:/images/one.jpg": {
-                    "path": "",
-                    "favorite": true,
-                    "rating": 7,
-                    "updated_at": 1
-                },
-                "C:/images/two.jpg": {
-                    "path": "C:/images/two.jpg",
-                    "favorite": false,
-                    "rating": 0,
-                    "updated_at": 2
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let metadata = read_curation_metadata_from_path(&curation_path);
-        let one = metadata.get("C:/images/one.jpg").unwrap();
-        assert_eq!(one.path, "C:/images/one.jpg");
-        assert_eq!(one.rating, 5);
-        assert_eq!(metadata.len(), 1);
-    }
-
-    #[test]
-    fn test_write_curation_metadata_to_path_persists_entries() {
-        let dir = tempdir().unwrap();
-        let curation_path = dir.path().join("curation.json");
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(
-            "C:/images/photo.jpg".to_string(),
-            ImageCuration {
-                path: "C:/images/photo.jpg".to_string(),
-                favorite: true,
-                rating: 4,
-                updated_at: 77,
-            },
-        );
-
-        write_curation_metadata_to_path(&curation_path, &metadata).unwrap();
-
-        let reloaded = read_curation_metadata_from_path(&curation_path);
-        let entry = reloaded.get("C:/images/photo.jpg").unwrap();
-        assert!(entry.favorite);
-        assert_eq!(entry.rating, 4);
-        assert_eq!(entry.updated_at, 77);
+        assert_eq!(filesystem_timestamp_token(first), "1700000000123456700");
+        assert_eq!(filesystem_timestamp_token(second), "1700000000123456800");
+        assert_ne!(filesystem_timestamp_token(first), filesystem_timestamp_token(second));
     }
 
     #[test]

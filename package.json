@@ -61,10 +61,13 @@
     "prettier": "^3.8.3",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.59.2",
-    "vite": "^7.0.4",
+    "vite": "^7.3.5",
     "vitest": "^4.1.5"
   },
   "pnpm": {
+    "overrides": {
+      "esbuild": "0.28.1"
+    },
     "onlyBuiltDependencies": [
       "esbuild",
       "fallow"

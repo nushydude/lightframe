@@ -13,6 +13,8 @@ import {
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { mainWindowTitle } from '../services/windowTitle';
+import { open } from '@tauri-apps/plugin-dialog';
+import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
 
 const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 
@@ -49,10 +51,14 @@ vi.mock('../services/imageAssetCache', () => ({
 
 // Mock audio for playBoundaryBeep
 const mockAudioContext = {
+  state: 'running',
+  close: vi.fn().mockResolvedValue(undefined),
+  resume: vi.fn().mockResolvedValue(undefined),
   createOscillator: vi.fn(() => ({
     type: '',
     frequency: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
     connect: vi.fn(),
+    addEventListener: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
   })),
@@ -150,6 +156,21 @@ describe('useImageNavigation', () => {
     expect(result.current.openImage).toBe(initialOpenImage);
     expect(result.current.openImageForStartup).toBe(initialOpenImageForStartup);
     expect(result.current.openFolder).toBe(initialOpenFolder);
+  });
+
+  it('offers every supported image extension in the file picker', async () => {
+    vi.mocked(open).mockResolvedValue(null);
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => result.current.openFilePicker());
+
+    expect(open).toHaveBeenCalledWith({
+      multiple: false,
+      filters: [{ name: 'Images', extensions: [...SUPPORTED_IMAGE_EXTENSIONS] }],
+    });
+    expect(SUPPORTED_IMAGE_EXTENSIONS).toEqual(
+      expect.arrayContaining(['dng', 'cr3', 'nef', 'arw'])
+    );
   });
 
   it('returns to viewer mode when opening an image from grid mode', async () => {
@@ -339,9 +360,19 @@ describe('useImageNavigation', () => {
   });
 
   it('updates the title when opening an empty folder', async () => {
-    useViewerStore.setState({
-      folderPath: 'c:/old',
-      markedPaths: ['c:/old/keep.jpg'],
+    act(() => {
+      useViewerStore.getState().setFolderPath('c:/old');
+      useViewerStore.getState().setImages([
+        {
+          path: 'c:/old/keep.jpg',
+          file_name: 'keep.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1000',
+        },
+      ]);
+      useViewerStore.getState().setCurrentIndex(0);
+      useViewerStore.getState().setMarkedPaths(['c:/old/keep.jpg']);
     });
     (readFolderIndex as any).mockResolvedValue([]);
     (refreshFolderIndex as any).mockResolvedValue([]);
@@ -353,8 +384,15 @@ describe('useImageNavigation', () => {
     });
 
     expect(mockSetTitle).toHaveBeenCalledWith(mainWindowTitle('[Folder] test'));
-    expect(useViewerStore.getState().folderPath).toBe('c:/test');
-    expect(useViewerStore.getState().markedPaths).toEqual([]);
+    expect(useViewerStore.getState()).toMatchObject({
+      folderPath: 'c:/test',
+      images: [],
+      allImages: [],
+      currentImagePath: null,
+      currentIndex: -1,
+      markedPaths: [],
+    });
+    expect(useViewerStore.getState().errorMessage).toContain('No supported images');
   });
 
   it('does not switch folderPath until a new folder load applies its marks', async () => {

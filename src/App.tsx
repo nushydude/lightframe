@@ -1,12 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import {
-  availableMonitors,
-  currentMonitor,
-  getCurrentWindow,
-  PhysicalPosition,
-  PhysicalSize,
-} from '@tauri-apps/api/window';
+import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
 import { getMatches } from '@tauri-apps/plugin-cli';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { ImageCanvas } from './components/ImageCanvas';
@@ -29,6 +23,7 @@ import { useSettingsStore } from './state/settingsStore';
 import { useCurationStore } from './state/curationStore';
 import { createViewerCommands } from './services/commandRegistry';
 import type { CurationFilter } from './services/curationFilter';
+import { applyThemePreference } from './services/themePreference';
 import {
   recordStartupFirstImageKnownTelemetry,
   recordStartupCliResolveTelemetry,
@@ -61,11 +56,10 @@ import {
   displayKeyFromMonitor,
   persistWindowBoundsSafely,
   waitForWindowRestoreBeforeShow,
-  windowRestorePlanForDisplays,
 } from './services/windowBounds';
+import { restoreMainWindowBounds } from './services/mainWindowRestore';
 import { updatePersistedMarkedFolders } from './services/markedSelectionPersistence';
 import { mainWindowTitle } from './services/windowTitle';
-import type { AppSettings } from './types/settings';
 
 type PendingMarkedSelectionSnapshot = {
   folderPath: string | null;
@@ -152,37 +146,6 @@ function App() {
     }
   }, []);
 
-  const restoreMainWindowBounds = useCallback(
-    async (loadedSettings: AppSettings, canContinue: () => boolean) => {
-      if (!isMainWindowRef.current || !loadedSettings.rememberWindowBounds) {
-        return;
-      }
-
-      const [monitor, monitors] = await Promise.all([currentMonitor(), availableMonitors()]);
-      if (!canContinue()) {
-        return;
-      }
-
-      const displayKey = displayKeyFromMonitor(monitor);
-      const restorePlan = windowRestorePlanForDisplays(loadedSettings, displayKey, monitors);
-      if (!restorePlan) {
-        return;
-      }
-
-      await appWindowRef.current.setSize(
-        new PhysicalSize(restorePlan.bounds.width, restorePlan.bounds.height)
-      );
-      if (!canContinue()) {
-        return;
-      }
-
-      await appWindowRef.current.setPosition(
-        new PhysicalPosition(restorePlan.bounds.x, restorePlan.bounds.y)
-      );
-    },
-    []
-  );
-
   useEffect(() => {
     settingsRef.current = settings;
     settingsLoadedRef.current = isLoaded;
@@ -194,13 +157,7 @@ function App() {
 
   // Apply theme
   useEffect(() => {
-    const root = document.documentElement;
-    if (settings.theme === 'system') {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-    } else {
-      root.setAttribute('data-theme', settings.theme);
-    }
+    return applyThemePreference(settings.theme);
   }, [settings.theme]);
 
   useEffect(() => {
@@ -266,7 +223,13 @@ function App() {
 
         let canContinueRestore = true;
         const restoreResult = await waitForWindowRestoreBeforeShow(
-          restoreMainWindowBounds(loadedSettings, () => !isCancelled && canContinueRestore),
+          isMainWindowRef.current
+            ? restoreMainWindowBounds(
+                appWindowRef.current,
+                loadedSettings,
+                () => !isCancelled && canContinueRestore
+              )
+            : Promise.resolve(),
           STARTUP_WINDOW_RESTORE_TIMEOUT_MS
         );
         if (restoreResult !== 'completed') {
@@ -324,7 +287,6 @@ function App() {
     openFolder,
     openImage,
     openImageForStartup,
-    restoreMainWindowBounds,
     setError,
   ]);
 

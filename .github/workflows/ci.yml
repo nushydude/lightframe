@@ -13,6 +13,38 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
+  javascript-advisory:
+    name: JavaScript Dependency Advisory Gate
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8
+    with:
+      scan-args: |-
+        --lockfile=./pnpm-lock.yaml
+      upload-sarif: false
+      fail-on-vuln: true
+    permissions:
+      actions: read
+      contents: read
+      # Required by the reusable workflow's static permission contract.
+      security-events: write
+
+  rust-advisory:
+    name: Rust Dependency Advisory Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Audit Cargo.lock against RustSec
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: ./src-tauri
+          # little_exif 0.6.23 pins quick-xml 0.37; tracked for replacement in #101.
+          ignore: RUSTSEC-2026-0194,RUSTSEC-2026-0195
+
   frontend-quality:
     name: Frontend Quality Gate
     runs-on: ubuntu-latest

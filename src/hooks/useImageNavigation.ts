@@ -32,35 +32,8 @@ import { getPersistedMarkedPathsForFolder } from '../services/markedSelectionPer
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { mainWindowTitle } from '../services/windowTitle';
-
-/** Play a subtle 'boop' sound when hitting the edge of a folder */
-function playBoundaryBeep() {
-  try {
-    const AudioContextCtor =
-      window.AudioContext ||
-      (window as Window & { webkitAudioContext?: typeof window.AudioContext }).webkitAudioContext;
-    if (!AudioContextCtor) return;
-
-    const ctx = new AudioContextCtor();
-    const osc = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(300, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.15);
-
-    gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-
-    osc.connect(gainNode);
-    gainNode.connect(ctx.destination);
-
-    osc.start();
-    osc.stop(ctx.currentTime + 0.15);
-  } catch {
-    // Ignore audio errors
-  }
-}
+import { playBoundaryBeep } from '../services/boundaryFeedback';
+import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
 
 function normalizePathKey(path: string): string {
   return path.replace(/\\/g, '/').toLowerCase();
@@ -364,10 +337,13 @@ export function useImageNavigation() {
   const applyOpenedFolderImages = useCallback(
     async (loadGeneration: number, nextFolderPath: string, folderImages: ImageFile[]) => {
       if (folderImages.length === 0) {
-        setMarkedPaths([]);
+        applyFolderImages(folderImages, {
+          emptyMessage: emptyFolderOpenMessage,
+          preferredIndex: 0,
+          preferredPath: null,
+        });
         setFolderPath(nextFolderPath);
         clearPendingFolderOpenTelemetry(loadGeneration);
-        setError(emptyFolderOpenMessage);
         return false;
       }
 
@@ -392,14 +368,7 @@ export function useImageNavigation() {
 
       return true;
     },
-    [
-      applyFolderImages,
-      isCurrentGeneration,
-      setError,
-      setFolderPath,
-      setFolderWindowTitle,
-      setMarkedPaths,
-    ]
+    [applyFolderImages, isCurrentGeneration, setFolderPath, setFolderWindowTitle, setMarkedPaths]
   );
 
   const startBackgroundFolderRefresh = useCallback(
@@ -547,20 +516,7 @@ export function useImageNavigation() {
         filters: [
           {
             name: 'Images',
-            extensions: [
-              'jpg',
-              'jpeg',
-              'png',
-              'webp',
-              'gif',
-              'bmp',
-              'tiff',
-              'tif',
-              'heic',
-              'heif',
-              'avif',
-              'svg',
-            ],
+            extensions: [...SUPPORTED_IMAGE_EXTENSIONS],
           },
         ],
       });
@@ -847,7 +803,7 @@ export function useImageNavigation() {
     (loop?: boolean) => {
       const success = navigateNext(loop);
       if (!success && images.length > 1) {
-        playBoundaryBeep();
+        void playBoundaryBeep();
       }
       return success;
     },
@@ -859,7 +815,7 @@ export function useImageNavigation() {
     (loop?: boolean) => {
       const success = navigatePrev(loop);
       if (!success && images.length > 1) {
-        playBoundaryBeep();
+        void playBoundaryBeep();
       }
       return success;
     },

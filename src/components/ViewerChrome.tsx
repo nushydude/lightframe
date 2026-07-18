@@ -15,12 +15,10 @@ import { ExifPanel } from './ExifPanel';
 import {
   closeSecondaryWindow,
   type CropRect,
-  getImageMetadata,
   getFileName,
   openSecondaryWindow,
   overwriteWithCrop,
   saveCroppedCopy,
-  saveScaledCopy,
 } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
 import {
@@ -51,6 +49,7 @@ import { CurationFilterMenu } from './CurationFilterMenu';
 import { EditQueuePanel } from './EditQueuePanel';
 import { ToolbarIcon } from './ToolbarIcon';
 import { FolderSortMenu } from './FolderSortMenu';
+import { QualityExportMenu } from './QualityExportMenu';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -85,54 +84,11 @@ type SecondaryToolbarActionId =
 type ZoomControlActionId = 'zoom-out' | 'zoom-reset' | 'zoom-in';
 
 const ZOOM_CONTROL_DUPLICATE_GUARD_MS = 250;
-const SCALE_EXPORT_MAX_DIMENSION = 65_535;
-const SCALE_EXPORT_MAX_PIXELS = 50_000_000;
-const SCALE_EXPORT_MAX_MEGAPIXELS = SCALE_EXPORT_MAX_PIXELS / 1_000_000;
-const QUALITY_PREVIEW_DEBOUNCE_MS = 120;
 const COMPACT_BOTTOM_CONTROLS_QUERY = '(max-width: 1120px)';
 const COMPACT_ROTATE_CONTROLS_QUERY = '(max-width: 820px)';
 const RATING_VALUES = [0, 1, 2, 3, 4, 5] as const;
-const SCALE_EXPORT_SOURCE_EXTENSIONS = new Set([
-  'jpg',
-  'jpeg',
-  'png',
-  'gif',
-  'webp',
-  'bmp',
-  'tiff',
-  'tif',
-  'avif',
-]);
-const SCALE_EXPORT_OUTPUT_EXTENSIONS = new Set([
-  'jpg',
-  'jpeg',
-  'png',
-  'gif',
-  'webp',
-  'bmp',
-  'tiff',
-  'tif',
-]);
-const SCALE_EXPORT_SOURCE_MESSAGE =
-  'Scaled export supports JPEG, PNG, GIF, WebP, BMP, TIFF, and AVIF sources.';
-const SCALE_EXPORT_OUTPUT_MESSAGE =
-  'Scaled export can save JPEG, PNG, GIF, WebP, BMP, or TIFF files.';
-const SCALE_EXPORT_SAVE_FILTERS = [
-  { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
-  { name: 'PNG image', extensions: ['png'] },
-  { name: 'WebP image', extensions: ['webp'] },
-  { name: 'TIFF image', extensions: ['tif', 'tiff'] },
-  { name: 'BMP image', extensions: ['bmp'] },
-  { name: 'GIF image', extensions: ['gif'] },
-];
 
 type SecondaryActionGroup = 'file' | 'organize' | 'workspace' | 'view';
-
-interface PreparedScaledCopy {
-  outputPath: string;
-  width: number;
-  height: number;
-}
 
 interface PreparedCroppedCopy {
   outputPath: string;
@@ -302,41 +258,6 @@ function MenuLabel({ label, icon, shortcut }: MenuShortcutAction) {
   );
 }
 
-function parseScaleDimension(value: string): number | null {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-
-  return Math.round(parsed);
-}
-
-function getScaleValidationMessage(width: number | null, height: number | null): string | null {
-  if (width == null && height == null) {
-    return null;
-  }
-
-  if (!width || !height) {
-    return 'Width and height must be greater than zero.';
-  }
-
-  if (width > SCALE_EXPORT_MAX_DIMENSION || height > SCALE_EXPORT_MAX_DIMENSION) {
-    return `Maximum side length is ${SCALE_EXPORT_MAX_DIMENSION}px.`;
-  }
-
-  if (width * height > SCALE_EXPORT_MAX_PIXELS) {
-    return `Maximum export size is ${SCALE_EXPORT_MAX_MEGAPIXELS} MP.`;
-  }
-
-  return null;
-}
-
-function getPathExtension(path: string | null): string {
-  const fileName = path ? getFileName(path) : '';
-  const dotIndex = fileName.lastIndexOf('.');
-  return dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : '';
-}
-
 function getMediaQueryMatch(query: string): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return false;
@@ -433,142 +354,6 @@ function RatingControls({
   );
 }
 
-function getScaleExportSourceMessage(path: string | null): string | null {
-  const extension = getPathExtension(path);
-  if (!extension || SCALE_EXPORT_SOURCE_EXTENSIONS.has(extension)) {
-    return null;
-  }
-
-  return SCALE_EXPORT_SOURCE_MESSAGE;
-}
-
-function getScaleExportOutputMessage(path: string): string | null {
-  const extension = getPathExtension(path);
-  if (extension && SCALE_EXPORT_OUTPUT_EXTENSIONS.has(extension)) {
-    return null;
-  }
-
-  return SCALE_EXPORT_OUTPUT_MESSAGE;
-}
-
-function getActiveCanvasImageDimensions(): { width: number; height: number } | null {
-  const activeImage = getActiveCanvasImageElement();
-  const width = activeImage?.naturalWidth ?? 0;
-  const height = activeImage?.naturalHeight ?? 0;
-
-  if (width <= 0 || height <= 0) {
-    return null;
-  }
-
-  return { width, height };
-}
-
-function getActiveCanvasImageElement(): HTMLImageElement | null {
-  return document.querySelector('.image-canvas img') as HTMLImageElement | null;
-}
-
-function getActiveCanvasImageSource(): string {
-  const activeImage = getActiveCanvasImageElement();
-  return activeImage?.currentSrc || activeImage?.src || '';
-}
-
-function getQualityPreviewFilter(smoothing: number, sharpening: number): string | undefined {
-  const filters: string[] = [];
-  if (smoothing > 0) {
-    filters.push(`blur(${(smoothing / 100) * 1.25}px)`);
-  }
-  if (sharpening > 0) {
-    const contrast = 1 + (sharpening / 100) * 0.35;
-    const saturation = 1 + (sharpening / 100) * 0.12;
-    filters.push(`contrast(${contrast}) saturate(${saturation})`);
-  }
-
-  return filters.length > 0 ? filters.join(' ') : undefined;
-}
-
-function QualityPreviewSample({
-  currentImagePath,
-  smoothing,
-  sharpening,
-}: {
-  currentImagePath: string | null;
-  smoothing: number;
-  sharpening: number;
-}) {
-  const [source, setSource] = useState('');
-  const [previewSmoothing, setPreviewSmoothing] = useState(smoothing);
-  const [previewSharpening, setPreviewSharpening] = useState(sharpening);
-
-  useEffect(() => {
-    const activeImage = getActiveCanvasImageElement();
-    const refreshSource = () => setSource(getActiveCanvasImageSource());
-
-    refreshSource();
-    activeImage?.addEventListener('load', refreshSource);
-    const refreshTimer = window.setTimeout(refreshSource, 0);
-
-    return () => {
-      activeImage?.removeEventListener('load', refreshSource);
-      window.clearTimeout(refreshTimer);
-    };
-  }, [currentImagePath]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setPreviewSmoothing(smoothing);
-      setPreviewSharpening(sharpening);
-    }, QUALITY_PREVIEW_DEBOUNCE_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [smoothing, sharpening]);
-
-  if (!source) {
-    return null;
-  }
-
-  const filter = getQualityPreviewFilter(previewSmoothing, previewSharpening);
-
-  return (
-    <div
-      className="quality-preview"
-      role="img"
-      aria-label="Approximate scaled export preview sample"
-    >
-      <img src={source} alt="" draggable={false} style={filter ? { filter } : undefined} />
-    </div>
-  );
-}
-
-async function getSourceImageDimensions(
-  currentImagePath: string
-): Promise<{ width: number; height: number } | null> {
-  try {
-    const metadata = await getImageMetadata(currentImagePath);
-    if (metadata?.width && metadata.height) {
-      return { width: metadata.width, height: metadata.height };
-    }
-  } catch (err) {
-    console.warn('Failed to read source dimensions for scaled export:', err);
-  }
-
-  return getActiveCanvasImageDimensions();
-}
-
-function buildScaledDefaultPath(currentImagePath: string, width: number, height: number): string {
-  const originalName = getFileName(currentImagePath);
-  const dotIndex = originalName.lastIndexOf('.');
-  const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
-  const originalExtension = getPathExtension(currentImagePath);
-  const extension = SCALE_EXPORT_OUTPUT_EXTENSIONS.has(originalExtension)
-    ? `.${originalExtension}`
-    : '.jpg';
-
-  return currentImagePath.replace(
-    originalName,
-    `${baseName}-scaled-${width}x${height}${extension}`
-  );
-}
-
 /** Top bar and navigation overlay controls */
 // fallow-ignore-next-line complexity
 export function ViewerChrome({
@@ -594,8 +379,6 @@ export function ViewerChrome({
   const isSlideshowPaused = useViewerStore((state) => state.isSlideshowPaused);
   const zoomMode = useViewerStore((state) => state.zoomMode);
   const zoomLevel = useViewerStore((state) => state.zoomLevel);
-  const imageSmoothing = useViewerStore((state) => state.imageSmoothing);
-  const imageSharpening = useViewerStore((state) => state.imageSharpening);
   const isFolderScanning = useViewerStore((state) => state.isFolderScanning);
   const curationFilter = useViewerStore((state) => state.curationFilter);
   const markedPaths = useViewerStore((state) => state.markedPaths);
@@ -603,9 +386,6 @@ export function ViewerChrome({
   const setShowSettings = useViewerStore((state) => state.setShowSettings);
   const setZoomMode = useViewerStore((state) => state.setZoomMode);
   const resetZoom = useViewerStore((state) => state.resetZoom);
-  const setImageSmoothing = useViewerStore((state) => state.setImageSmoothing);
-  const setImageSharpening = useViewerStore((state) => state.setImageSharpening);
-  const resetImageAdjustments = useViewerStore((state) => state.resetImageAdjustments);
   const setCurationFilter = useViewerStore((state) => state.setCurationFilter);
   const zoomIn = useViewerStore((state) => state.zoomIn);
   const zoomOut = useViewerStore((state) => state.zoomOut);
@@ -672,11 +452,7 @@ export function ViewerChrome({
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
-  const [scaleWidth, setScaleWidth] = useState('');
-  const [scaleHeight, setScaleHeight] = useState('');
-  const [scaleAspectRatio, setScaleAspectRatio] = useState<number | null>(null);
   const [isMarkedActionsMenuOpen, setIsMarkedActionsMenuOpen] = useState(false);
-  const [isQualityPanelOpen, setIsQualityPanelOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     x: 0,
@@ -705,12 +481,6 @@ export function ViewerChrome({
       window.removeEventListener('toggle-exif', handler);
     };
   }, []);
-
-  useEffect(() => {
-    setScaleWidth('');
-    setScaleHeight('');
-    setScaleAspectRatio(null);
-  }, [currentImagePath]);
 
   const menuRefs = useMemo(
     () => [
@@ -865,11 +635,6 @@ export function ViewerChrome({
   const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
   const contextMenuPath = contextMenu.path;
   const isContextMenuPathMarked = contextMenuPath ? markedPathSet.has(contextMenuPath) : false;
-  const parsedScaleWidth = parseScaleDimension(scaleWidth);
-  const parsedScaleHeight = parseScaleDimension(scaleHeight);
-  const scaleExportSourceMessage = getScaleExportSourceMessage(currentImagePath);
-  const scaleValidationMessage = getScaleValidationMessage(parsedScaleWidth, parsedScaleHeight);
-  const scaleBlockingMessage = scaleExportSourceMessage ?? scaleValidationMessage;
   const toggleFullscreen = async () => {
     try {
       const appWindow = getCurrentWindow();
@@ -976,165 +741,6 @@ export function ViewerChrome({
       return;
     }
     await setRating(currentImagePath, rating);
-  };
-
-  const syncScaleDimensionsFromImage = async () => {
-    if (!currentImagePath) {
-      return null;
-    }
-
-    const dimensions = await getSourceImageDimensions(currentImagePath);
-    if (!dimensions) {
-      return null;
-    }
-
-    setScaleAspectRatio(dimensions.width / dimensions.height);
-    setScaleWidth(String(dimensions.width));
-    setScaleHeight(String(dimensions.height));
-    return dimensions;
-  };
-
-  const handleScaleWidthChange = (value: string) => {
-    setScaleWidth(value);
-    const width = parseScaleDimension(value);
-    const fallbackDimensions = getActiveCanvasImageDimensions();
-    const aspectRatio =
-      scaleAspectRatio ??
-      (fallbackDimensions ? fallbackDimensions.width / fallbackDimensions.height : null);
-    if (width && aspectRatio) {
-      setScaleAspectRatio(aspectRatio);
-      setScaleHeight(String(Math.max(1, Math.round(width / aspectRatio))));
-    }
-  };
-
-  const handleScaleHeightChange = (value: string) => {
-    setScaleHeight(value);
-    const height = parseScaleDimension(value);
-    const fallbackDimensions = getActiveCanvasImageDimensions();
-    const aspectRatio =
-      scaleAspectRatio ??
-      (fallbackDimensions ? fallbackDimensions.width / fallbackDimensions.height : null);
-    if (height && aspectRatio) {
-      setScaleAspectRatio(aspectRatio);
-      setScaleWidth(String(Math.max(1, Math.round(height * aspectRatio))));
-    }
-  };
-
-  const prepareScaledCopy = async (): Promise<PreparedScaledCopy | null> => {
-    if (!currentImagePath) {
-      return null;
-    }
-
-    const sourceMessage = getScaleExportSourceMessage(currentImagePath);
-    if (sourceMessage) {
-      pushToast({
-        title: 'Scale Copy',
-        kind: 'error',
-        message: sourceMessage,
-      });
-      return null;
-    }
-
-    const fallbackDimensions = await getSourceImageDimensions(currentImagePath);
-    const width = parseScaleDimension(scaleWidth) ?? fallbackDimensions?.width ?? null;
-    const height = parseScaleDimension(scaleHeight) ?? fallbackDimensions?.height ?? null;
-    const validationMessage = getScaleValidationMessage(width, height);
-
-    if (validationMessage) {
-      pushToast({
-        title: 'Scale Copy',
-        kind: 'error',
-        message: validationMessage,
-      });
-      return null;
-    }
-
-    if (!width || !height) {
-      pushToast({
-        title: 'Scale Copy',
-        kind: 'error',
-        message: 'Unable to determine dimensions for scaled export.',
-      });
-      return null;
-    }
-
-    const outputPath = await save({
-      filters: SCALE_EXPORT_SAVE_FILTERS,
-      defaultPath: buildScaledDefaultPath(currentImagePath, width, height),
-    });
-
-    if (!outputPath) {
-      return null;
-    }
-
-    const outputMessage = getScaleExportOutputMessage(outputPath);
-    if (outputMessage) {
-      pushToast({
-        title: 'Scale Copy',
-        kind: 'error',
-        message: outputMessage,
-      });
-      return null;
-    }
-
-    return { outputPath, width, height };
-  };
-
-  const handleQueueScaledCopy = async () => {
-    const preparedCopy = await prepareScaledCopy();
-    if (!preparedCopy || !currentImagePath) {
-      return;
-    }
-
-    const result = enqueueEditJob({
-      kind: 'scaled-copy',
-      sourcePath: currentImagePath,
-      outputPath: preparedCopy.outputPath,
-      width: preparedCopy.width,
-      height: preparedCopy.height,
-      smoothing: imageSmoothing,
-      sharpening: imageSharpening,
-    });
-    if (!result.ok) {
-      pushToast({
-        title: 'Editing Queue',
-        kind: 'error',
-        message: result.error,
-      });
-      return;
-    }
-
-    setIsEditQueuePanelOpen(true);
-  };
-
-  const handleSaveScaledCopy = async () => {
-    const preparedCopy = await prepareScaledCopy();
-    if (!preparedCopy || !currentImagePath) {
-      return;
-    }
-
-    try {
-      await saveScaledCopy(
-        currentImagePath,
-        preparedCopy.outputPath,
-        preparedCopy.width,
-        preparedCopy.height,
-        imageSmoothing,
-        imageSharpening
-      );
-      pushToast({
-        title: 'Scaled Copy Saved',
-        kind: 'success',
-        message: `Saved scaled copy to ${preparedCopy.outputPath}`,
-      });
-    } catch (err) {
-      console.error('Failed to save scaled copy:', err);
-      pushToast({
-        title: 'Scaled Copy Failed',
-        kind: 'error',
-        message: `Failed to save scaled copy: ${err}`,
-      });
-    }
   };
 
   const handleToggleInfo = () => {
@@ -2617,124 +2223,11 @@ export function ViewerChrome({
           </button>
         )}
 
-        <details
-          className="quality-menu"
-          ref={qualityMenuRef}
-          onToggle={(event) => {
-            const isOpen = event.currentTarget.open;
-            setIsQualityPanelOpen(isOpen);
-            if (isOpen && (!scaleWidth || !scaleHeight)) {
-              void syncScaleDimensionsFromImage();
-            }
-          }}
-        >
-          <summary
-            className={`control-btn control-btn--text has-tooltip ${imageSmoothing > 0 || imageSharpening > 0 ? 'active' : ''}`}
-            onClick={(event) => {
-              const details = event.currentTarget.parentElement as HTMLDetailsElement | null;
-              setIsQualityPanelOpen(!details?.open);
-            }}
-            data-tooltip="Scaled export quality"
-            title="Scaled export quality"
-            aria-label="Scaled export quality"
-            id="btn-quality-panel"
-          >
-            HQ
-          </summary>
-          <div className="quality-panel">
-            {isQualityPanelOpen && (
-              <QualityPreviewSample
-                currentImagePath={currentImagePath}
-                smoothing={imageSmoothing}
-                sharpening={imageSharpening}
-              />
-            )}
-            <label className="quality-field">
-              <span>Export smooth</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={imageSmoothing}
-                onChange={(event) => setImageSmoothing(Number(event.target.value))}
-                aria-label="Export smoothing"
-              />
-            </label>
-            <label className="quality-field">
-              <span>Export sharpen</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={imageSharpening}
-                onChange={(event) => setImageSharpening(Number(event.target.value))}
-                aria-label="Export sharpening"
-              />
-            </label>
-            <div className="quality-dimensions">
-              <label className="quality-number-field">
-                <span>W</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={SCALE_EXPORT_MAX_DIMENSION}
-                  value={scaleWidth}
-                  onChange={(event) => handleScaleWidthChange(event.target.value)}
-                  aria-label="Scaled copy width"
-                />
-              </label>
-              <label className="quality-number-field">
-                <span>H</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={SCALE_EXPORT_MAX_DIMENSION}
-                  value={scaleHeight}
-                  onChange={(event) => handleScaleHeightChange(event.target.value)}
-                  aria-label="Scaled copy height"
-                />
-              </label>
-            </div>
-            <div
-              className={`quality-limit ${scaleBlockingMessage ? 'warning' : ''}`}
-              aria-live="polite"
-            >
-              {scaleBlockingMessage ?? `Maximum export size is ${SCALE_EXPORT_MAX_MEGAPIXELS} MP.`}
-            </div>
-            <div className="quality-actions">
-              <button
-                className="setting-button-secondary"
-                type="button"
-                onClick={() => void syncScaleDimensionsFromImage()}
-              >
-                1:1
-              </button>
-              <button
-                className="setting-button-secondary"
-                type="button"
-                onClick={resetImageAdjustments}
-              >
-                Reset
-              </button>
-              <button
-                className="setting-button-secondary"
-                type="button"
-                onClick={() => void handleQueueScaledCopy()}
-                disabled={Boolean(scaleBlockingMessage)}
-              >
-                Queue
-              </button>
-              <button
-                className="setting-button-primary"
-                type="button"
-                onClick={() => void handleSaveScaledCopy()}
-                disabled={Boolean(scaleBlockingMessage)}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </details>
+        <QualityExportMenu
+          currentImagePath={currentImagePath}
+          menuRef={qualityMenuRef}
+          onQueueOpened={() => setIsEditQueuePanelOpen(true)}
+        />
 
         <details
           className="edit-queue-menu"
