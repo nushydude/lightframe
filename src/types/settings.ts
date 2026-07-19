@@ -64,6 +64,7 @@ export interface AppSettings {
   sortOrder: 'name' | 'date' | 'created' | 'modified' | 'size' | 'random';
   sortDirection: 'ascending' | 'descending';
   showThumbnails: boolean;
+  showImageCaptions: boolean;
   promptProjectorGridOnOpen: boolean;
   openProjectorInGridView: boolean;
   performanceMode: PerformanceMode;
@@ -93,6 +94,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sortOrder: 'name',
   sortDirection: 'ascending',
   showThumbnails: true,
+  showImageCaptions: true,
   promptProjectorGridOnOpen: true,
   openProjectorInGridView: false,
   performanceMode: 'balanced',
@@ -129,6 +131,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     sort_order: settings.sortOrder,
     sort_direction: settings.sortDirection,
     show_thumbnails: settings.showThumbnails,
+    show_image_captions: settings.showImageCaptions,
     prompt_projector_grid_on_open: settings.promptProjectorGridOnOpen,
     open_projector_in_grid_view: settings.openProjectorInGridView,
     performance_mode: settings.performanceMode,
@@ -186,6 +189,7 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
     windowBoundsByDisplay: parseWindowBoundsByDisplay(raw.window_bounds_by_display),
     ...parseSortSettings(raw.sort_order, raw.sort_direction),
     showThumbnails: booleanSetting(raw.show_thumbnails, DEFAULT_SETTINGS.showThumbnails),
+    showImageCaptions: booleanSetting(raw.show_image_captions, DEFAULT_SETTINGS.showImageCaptions),
     promptProjectorGridOnOpen: booleanSetting(
       raw.prompt_projector_grid_on_open,
       DEFAULT_SETTINGS.promptProjectorGridOnOpen

@@ -12,10 +12,13 @@ import {
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
+import { ImageCaptionOverlay } from './ImageCaptionOverlay';
 import {
   closeSecondaryWindow,
   type CropRect,
   getFileName,
+  getImageCaption,
+  type ImageCaption,
   openSecondaryWindow,
   overwriteWithCrop,
   saveCroppedCopy,
@@ -27,6 +30,7 @@ import {
   copyCurrentImage,
   copyCurrentImageFileName,
   copyCurrentImagePath,
+  copyTextToClipboard,
   deleteImages,
   deleteCurrentImage,
   openCurrentImageInEditor,
@@ -67,6 +71,7 @@ interface ViewerChromeProps {
 }
 
 type SecondaryToolbarActionId =
+  | 'captions'
   | 'copy'
   | 'copy-path'
   | 'copy-to'
@@ -430,6 +435,7 @@ export function ViewerChrome({
   const cropSaveMode = useSettingsStore((state) => state.settings.cropSaveMode);
   const pinnedToolbarActions = useSettingsStore((state) => state.settings.pinnedToolbarActions);
   const showThumbnails = useSettingsStore((state) => state.settings.showThumbnails);
+  const showImageCaptions = useSettingsStore((state) => state.settings.showImageCaptions);
   const shuffleSlideshow = useSettingsStore((state) => state.settings.shuffleSlideshow);
   const slideshowDirection = useSettingsStore((state) => state.settings.slideshowDirection);
   const loopSlideshow = useSettingsStore((state) => state.settings.loopSlideshow);
@@ -450,10 +456,13 @@ export function ViewerChrome({
 
   const [showExif, setShowExif] = useState(false);
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
+  const [captionRefreshToken, setCaptionRefreshToken] = useState(0);
+  const [imageCaption, setImageCaption] = useState<ImageCaption | null>(null);
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
   const [isMarkedActionsMenuOpen, setIsMarkedActionsMenuOpen] = useState(false);
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
+  const [isCustomizingToolbar, setIsCustomizingToolbar] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     x: 0,
     y: 0,
@@ -481,6 +490,32 @@ export function ViewerChrome({
       window.removeEventListener('toggle-exif', handler);
     };
   }, []);
+
+  useEffect(() => {
+    let isCurrent = true;
+    setImageCaption(null);
+
+    if (!currentImagePath) {
+      return () => {
+        isCurrent = false;
+      };
+    }
+
+    void getImageCaption(currentImagePath)
+      .then((caption) => {
+        if (isCurrent) setImageCaption(caption);
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          console.error('Failed to read image caption:', error);
+          setImageCaption(null);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [captionRefreshToken, currentImagePath]);
 
   const menuRefs = useMemo(
     () => [
@@ -697,7 +732,32 @@ export function ViewerChrome({
 
   const handleRefresh = () => {
     onRefreshFolder();
+    setCaptionRefreshToken((value) => value + 1);
     closeOverflowMenus();
+  };
+
+  const handleToggleCaptions = () => {
+    closeOverflowMenus();
+    void updateSettings({ showImageCaptions: !showImageCaptions });
+  };
+
+  const handleCopyCaption = async () => {
+    if (!imageCaption) return;
+
+    try {
+      await copyTextToClipboard(imageCaption.text);
+      pushToast({
+        title: 'Caption copied',
+        kind: 'success',
+        message: 'Image caption copied to clipboard.',
+      });
+    } catch (error) {
+      pushToast({
+        title: 'Caption copy failed',
+        kind: 'error',
+        message: `Failed to copy image caption: ${error}`,
+      });
+    }
   };
 
   const handleOpenRecentFolder = async (folderPath: string, filter?: CurationFilter) => {
@@ -1371,7 +1431,7 @@ export function ViewerChrome({
       group: 'organize',
       menuNode: (
         <button
-          className="top-bar-menu-item"
+          className="top-bar-menu-item top-bar-menu-item--danger"
           onClick={() => void handleDelete()}
           type="button"
           aria-label="Delete image"
@@ -1408,6 +1468,24 @@ export function ViewerChrome({
           active: isProjectorOpen,
         }
       ),
+    },
+    {
+      id: 'captions',
+      label: 'Show Captions',
+      icon: 'caption',
+      group: 'view',
+      menuNode: (
+        <button
+          className="top-bar-menu-item top-bar-menu-item--checkable"
+          onClick={handleToggleCaptions}
+          type="button"
+          aria-label="Show image captions"
+          aria-pressed={showImageCaptions}
+        >
+          <MenuLabel label="Show Captions" />
+        </button>
+      ),
+      pinnedNode: null,
     },
     {
       id: 'info',
@@ -1709,53 +1787,92 @@ export function ViewerChrome({
                 <span className="top-bar-btn-icon">...</span>
                 <span className="top-bar-btn-label">More</span>
               </summary>
-              <div className="top-bar-menu-panel top-bar-menu-panel--stacked">
-                <FolderSortMenu />
-                <div className="context-menu-divider" role="separator" />
-                {SECONDARY_ACTION_GROUPS.map((group) => {
-                  const groupedActions = secondaryActionDefinitions.filter(
-                    (action) => action.group === group.id
-                  );
-                  if (groupedActions.length === 0) {
-                    return null;
-                  }
+              <div
+                className={`top-bar-menu-panel top-bar-menu-panel--stacked more-actions-panel ${isCustomizingToolbar ? 'is-customizing' : ''}`}
+              >
+                <div className="more-actions-scroll">
+                  <FolderSortMenu />
+                  <div className="context-menu-divider" role="separator" />
+                  {SECONDARY_ACTION_GROUPS.map((group) => {
+                    const groupedActions = secondaryActionDefinitions.filter(
+                      (action) => action.group === group.id && action.id !== 'settings'
+                    );
+                    if (groupedActions.length === 0) {
+                      return null;
+                    }
 
-                  return (
-                    <section key={group.id} className="top-bar-menu-section">
-                      <div className="top-bar-menu-section-label">{group.label}</div>
-                      {groupedActions.map((action) => {
-                        const pinnableActionId = isPinnableActionId(action.id) ? action.id : null;
-                        const isPinned = pinnableActionId
-                          ? pinnedToolbarActions.includes(pinnableActionId)
-                          : false;
-                        return (
-                          <div
-                            key={action.id}
-                            className="top-bar-menu-entry top-bar-menu-entry--row"
-                          >
-                            <span className="top-bar-menu-icon" aria-hidden="true">
-                              <ToolbarIcon name={action.icon} />
-                            </span>
-                            <div className="top-bar-menu-action">{action.menuNode}</div>
-                            {pinnableActionId && (
-                              <button
-                                className={`top-bar-pin-toggle ${isPinned ? 'active' : ''}`}
-                                onClick={() => void togglePinnedAction(pinnableActionId)}
-                                type="button"
-                                aria-label={
-                                  isPinned ? `Unpin ${action.label}` : `Pin ${action.label}`
-                                }
-                                title={isPinned ? `Unpin ${action.label}` : `Pin ${action.label}`}
-                              >
-                                <ToolbarIcon name="pin" />
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </section>
-                  );
-                })}
+                    return (
+                      <section key={group.id} className="top-bar-menu-section">
+                        <div className="top-bar-menu-section-label">{group.label}</div>
+                        {groupedActions.map((action) => {
+                          const pinnableActionId = isPinnableActionId(action.id) ? action.id : null;
+                          const isPinned = pinnableActionId
+                            ? pinnedToolbarActions.includes(pinnableActionId)
+                            : false;
+                          return (
+                            <div
+                              key={action.id}
+                              className={`top-bar-menu-entry top-bar-menu-entry--row ${action.id === 'delete' ? 'top-bar-menu-entry--danger' : ''}`}
+                            >
+                              <span className="top-bar-menu-icon" aria-hidden="true">
+                                <ToolbarIcon name={action.icon} />
+                              </span>
+                              <div className="top-bar-menu-action">{action.menuNode}</div>
+                              {pinnableActionId && (
+                                <button
+                                  className={`top-bar-pin-toggle ${isPinned ? 'active' : ''}`}
+                                  onClick={() => void togglePinnedAction(pinnableActionId)}
+                                  type="button"
+                                  aria-label={
+                                    isPinned ? `Unpin ${action.label}` : `Pin ${action.label}`
+                                  }
+                                  title={isPinned ? `Unpin ${action.label}` : `Pin ${action.label}`}
+                                >
+                                  <ToolbarIcon name="pin" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </section>
+                    );
+                  })}
+                </div>
+                <div className="more-actions-footer">
+                  <button
+                    className={`top-bar-menu-item customize-toolbar-button ${isCustomizingToolbar ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => setIsCustomizingToolbar((value) => !value)}
+                    aria-pressed={isCustomizingToolbar}
+                  >
+                    <span className="top-bar-menu-icon" aria-hidden="true">
+                      <ToolbarIcon name="pin" />
+                    </span>
+                    <span>{isCustomizingToolbar ? 'Done customizing' : 'Customize toolbar…'}</span>
+                  </button>
+                  {(() => {
+                    const settingsAction = secondaryActionsById.get('settings');
+                    const isPinned = pinnedToolbarActions.includes('settings');
+                    if (!settingsAction) return null;
+                    return (
+                      <div className="top-bar-menu-entry top-bar-menu-entry--row more-actions-settings-row">
+                        <span className="top-bar-menu-icon" aria-hidden="true">
+                          <ToolbarIcon name={settingsAction.icon} />
+                        </span>
+                        <div className="top-bar-menu-action">{settingsAction.menuNode}</div>
+                        <button
+                          className={`top-bar-pin-toggle ${isPinned ? 'active' : ''}`}
+                          onClick={() => void togglePinnedAction('settings')}
+                          type="button"
+                          aria-label={isPinned ? 'Unpin Settings' : 'Pin Settings'}
+                          title={isPinned ? 'Unpin Settings' : 'Pin Settings'}
+                        >
+                          <ToolbarIcon name="pin" />
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             </details>
           </div>
@@ -1919,9 +2036,19 @@ export function ViewerChrome({
       {showExif && currentImagePath && (
         <ExifPanel
           filePath={currentImagePath}
+          caption={imageCaption}
+          onCopyCaption={() => void handleCopyCaption()}
           hasThumbnails={showThumbnails && viewMode === 'viewer'}
           refreshToken={exifRefreshToken}
           onClose={() => setShowExif(false)}
+        />
+      )}
+
+      {imageCaption && showImageCaptions && viewMode === 'viewer' && !isCropMode && !showExif && (
+        <ImageCaptionOverlay
+          caption={imageCaption}
+          hasThumbnails={showThumbnails}
+          onCopy={() => void handleCopyCaption()}
         />
       )}
 

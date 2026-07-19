@@ -52,6 +52,96 @@ pub struct ImageMetadata {
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ImageCaption {
+    pub text: String,
+    pub sidecar_path: String,
+    pub extension: String,
+}
+
+const MAX_IMAGE_CAPTION_BYTES: u64 = 1024 * 1024;
+
+fn decode_image_caption(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(&bytes[3..]).into_owned();
+    }
+
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&units);
+    }
+
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&units);
+    }
+
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn image_caption_candidates(image_path: &Path) -> Vec<(PathBuf, &'static str)> {
+    ["txt", "caption", "TXT", "CAPTION"]
+        .into_iter()
+        .map(|extension| {
+            let mut candidate = image_path.to_path_buf();
+            candidate.set_extension(extension);
+            (candidate, extension)
+        })
+        .collect()
+}
+
+fn get_image_caption_blocking(file_path: String) -> Result<Option<ImageCaption>, String> {
+    let normalized_path = file_path.trim();
+    if normalized_path.is_empty() {
+        return Err("file_path must not be empty".to_string());
+    }
+
+    let image_path = Path::new(normalized_path);
+    for (sidecar_path, extension) in image_caption_candidates(image_path) {
+        let metadata = match fs::metadata(&sidecar_path) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect image caption '{}': {}",
+                    sidecar_path.display(),
+                    error
+                ));
+            }
+        };
+
+        if metadata.len() > MAX_IMAGE_CAPTION_BYTES {
+            return Err(format!(
+                "Image caption '{}' is larger than the 1 MB limit",
+                sidecar_path.display()
+            ));
+        }
+
+        let bytes = fs::read(&sidecar_path).map_err(|error| {
+            format!("Failed to read image caption '{}': {}", sidecar_path.display(), error)
+        })?;
+        let text = decode_image_caption(&bytes).trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+
+        return Ok(Some(ImageCaption {
+            text,
+            sidecar_path: sidecar_path.to_string_lossy().to_string(),
+            extension: extension.to_ascii_lowercase(),
+        }));
+    }
+
+    Ok(None)
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodecHealthEntry {
     pub label: String,
@@ -152,6 +242,8 @@ pub struct AppSettings {
     pub sort_direction: Option<String>,
     #[serde(default = "default_show_thumbnails")]
     pub show_thumbnails: bool,
+    #[serde(default = "default_show_image_captions")]
+    pub show_image_captions: bool,
     #[serde(default = "default_prompt_projector_grid_on_open")]
     pub prompt_projector_grid_on_open: bool,
     #[serde(default)]
@@ -238,6 +330,10 @@ fn default_show_thumbnails() -> bool {
     true
 }
 
+fn default_show_image_captions() -> bool {
+    true
+}
+
 fn default_prompt_projector_grid_on_open() -> bool {
     true
 }
@@ -288,6 +384,7 @@ impl Default for AppSettings {
             sort_order: "name".to_string(),
             sort_direction: Some("ascending".to_string()),
             show_thumbnails: default_show_thumbnails(),
+            show_image_captions: default_show_image_captions(),
             prompt_projector_grid_on_open: default_prompt_projector_grid_on_open(),
             open_projector_in_grid_view: false,
             performance_mode: default_performance_mode(),
@@ -930,6 +1027,14 @@ pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, Stri
     tauri::async_runtime::spawn_blocking(move || get_image_metadata_blocking(file_path))
         .await
         .map_err(|err| format!("Image metadata worker failed: {}", err))?
+}
+
+/// Read a same-basename LoRA caption sidecar (`.txt`, then `.caption`) when present.
+#[tauri::command]
+pub async fn get_image_caption(file_path: String) -> Result<Option<ImageCaption>, String> {
+    tauri::async_runtime::spawn_blocking(move || get_image_caption_blocking(file_path))
+        .await
+        .map_err(|err| format!("Image caption worker failed: {}", err))?
 }
 
 fn get_preview_image_blocking(
@@ -2503,6 +2608,77 @@ mod tests {
     }
 
     #[test]
+    fn test_get_image_caption_reads_same_basename_txt() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("training.image.png");
+        let caption_path = dir.path().join("training.image.txt");
+        fs::write(&image_path, b"not needed for sidecar lookup").unwrap();
+        fs::write(&caption_path, b"  subject token, portrait, soft light\n").unwrap();
+
+        let caption =
+            get_image_caption_blocking(image_path.to_string_lossy().to_string()).unwrap().unwrap();
+
+        assert_eq!(caption.text, "subject token, portrait, soft light");
+        assert_eq!(caption.sidecar_path, caption_path.to_string_lossy());
+        assert_eq!(caption.extension, "txt");
+    }
+
+    #[test]
+    fn test_get_image_caption_falls_back_to_caption_extension() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.jpg");
+        let caption_path = dir.path().join("sample.caption");
+        fs::write(&caption_path, b"A natural language caption").unwrap();
+
+        let caption =
+            get_image_caption_blocking(image_path.to_string_lossy().to_string()).unwrap().unwrap();
+
+        assert_eq!(caption.text, "A natural language caption");
+        assert_eq!(caption.extension, "caption");
+    }
+
+    #[test]
+    fn test_get_image_caption_prefers_non_empty_txt() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.webp");
+        fs::write(dir.path().join("sample.txt"), b"tag list").unwrap();
+        fs::write(dir.path().join("sample.caption"), b"sentence").unwrap();
+
+        let caption =
+            get_image_caption_blocking(image_path.to_string_lossy().to_string()).unwrap().unwrap();
+
+        assert_eq!(caption.text, "tag list");
+        assert_eq!(caption.extension, "txt");
+    }
+
+    #[test]
+    fn test_get_image_caption_decodes_utf16_little_endian() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.png");
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "portrait, café".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(dir.path().join("sample.txt"), bytes).unwrap();
+
+        let caption =
+            get_image_caption_blocking(image_path.to_string_lossy().to_string()).unwrap().unwrap();
+
+        assert_eq!(caption.text, "portrait, café");
+    }
+
+    #[test]
+    fn test_get_image_caption_returns_none_without_non_empty_sidecar() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.png");
+        fs::write(dir.path().join("sample.txt"), b" \n\t").unwrap();
+
+        let caption = get_image_caption_blocking(image_path.to_string_lossy().to_string()).unwrap();
+
+        assert_eq!(caption, None);
+    }
+
+    #[test]
     fn test_supported_extension_manifest_matches_scanner_and_file_associations() {
         let manifest: Vec<String> =
             serde_json::from_str(include_str!("../../supported-image-extensions.json")).unwrap();
@@ -3479,6 +3655,7 @@ mod tests {
         assert!(settings.window_bounds_by_display.is_empty());
         assert!(!settings.open_projector_in_grid_view);
         assert_eq!(settings.performance_mode, "balanced");
+        assert!(settings.show_image_captions);
         assert_eq!(settings.slideshow_direction, "forward");
         assert!(settings.auto_refresh_folder);
         assert_eq!(settings.update_channel, "stable");

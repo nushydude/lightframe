@@ -4,10 +4,18 @@ import { invoke } from '@tauri-apps/api/core';
 import { SettingsPanel } from './SettingsPanel';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
+import { DEFAULT_SETTINGS } from '../types/settings';
 
 describe('SettingsPanel', () => {
   beforeEach(() => {
-    useSettingsStore.setState((state) => ({ ...state, isLoaded: true }));
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: DEFAULT_SETTINGS,
+      isLoaded: true,
+      saveStatus: 'idle',
+      saveError: null,
+      loadError: null,
+    }));
     useViewerStore.getState().reset();
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === 'get_codec_health') {
@@ -76,6 +84,19 @@ describe('SettingsPanel', () => {
 
     await waitFor(() => {
       expect(useSettingsStore.getState().settings.slideshowDirection).toBe('reverse');
+    });
+  });
+
+  it('persists the image caption visibility setting', async () => {
+    render(<SettingsPanel />);
+
+    const toggle = screen.getByLabelText('Show image captions');
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.showImageCaptions).toBe(false);
     });
   });
 

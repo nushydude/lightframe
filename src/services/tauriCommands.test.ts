@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import {
   acquireSlideshowDisplayInhibition,
+  getImageCaption,
   getParentFolder,
   releaseSlideshowDisplayInhibition,
   updateRecentFoldersJumpList,
@@ -18,6 +19,25 @@ describe('tauriCommands path helpers', () => {
 
   it('preserves UNC share roots when extracting a parent folder', () => {
     expect(getParentFolder('\\\\server\\share\\photo.jpg')).toBe('\\\\server\\share');
+  });
+});
+
+describe('tauriCommands caption wrapper', () => {
+  it('requests a same-basename image caption', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      text: 'portrait, soft light',
+      sidecar_path: 'C:/Images/photo.txt',
+      extension: 'txt',
+    });
+
+    await expect(getImageCaption('C:/Images/photo.png')).resolves.toMatchObject({
+      text: 'portrait, soft light',
+    });
+
+    expect(vi.mocked(invoke).mock.calls[vi.mocked(invoke).mock.calls.length - 1]).toEqual([
+      'get_image_caption',
+      { filePath: 'C:/Images/photo.png' },
+    ]);
   });
 });
 

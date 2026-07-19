@@ -178,7 +178,7 @@ function fallbackCopyText(text: string): boolean {
   return didCopy;
 }
 
-async function copyTextToClipboard(text: string): Promise<void> {
+export async function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
