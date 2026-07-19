@@ -2555,7 +2555,7 @@ dependencies = [
 
 [[package]]
 name = "lightframe"
-version = "8.5.1"
+version = "8.6.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
