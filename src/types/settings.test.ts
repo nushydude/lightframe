@@ -109,6 +109,12 @@ describe('settingsToRust', () => {
     });
   });
 
+  it('maps the image caption visibility preference to rust payloads', () => {
+    expect(settingsToRust({ ...DEFAULT_SETTINGS, showImageCaptions: false })).toMatchObject({
+      show_image_captions: false,
+    });
+  });
+
   it('maps performance mode to rust payloads', () => {
     const rust = settingsToRust({
       ...DEFAULT_SETTINGS,
@@ -290,6 +296,11 @@ describe('settingsFromRust', () => {
   it('parses auto-refresh folder preference with a default enabled fallback', () => {
     expect(settingsFromRust({ auto_refresh_folder: false }).autoRefreshFolder).toBe(false);
     expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
+  });
+
+  it('parses image caption visibility with a default enabled fallback', () => {
+    expect(settingsFromRust({ show_image_captions: false }).showImageCaptions).toBe(false);
+    expect(settingsFromRust({}).showImageCaptions).toBe(true);
   });
 
   it('parses update channel and falls back to stable', () => {

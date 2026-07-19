@@ -25,45 +25,52 @@ export function FolderSortMenu() {
   const reshuffle = () => window.dispatchEvent(new Event('lightframe-reshuffle-folder'));
 
   return (
-    <div className="folder-sort-menu" aria-label="Folder sort">
-      <div className="top-bar-menu-section-label">{summary}</div>
-      <label className="folder-sort-field">
-        <span>Sort by</span>
-        <select
-          className="folder-sort-select"
-          aria-label="Sort by"
-          value={settings.sortOrder}
-          onChange={(event) =>
-            change({ sortOrder: event.target.value as AppSettings['sortOrder'] })
-          }
-        >
-          <option value="name">Filename</option>
-          <option value="created">Date Created</option>
-          <option value="modified">Date Modified</option>
-          <option value="size">File Size</option>
-          <option value="random">Random</option>
-        </select>
-      </label>
-      <label className="folder-sort-field">
-        <span>Direction</span>
-        <select
-          className="folder-sort-select"
-          aria-label="Direction"
-          value={settings.sortDirection}
-          disabled={settings.sortOrder === 'random'}
-          onChange={(event) =>
-            change({ sortDirection: event.target.value as AppSettings['sortDirection'] })
-          }
-        >
-          <option value="ascending">Ascending</option>
-          <option value="descending">Descending</option>
-        </select>
-      </label>
-      {settings.sortOrder === 'random' && (
-        <button className="top-bar-menu-item" type="button" onClick={reshuffle}>
-          Reshuffle
-        </button>
-      )}
-    </div>
+    <details className="folder-sort-menu">
+      <summary className="top-bar-menu-item folder-sort-summary" aria-label="Change folder sort">
+        <span>{summary}</span>
+        <span className="folder-sort-chevron" aria-hidden="true">
+          ›
+        </span>
+      </summary>
+      <div className="folder-sort-options" aria-label="Folder sort options">
+        <label className="folder-sort-field">
+          <span>Sort by</span>
+          <select
+            className="folder-sort-select"
+            aria-label="Sort by"
+            value={settings.sortOrder}
+            onChange={(event) =>
+              change({ sortOrder: event.target.value as AppSettings['sortOrder'] })
+            }
+          >
+            <option value="name">Filename</option>
+            <option value="created">Date Created</option>
+            <option value="modified">Date Modified</option>
+            <option value="size">File Size</option>
+            <option value="random">Random</option>
+          </select>
+        </label>
+        <label className="folder-sort-field">
+          <span>Direction</span>
+          <select
+            className="folder-sort-select"
+            aria-label="Direction"
+            value={settings.sortDirection}
+            disabled={settings.sortOrder === 'random'}
+            onChange={(event) =>
+              change({ sortDirection: event.target.value as AppSettings['sortDirection'] })
+            }
+          >
+            <option value="ascending">Ascending</option>
+            <option value="descending">Descending</option>
+          </select>
+        </label>
+        {settings.sortOrder === 'random' && (
+          <button className="top-bar-menu-item" type="button" onClick={reshuffle}>
+            Reshuffle
+          </button>
+        )}
+      </div>
+    </details>
   );
 }

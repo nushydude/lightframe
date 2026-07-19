@@ -27,6 +27,12 @@ export interface ExifData {
   raw: Record<string, string>;
 }
 
+export interface ImageCaption {
+  text: string;
+  sidecar_path: string;
+  extension: 'txt' | 'caption' | string;
+}
+
 export interface CropRect {
   x: number;
   y: number;
@@ -205,6 +211,11 @@ export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[
 /** Get metadata (dimensions, format, file size) for an image */
 export async function getImageMetadata(filePath: string): Promise<ImageMetadata> {
   return invoke<ImageMetadata>('get_image_metadata', { filePath });
+}
+
+/** Read a same-basename LoRA caption sidecar (`.txt`, then `.caption`) when present. */
+export async function getImageCaption(filePath: string): Promise<ImageCaption | null> {
+  return invoke<ImageCaption | null>('get_image_caption', { filePath });
 }
 
 /** Read codec and generated-cache diagnostics */

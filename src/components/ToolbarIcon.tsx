@@ -1,4 +1,5 @@
 type ToolbarIconName =
+  | 'caption'
   | 'copy'
   | 'delete'
   | 'edit'
@@ -36,6 +37,7 @@ interface ToolbarIconProps {
 }
 
 const ICON_PATHS: Record<ToolbarIconName, string[]> = {
+  caption: ['M4 5h16v11H9l-5 4V5Z', 'M8 9h8', 'M8 12h5'],
   copy: ['M9 9h10v10H9z', 'M5 5h10v2', 'M5 5v10h2'],
   delete: ['M5 7h14', 'M9 7V5h6v2', 'M8 7l1 12h6l1-12', 'M10 10v6', 'M14 10v6'],
   edit: ['M4 20h4l10-10-4-4L4 16v4', 'M12 6l4 4', 'M15 5 19 9'],

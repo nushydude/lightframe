@@ -295,6 +295,25 @@ export function SettingsPanel() {
             </div>
 
             <div className="setting-row">
+              <label className="setting-label" htmlFor="setting-show-image-captions">
+                Show image captions
+              </label>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={settings.showImageCaptions}
+                  onChange={(e) => handleChange('showImageCaptions', e.target.checked)}
+                  id="setting-show-image-captions"
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <p className="setting-help">
+              Shows matching .txt and .caption sidecars over the image. Captions remain available in
+              Image Info when this is off.
+            </p>
+
+            <div className="setting-row">
               <span className="setting-label">Performance mode</span>
               <select
                 className="setting-select"

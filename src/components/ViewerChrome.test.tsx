@@ -62,6 +62,7 @@ describe('ViewerChrome', () => {
       file_size_bytes: 1000,
       format: 'JPEG',
     });
+    vi.spyOn(tauriCommands, 'getImageCaption').mockResolvedValue(null);
     useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
@@ -114,6 +115,107 @@ describe('ViewerChrome', () => {
 
     expect(screen.getByText('photo.jpg')).toBeInTheDocument();
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
+  });
+
+  it('shows a same-basename caption while browsing and copies it', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(tauriCommands.getImageCaption).mockResolvedValue({
+      text: 'subject token, portrait, soft light',
+      sidecar_path: 'C:/Images/photo.txt',
+      extension: 'txt',
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(await screen.findByText('subject token, portrait, soft light')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image caption' }));
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('subject token, portrait, soft light')
+    );
+  });
+
+  it('moves the caption into Image Info instead of overlapping the browsing overlay', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(tauriCommands.getImageCaption).mockResolvedValue({
+      text: 'subject token, portrait, soft light',
+      sidecar_path: 'C:/Images/photo.txt',
+      extension: 'txt',
+    });
+    vi.spyOn(tauriCommands, 'getExifMetadata').mockResolvedValue({ raw: {} });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    expect(await screen.findByText('subject token, portrait, soft light')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Toggle image info panel'));
+
+    await waitFor(() => expect(container.querySelector('.exif-caption-text')).toBeInTheDocument());
+    expect(container.querySelector('.image-caption-overlay')).not.toBeInTheDocument();
+    expect(screen.getByText('photo.txt')).toBeInTheDocument();
+  });
+
+  it('hides the browsing overlay when captions are disabled but keeps Image Info available', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: { ...state.settings, showImageCaptions: false },
+    }));
+    vi.mocked(tauriCommands.getImageCaption).mockResolvedValue({
+      text: 'subject token, portrait, soft light',
+      sidecar_path: 'C:/Images/photo.txt',
+      extension: 'txt',
+    });
+    vi.spyOn(tauriCommands, 'getExifMetadata').mockResolvedValue({ raw: {} });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+    await waitFor(() => expect(tauriCommands.getImageCaption).toHaveBeenCalled());
+    expect(container.querySelector('.image-caption-overlay')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Toggle image info panel'));
+
+    expect(await screen.findByText('subject token, portrait, soft light')).toBeInTheDocument();
+    expect(screen.getByText('photo.txt')).toBeInTheDocument();
   });
 
   it('shows only a star for favorites without a rating', () => {
@@ -307,6 +409,69 @@ describe('ViewerChrome', () => {
 
     fireEvent.click(refreshButton);
     expect(defaultProps.onRefreshFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('quickly toggles caption visibility from the View actions menu', async () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const moreButton = screen.getByLabelText('More actions');
+    const moreMenu = moreButton.closest('details') as HTMLDetailsElement;
+    fireEvent.click(moreButton);
+
+    const captionsButton = screen.getByRole('button', { name: 'Show image captions' });
+    expect(captionsButton).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(captionsButton);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.showImageCaptions).toBe(false);
+    });
+    expect(moreMenu.open).toBe(false);
+
+    fireEvent.click(moreButton);
+    const captionsButtonAfterToggle = screen.getByRole('button', {
+      name: 'Show image captions',
+    });
+    expect(captionsButtonAfterToggle).toHaveTextContent('Show Captions');
+    expect(captionsButtonAfterToggle).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('keeps settings in the menu footer and exposes toolbar customization mode', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+
+    const { container } = render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+
+    const settingsButton = screen.getByRole('button', { name: 'Open settings' });
+    expect(settingsButton.closest('.more-actions-footer')).toBeTruthy();
+
+    const customizeButton = screen.getByRole('button', { name: 'Customize toolbar…' });
+    expect(customizeButton).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(customizeButton);
+
+    expect(screen.getByRole('button', { name: 'Done customizing' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(container.querySelector('.more-actions-panel')).toHaveClass('is-customizing');
+  });
+
+  it('reveals folder sort choices from a compact summary row', () => {
+    useViewerStore.setState({ currentImagePath: 'C:/photo.jpg', folderPath: 'C:/Images' });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByLabelText('More actions'));
+    const sortSummary = screen.getByLabelText('Change folder sort');
+    expect(sortSummary).toHaveTextContent('Sort: Filename');
+    expect(screen.getByLabelText('Folder sort options').closest('details')).not.toHaveAttribute(
+      'open'
+    );
+
+    fireEvent.click(sortSummary);
+    expect(screen.getByLabelText('Folder sort options').closest('details')).toHaveAttribute('open');
   });
 
   it('opens recent folders from the overflow menu', () => {

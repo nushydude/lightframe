@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { getExifMetadata, getImageMetadata, type ExifData } from '../services/tauriCommands';
+import {
+  getExifMetadata,
+  getImageMetadata,
+  type ExifData,
+  type ImageCaption,
+} from '../services/tauriCommands';
 import type { ImageMetadata } from '../types/image';
 
 interface ExifPanelProps {
@@ -7,6 +12,8 @@ interface ExifPanelProps {
   onClose: () => void;
   hasThumbnails?: boolean;
   refreshToken?: number;
+  caption?: ImageCaption | null;
+  onCopyCaption?: () => void;
 }
 
 interface ExifRow {
@@ -24,6 +31,8 @@ export function ExifPanel({
   onClose,
   hasThumbnails = false,
   refreshToken = 0,
+  caption = null,
+  onCopyCaption,
 }: ExifPanelProps) {
   const [data, setData] = useState<ExifData | null>(null);
   const [imageMetadata, setImageMetadata] = useState<ImageMetadata | null>(null);
@@ -147,6 +156,28 @@ export function ExifPanel({
           </div>
         )}
 
+        {caption && (
+          <section className="exif-section exif-caption-section">
+            <div className="exif-section-heading">
+              <h3 className="exif-section-title">Caption</h3>
+              {onCopyCaption && (
+                <button
+                  className="exif-caption-copy"
+                  type="button"
+                  onClick={onCopyCaption}
+                  aria-label="Copy image caption"
+                >
+                  Copy
+                </button>
+              )}
+            </div>
+            <p className="exif-caption-text">{caption.text}</p>
+            <p className="exif-caption-source" title={caption.sidecar_path}>
+              {getFileName(caption.sidecar_path)}
+            </p>
+          </section>
+        )}
+
         {data && (
           <>
             {fileRows.length > 0 && (
@@ -243,4 +274,8 @@ function getFileExtension(path: string): string | null {
   const fileName = path.replace(/\\/g, '/').split('/').pop();
   const extension = fileName?.split('.').pop()?.trim();
   return extension ? extension.toUpperCase() : null;
+}
+
+function getFileName(path: string): string {
+  return path.replace(/\\/g, '/').split('/').pop() || path;
 }
