@@ -417,6 +417,7 @@ export function ViewerChrome({
   const toggleMarkedPath = useViewerStore((state) => state.toggleMarkedPath);
   const clearMarkedPaths = useViewerStore((state) => state.clearMarkedPaths);
   const markAllVisibleImages = useViewerStore((state) => state.markAllVisibleImages);
+  const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
   const setMarkedPaths = useViewerStore((state) => state.setMarkedPaths);
   const setCompareZoomLocked = useViewerStore((state) => state.setCompareZoomLocked);
   const removeImagesByPaths = useViewerStore((state) => state.removeImagesByPaths);
@@ -670,6 +671,21 @@ export function ViewerChrome({
   const isCurrentMarked = currentImagePath ? markedPathSet.has(currentImagePath) : false;
   const contextMenuPath = contextMenu.path;
   const isContextMenuPathMarked = contextMenuPath ? markedPathSet.has(contextMenuPath) : false;
+
+  const jumpToLastMarked = () => {
+    const lastMarkedPath = markedPaths[markedPaths.length - 1];
+    if (!lastMarkedPath) return;
+
+    const normalizedLastMarkedPath = lastMarkedPath.replace(/\\/g, '/').toLowerCase();
+    const lastMarkedIndex = images.findIndex(
+      (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedLastMarkedPath
+    );
+    if (lastMarkedIndex >= 0) {
+      setCurrentIndex(lastMarkedIndex);
+      setIsMarkedActionsMenuOpen(false);
+      closeOverflowMenus();
+    }
+  };
   const toggleFullscreen = async () => {
     try {
       const appWindow = getCurrentWindow();
@@ -1753,6 +1769,9 @@ export function ViewerChrome({
                       type="button"
                     >
                       Mark All
+                    </button>
+                    <button className="top-bar-menu-item" onClick={jumpToLastMarked} type="button">
+                      Jump to Last Marked
                     </button>
                     <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
                       Clear

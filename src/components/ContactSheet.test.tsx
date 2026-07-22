@@ -345,6 +345,45 @@ describe('ContactSheet', () => {
     expect(document.activeElement).toBe(firstCell);
   });
 
+  it('pages the grid scroll container with Page Up and Page Down', () => {
+    const images = Array.from({ length: 40 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({ currentIndex: 0, images });
+
+    const { container } = render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+    const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+    Object.defineProperty(content, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 2000 });
+    content.scrollTop = 600;
+
+    fireEvent.keyDown(window, { key: 'PageDown' });
+    expect(content.scrollTo).toHaveBeenCalledWith({
+      top: 1000,
+      behavior: 'auto',
+    });
+
+    content.scrollTop = 1000;
+    fireEvent.keyDown(window, { key: 'PageUp' });
+    expect(content.scrollTo).toHaveBeenLastCalledWith({
+      top: 600,
+      behavior: 'auto',
+    });
+  });
+
   it('shows the no-match message while keeping search available', () => {
     render(
       <ContactSheet

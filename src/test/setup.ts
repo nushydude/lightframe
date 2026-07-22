@@ -55,7 +55,7 @@ vi.mock('@tauri-apps/plugin-process', () => ({
 }));
 
 // Mock AudioContext for boundary beep
-global.window.AudioContext = vi.fn().mockImplementation(() => ({
+window.AudioContext = vi.fn().mockImplementation(() => ({
   createOscillator: vi.fn(() => ({
     frequency: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
     connect: vi.fn(),

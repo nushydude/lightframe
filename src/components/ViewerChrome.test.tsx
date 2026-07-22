@@ -1455,6 +1455,46 @@ describe('ViewerChrome', () => {
     expect(screen.queryByRole('toolbar', { name: 'Marked image actions' })).not.toBeInTheDocument();
   });
 
+  it('jumps to the most recently marked image from the marked actions menu', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/first.jpg',
+      images: [
+        {
+          path: 'C:/Images/first.jpg',
+          file_name: 'first.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/second.jpg',
+          file_name: 'second.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/last.jpg',
+          file_name: 'last.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/second.jpg', 'C:/Images/last.jpg'],
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Jump to Last Marked' }));
+
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+    expect(useViewerStore.getState().currentImagePath).toBe('C:/Images/last.jpg');
+    expect(screen.queryByRole('toolbar', { name: 'Marked image actions' })).not.toBeInTheDocument();
+  });
+
   it('closes the viewer bulk transfer menu when clicking outside', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',

@@ -221,6 +221,43 @@ describe('thumbnail consumers', () => {
     expect(document.activeElement).toBe(screen.getByRole('option', { name: '0.jpg' }));
   });
 
+  it('pages the thumbnail strip with Page Up and Page Down', () => {
+    const images = Array.from({ length: 100 }, (_, index) => ({
+      path: `C:/images/${index}.jpg`,
+      file_name: `${index}.jpg`,
+      extension: 'jpg',
+      size_bytes: 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({ currentIndex: 0, images });
+
+    const { container } = render(<ThumbnailStrip />);
+    const stripContainer = container.querySelector('.thumbnail-strip-container') as HTMLDivElement;
+    Object.defineProperty(stripContainer, 'clientWidth', { configurable: true, value: 500 });
+    stripContainer.scrollLeft = 200;
+
+    fireEvent.keyDown(screen.getByRole('option', { name: '0.jpg' }), { key: 'PageDown' });
+    expect(stripContainer.scrollTo).toHaveBeenCalledWith({
+      left: 700,
+      behavior: 'auto',
+    });
+    expect(document.activeElement).toBe(stripContainer);
+
+    stripContainer.scrollLeft = 700;
+    fireEvent.keyDown(stripContainer, { key: 'PageDown' });
+    expect(stripContainer.scrollTo).toHaveBeenLastCalledWith({
+      left: 1200,
+      behavior: 'auto',
+    });
+
+    stripContainer.scrollLeft = 500;
+    fireEvent.keyDown(stripContainer, { key: 'PageUp' });
+    expect(stripContainer.scrollTo).toHaveBeenLastCalledWith({
+      left: 0,
+      behavior: 'auto',
+    });
+  });
+
   it('does not navigate twice when an active thumbnail handles an arrow key', () => {
     const images = Array.from({ length: 3 }, (_, index) => ({
       path: `C:/images/${index}.jpg`,
