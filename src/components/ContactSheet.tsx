@@ -278,6 +278,30 @@ export function ContactSheet({
     });
   };
 
+  const handlePageScroll = (event: KeyboardEvent) => {
+    if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
+
+    const content = contentRef.current;
+    if (!content) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const pageHeight = content.clientHeight || GRID_ROW_HEIGHT;
+    const direction = event.key === 'PageDown' ? 1 : -1;
+    const maxScrollTop = Math.max(0, content.scrollHeight - content.clientHeight);
+    const nextScrollTop = Math.max(
+      0,
+      Math.min(maxScrollTop, content.scrollTop + direction * pageHeight)
+    );
+
+    content.scrollTo({
+      top: nextScrollTop,
+      behavior: 'auto',
+    });
+    setScrollTop(nextScrollTop);
+  };
+
   const handleSelect = useCallback(
     (result: ContactSheetSearchResult) => {
       setCurrentIndex(result.sourceIndex);
@@ -625,6 +649,8 @@ export function ContactSheet({
         e.preventDefault();
         const result = searchResults[searchResults.length - 1];
         if (result) setCurrentIndex(result.sourceIndex);
+      } else if (e.key === 'PageUp' || e.key === 'PageDown') {
+        handlePageScroll(e);
       } else if (e.key === 'Delete') {
         e.preventDefault();
         void handleDeleteCurrent();

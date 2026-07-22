@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type UIEvent,
   type WheelEvent,
 } from 'react';
@@ -248,6 +249,36 @@ export function ThumbnailStrip() {
     scheduleVirtualMetricsUpdate(event.currentTarget.scrollLeft, event.currentTarget.clientWidth);
   };
 
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const viewportWidth =
+      container.clientWidth > 0
+        ? container.clientWidth
+        : FALLBACK_VISIBLE_CAPACITY * THUMBNAIL_ITEM_PITCH;
+    const maxScrollLeft = Math.max(
+      0,
+      getStripWidth(container.clientWidth, images.length) - container.clientWidth
+    );
+    const direction = event.key === 'PageDown' ? 1 : -1;
+    const nextScrollLeft = Math.max(
+      0,
+      Math.min(maxScrollLeft, container.scrollLeft + direction * viewportWidth)
+    );
+
+    container.scrollTo({
+      left: nextScrollLeft,
+      behavior: 'auto',
+    });
+    scheduleVirtualMetricsUpdate(nextScrollLeft, container.clientWidth);
+  };
+
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
     const container = containerRef.current;
     if (!container) return;
@@ -288,6 +319,7 @@ export function ThumbnailStrip() {
       ref={containerRef}
       role="listbox"
       aria-label="Folder images"
+      onKeyDown={handleKeyDown}
       onScroll={handleScroll}
       onWheel={handleWheel}
     >
