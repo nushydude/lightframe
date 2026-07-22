@@ -241,8 +241,17 @@ describe('thumbnail consumers', () => {
       left: 700,
       behavior: 'auto',
     });
+    expect(document.activeElement).toBe(stripContainer);
 
-    fireEvent.keyDown(screen.getByRole('option', { name: '0.jpg' }), { key: 'PageUp' });
+    stripContainer.scrollLeft = 700;
+    fireEvent.keyDown(stripContainer, { key: 'PageDown' });
+    expect(stripContainer.scrollTo).toHaveBeenLastCalledWith({
+      left: 1200,
+      behavior: 'auto',
+    });
+
+    stripContainer.scrollLeft = 500;
+    fireEvent.keyDown(stripContainer, { key: 'PageUp' });
     expect(stripContainer.scrollTo).toHaveBeenLastCalledWith({
       left: 0,
       behavior: 'auto',

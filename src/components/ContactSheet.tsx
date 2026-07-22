@@ -164,7 +164,7 @@ export function ContactSheet({
     const activeCell = Array.from(
       gridRef.current?.querySelectorAll<HTMLButtonElement>('[role="gridcell"]') ?? []
     ).find((cell) => cell.dataset.imagePath === focusPath);
-    activeCell?.focus();
+    activeCell?.focus({ preventScroll: true });
   }, [
     currentResultIndex,
     displayedImages,

@@ -276,6 +276,7 @@ export function ThumbnailStrip() {
       left: nextScrollLeft,
       behavior: 'auto',
     });
+    container.focus({ preventScroll: true });
     scheduleVirtualMetricsUpdate(nextScrollLeft, container.clientWidth);
   };
 
@@ -294,6 +295,8 @@ export function ThumbnailStrip() {
 
   useLayoutEffect(() => {
     const activeElement = document.activeElement;
+    if (activeElement === containerRef.current) return;
+
     if (
       activeElement !== document.body &&
       !containerRef.current?.contains(activeElement) &&
@@ -319,6 +322,7 @@ export function ThumbnailStrip() {
       ref={containerRef}
       role="listbox"
       aria-label="Folder images"
+      tabIndex={-1}
       onKeyDown={handleKeyDown}
       onScroll={handleScroll}
       onWheel={handleWheel}

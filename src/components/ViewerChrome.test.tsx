@@ -1492,6 +1492,7 @@ describe('ViewerChrome', () => {
 
     expect(useViewerStore.getState().currentIndex).toBe(2);
     expect(useViewerStore.getState().currentImagePath).toBe('C:/Images/last.jpg');
+    expect(screen.queryByRole('toolbar', { name: 'Marked image actions' })).not.toBeInTheDocument();
   });
 
   it('closes the viewer bulk transfer menu when clicking outside', async () => {

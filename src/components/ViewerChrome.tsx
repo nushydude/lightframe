@@ -682,6 +682,8 @@ export function ViewerChrome({
     );
     if (lastMarkedIndex >= 0) {
       setCurrentIndex(lastMarkedIndex);
+      setIsMarkedActionsMenuOpen(false);
+      closeOverflowMenus();
     }
   };
   const toggleFullscreen = async () => {
