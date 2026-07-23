@@ -40,6 +40,10 @@ async fn update_recent_folders_jump_list(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = windows_jump_list::set_process_app_user_model_id() {
+        eprintln!("Warning: failed to set LightFrame AppUserModelID: {error}");
+    }
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
