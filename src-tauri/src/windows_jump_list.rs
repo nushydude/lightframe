@@ -25,6 +25,16 @@ mod imp {
     const CATEGORY_NAME: &str = "Recent Folders";
     const FOLDER_ARGUMENT: &str = "--folder";
 
+    pub fn set_process_app_user_model_id() -> Result<(), String> {
+        let app_id = wide_string(APP_USER_MODEL_ID);
+        unsafe {
+            windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(PCWSTR(
+                app_id.as_ptr(),
+            ))
+        }
+        .map_err(|error| format!("failed to set LightFrame AppUserModelID: {error}"))
+    }
+
     pub fn update_recent_folders_jump_list(
         recent_folders: Vec<RecentFolder>,
     ) -> Result<Vec<String>, String> {
@@ -281,9 +291,19 @@ pub fn update_recent_folders_jump_list(
     imp::update_recent_folders_jump_list(recent_folders)
 }
 
+#[cfg(windows)]
+pub fn set_process_app_user_model_id() -> Result<(), String> {
+    imp::set_process_app_user_model_id()
+}
+
 #[cfg(not(windows))]
 pub fn update_recent_folders_jump_list(
     _recent_folders: Vec<RecentFolder>,
 ) -> Result<Vec<String>, String> {
     Ok(Vec::new())
+}
+
+#[cfg(not(windows))]
+pub fn set_process_app_user_model_id() -> Result<(), String> {
+    Ok(())
 }
