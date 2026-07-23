@@ -1,6 +1,7 @@
 use crate::native_codecs;
 use crate::path_normalization::normalize_path_for_key;
-use image::GenericImageView;
+use image::metadata::Orientation;
+use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader};
 use libjpeg_turbo_rs::{CropRegion, Subsampling};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,9 +14,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
 
 const THUMBNAIL_SIZE: u32 = 160;
-const THUMBNAIL_CACHE_VERSION: &str = "thumb-v3";
-const PREVIEW_CACHE_VERSION: &str = "preview-v1";
-const TILE_CACHE_VERSION: &str = "tile-v1";
+const THUMBNAIL_CACHE_VERSION: &str = "thumb-v4";
+const PREVIEW_CACHE_VERSION: &str = "preview-v2";
+const TILE_CACHE_VERSION: &str = "tile-v2";
 const MAX_CACHE_ENTRIES: usize = 2_000;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const CLEANUP_INTERVAL: usize = 32;
@@ -474,7 +475,7 @@ pub fn get_or_create_preview(
         }
     }
 
-    let img = match image::open(file_path) {
+    let img = match decode_image_with_orientation(file_path) {
         Ok(img) => img,
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
@@ -670,7 +671,7 @@ fn build_versioned_cache_key(
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
-    let img = image::open(file_path)?;
+    let img = decode_image_with_orientation(file_path)?;
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
 
     let mut buffer = std::io::Cursor::new(Vec::new());
@@ -731,14 +732,108 @@ fn get_cached_jpeg_tile_source(
     Ok(bytes)
 }
 
+pub fn oriented_image_dimensions(file_path: &Path) -> Result<(u32, u32), String> {
+    let reader = ImageReader::open(file_path)
+        .map_err(|error| format!("Failed to read image dimensions: {}", error))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|error| format!("Failed to decode image dimensions: {}", error))?;
+    let (width, height) = decoder.dimensions();
+    let orientation = decoder
+        .orientation()
+        .map_err(|error| format!("Failed to read image orientation: {}", error))?;
+    Ok(oriented_dimensions(width, height, orientation))
+}
+
+fn decode_image_with_orientation(file_path: &Path) -> Result<DynamicImage, image::ImageError> {
+    let reader = ImageReader::open(file_path)?;
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    image.apply_orientation(orientation);
+    Ok(image)
+}
+
+fn oriented_dimensions(width: u32, height: u32, orientation: Orientation) -> (u32, u32) {
+    match orientation {
+        Orientation::Rotate90
+        | Orientation::Rotate270
+        | Orientation::Rotate90FlipH
+        | Orientation::Rotate270FlipH => (height, width),
+        _ => (width, height),
+    }
+}
+
+fn jpeg_orientation(source: &[u8]) -> Result<(u32, u32, Orientation), String> {
+    let reader = ImageReader::new(std::io::Cursor::new(source))
+        .with_guessed_format()
+        .map_err(|error| format!("Failed to read JPEG orientation: {}", error))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|error| format!("Failed to decode JPEG orientation: {}", error))?;
+    let (width, height) = decoder.dimensions();
+    let orientation = decoder
+        .orientation()
+        .map_err(|error| format!("Failed to decode JPEG orientation: {}", error))?;
+    Ok((width, height, orientation))
+}
+
+fn inverse_oriented_pixel(
+    x: u32,
+    y: u32,
+    raw_width: u32,
+    raw_height: u32,
+    orientation: Orientation,
+) -> (u32, u32) {
+    match orientation {
+        Orientation::NoTransforms => (x, y),
+        Orientation::Rotate90 => (y, raw_height - 1 - x),
+        Orientation::Rotate180 => (raw_width - 1 - x, raw_height - 1 - y),
+        Orientation::Rotate270 => (raw_width - 1 - y, x),
+        Orientation::FlipHorizontal => (raw_width - 1 - x, y),
+        Orientation::FlipVertical => (x, raw_height - 1 - y),
+        Orientation::Rotate90FlipH => (y, x),
+        Orientation::Rotate270FlipH => (raw_width - 1 - y, raw_height - 1 - x),
+    }
+}
+
+fn raw_tile_bounds(
+    displayed_bounds: TileBounds,
+    raw_width: u32,
+    raw_height: u32,
+    orientation: Orientation,
+) -> TileBounds {
+    let right = displayed_bounds.x + displayed_bounds.width - 1;
+    let bottom = displayed_bounds.y + displayed_bounds.height - 1;
+    let corners = [
+        inverse_oriented_pixel(
+            displayed_bounds.x,
+            displayed_bounds.y,
+            raw_width,
+            raw_height,
+            orientation,
+        ),
+        inverse_oriented_pixel(right, displayed_bounds.y, raw_width, raw_height, orientation),
+        inverse_oriented_pixel(displayed_bounds.x, bottom, raw_width, raw_height, orientation),
+        inverse_oriented_pixel(right, bottom, raw_width, raw_height, orientation),
+    ];
+    let min_x = corners.iter().map(|(x, _)| *x).min().unwrap();
+    let max_x = corners.iter().map(|(x, _)| *x).max().unwrap();
+    let min_y = corners.iter().map(|(_, y)| *y).min().unwrap();
+    let max_y = corners.iter().map(|(_, y)| *y).max().unwrap();
+    TileBounds { x: min_x, y: min_y, width: max_x - min_x + 1, height: max_y - min_y + 1 }
+}
+
 fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, String> {
+    let (raw_width, raw_height, orientation) = jpeg_orientation(source)?;
+    let raw_bounds = raw_tile_bounds(bounds, raw_width, raw_height, orientation);
     let tile = libjpeg_turbo_rs::decompress_cropped(
         source,
         CropRegion {
-            x: bounds.x as usize,
-            y: bounds.y as usize,
-            width: bounds.width as usize,
-            height: bounds.height as usize,
+            x: raw_bounds.x as usize,
+            y: raw_bounds.y as usize,
+            width: raw_bounds.width as usize,
+            height: raw_bounds.height as usize,
         },
     )
     .map_err(|error| format!("Failed to decode JPEG tile: {}", error))?;
@@ -747,11 +842,37 @@ fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, Stri
         return Err("Decoded tile is empty".to_string());
     }
 
+    let decoded_width = u32::try_from(tile.width)
+        .map_err(|_| "Decoded JPEG tile width is too large".to_string())?;
+    let decoded_height = u32::try_from(tile.height)
+        .map_err(|_| "Decoded JPEG tile height is too large".to_string())?;
+    if decoded_width < raw_bounds.width || decoded_height < raw_bounds.height {
+        return Err("Decoded JPEG tile is smaller than the requested crop".to_string());
+    }
+
+    let decoded_tile = image::RgbImage::from_raw(decoded_width, decoded_height, tile.data)
+        .ok_or_else(|| "Decoded JPEG tile has invalid pixel data".to_string())?;
+    // libjpeg-turbo aligns the crop origin to an MCU boundary. The extra pixels
+    // therefore precede the requested rectangle on the left/top edges.
+    let extra_left = decoded_width - raw_bounds.width;
+    let extra_top = decoded_height - raw_bounds.height;
+    let exact_tile = image::imageops::crop_imm(
+        &decoded_tile,
+        extra_left,
+        extra_top,
+        raw_bounds.width,
+        raw_bounds.height,
+    )
+    .to_image();
+    let mut oriented_tile = image::DynamicImage::ImageRgb8(exact_tile);
+    oriented_tile.apply_orientation(orientation);
+    let oriented_tile = oriented_tile.to_rgb8();
+
     libjpeg_turbo_rs::compress(
-        &tile.data,
-        tile.width,
-        tile.height,
-        tile.pixel_format,
+        oriented_tile.as_raw(),
+        oriented_tile.width() as usize,
+        oriented_tile.height() as usize,
+        libjpeg_turbo_rs::PixelFormat::Rgb,
         92,
         Subsampling::S444,
     )
@@ -1413,6 +1534,23 @@ mod tests {
     use base64::Engine;
     use tempfile::tempdir;
 
+    fn write_orientation(path: &Path, orientation: u16) {
+        let mut image = fs::read(path).unwrap();
+        let mut exif = b"Exif\0\0II*\0\x08\0\0\0\x01\0".to_vec();
+        exif.extend_from_slice(&0x0112_u16.to_le_bytes());
+        exif.extend_from_slice(&3_u16.to_le_bytes());
+        exif.extend_from_slice(&1_u32.to_le_bytes());
+        exif.extend_from_slice(&orientation.to_le_bytes());
+        exif.extend_from_slice(&0_u16.to_le_bytes());
+
+        let segment_length = u16::try_from(exif.len() + 2).unwrap();
+        let mut segment = vec![0xff, 0xe1];
+        segment.extend_from_slice(&segment_length.to_be_bytes());
+        segment.extend_from_slice(&exif);
+        image.splice(2..2, segment);
+        fs::write(path, image).unwrap();
+    }
+
     fn cache_file_name_for_index(index: usize, extension: &str) -> String {
         format!("{index:064x}.{extension}")
     }
@@ -1469,6 +1607,129 @@ mod tests {
         let busted = build_preview_cache_key(path, &metadata, 2048, Some(1_767_225_605_000));
 
         assert_ne!(base, busted);
+    }
+
+    #[test]
+    fn oriented_decode_applies_exif_rotation_and_preserves_source() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("oriented.jpg");
+        image::RgbImage::from_fn(320, 160, |x, y| image::Rgb([x as u8, y as u8, 0]))
+            .save(&image_path)
+            .unwrap();
+        write_orientation(&image_path, 6);
+        let source_bytes = fs::read(&image_path).unwrap();
+
+        let decoded = decode_image_with_orientation(&image_path).unwrap();
+        let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+        let thumbnail =
+            get_or_create_thumbnail(&image_path, &metadata, &dir.path().join("thumbs")).unwrap();
+        let preview =
+            get_or_create_preview(&image_path, &metadata, &dir.path().join("previews"), 160, None)
+                .unwrap();
+
+        assert_eq!(decoded.dimensions(), (160, 320));
+        assert_eq!(oriented_image_dimensions(&image_path).unwrap(), (160, 320));
+        assert_eq!(image::open(&thumbnail.file_path).unwrap().dimensions(), (80, 160));
+        assert_eq!(preview.width, Some(80));
+        assert_eq!(preview.height, Some(160));
+        assert_eq!(fs::read(&image_path).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn no_orientation_and_non_exif_formats_keep_dimensions() {
+        let dir = tempdir().unwrap();
+        let jpeg_path = dir.path().join("plain.jpg");
+        let png_path = dir.path().join("plain.png");
+        image::RgbImage::from_pixel(80, 40, image::Rgb([1, 2, 3])).save(&jpeg_path).unwrap();
+        image::RgbImage::from_pixel(80, 40, image::Rgb([1, 2, 3])).save(&png_path).unwrap();
+
+        assert_eq!(decode_image_with_orientation(&jpeg_path).unwrap().dimensions(), (80, 40));
+        assert_eq!(oriented_image_dimensions(&png_path).unwrap(), (80, 40));
+    }
+
+    #[test]
+    fn oriented_jpeg_tiles_use_displayed_dimensions_and_coordinates() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("oriented-large.jpg");
+        let cache_dir = dir.path().join("tiles");
+        image::RgbImage::from_pixel(640, 480, image::Rgb([12, 34, 56])).save(&image_path).unwrap();
+        write_orientation(&image_path, 6);
+
+        let metadata = resolve_source_metadata(&image_path, None, None).unwrap();
+        let asset = get_or_create_tile(
+            &image_path,
+            &metadata,
+            &cache_dir,
+            TileRequest {
+                source_width: 480,
+                source_height: 640,
+                tile_size: 256,
+                tile_x: 0,
+                tile_y: 0,
+            },
+        )
+        .unwrap();
+        let tile = image::open(&asset.file_path).unwrap();
+
+        assert_eq!(tile.dimensions(), (256, 256));
+        assert_eq!(asset.width, Some(256));
+        assert_eq!(asset.height, Some(256));
+    }
+
+    #[test]
+    fn oriented_jpeg_tiles_match_full_decode_for_mcu_unaligned_crop() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("oriented-odd.jpg");
+        let raw_width = 321;
+        let raw_height = 257;
+        let source_image = image::RgbImage::from_fn(raw_width, raw_height, |x, y| {
+            let block_x = x / 16;
+            let block_y = y / 16;
+            image::Rgb([
+                (block_x * 35) as u8,
+                (block_y * 53) as u8,
+                ((block_x + block_y) * 17) as u8,
+            ])
+        });
+        let mut file = fs::File::create(&image_path).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 100)
+            .encode_image(&image::DynamicImage::ImageRgb8(source_image))
+            .unwrap();
+        write_orientation(&image_path, 8);
+
+        let source = fs::read(&image_path).unwrap();
+        let bounds = validate_tile_request(TileRequest {
+            source_width: raw_height,
+            source_height: raw_width,
+            tile_size: 128,
+            tile_x: 1,
+            tile_y: 1,
+        })
+        .unwrap();
+        let tile_bytes = generate_jpeg_tile(&source, bounds).unwrap();
+        let tile = image::load_from_memory(&tile_bytes).unwrap().to_rgb8();
+        let full = decode_image_with_orientation(&image_path).unwrap().to_rgb8();
+        let expected =
+            image::imageops::crop_imm(&full, bounds.x, bounds.y, bounds.width, bounds.height)
+                .to_image();
+
+        assert_eq!(tile.dimensions(), expected.dimensions());
+        for y in 0..tile.height() {
+            for x in 0..tile.width() {
+                let actual = tile.get_pixel(x, y).0;
+                let expected = expected.get_pixel(x, y).0;
+                for channel in 0..3 {
+                    let difference =
+                        (i16::from(actual[channel]) - i16::from(expected[channel])).abs();
+                    assert!(
+                        difference <= 20,
+                        "pixel mismatch at ({x}, {y}), channel {channel}: actual={}, expected={}",
+                        actual[channel],
+                        expected[channel]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

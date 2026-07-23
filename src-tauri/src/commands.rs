@@ -743,7 +743,7 @@ fn rust_or_fallback_dimensions(
     fallback_backend: native_codecs::CodecBackend,
     codec_backend: &mut native_codecs::CodecBackend,
 ) -> (Option<u32>, Option<u32>) {
-    match image::image_dimensions(path) {
+    match thumbnails::oriented_image_dimensions(path) {
         Ok((width, height)) => {
             *codec_backend = native_codecs::CodecBackend::RustImage;
             (Some(width), Some(height))
@@ -1114,8 +1114,7 @@ fn tile_source_dimensions(path: &Path) -> Result<(u32, u32), String> {
             .map_err(|e| format!("Failed to read native tile source dimensions: {}", e));
     }
 
-    image::image_dimensions(path)
-        .map_err(|e| format!("Failed to read tile source dimensions: {}", e))
+    thumbnails::oriented_image_dimensions(path)
 }
 
 #[tauri::command]
@@ -2607,6 +2606,23 @@ mod tests {
         compress(&pixels, width, height, PixelFormat::Rgb, 90, subsampling).unwrap()
     }
 
+    fn add_exif_orientation(path: &Path, orientation: u16) {
+        let mut image = fs::read(path).unwrap();
+        let mut exif = b"Exif\0\0II*\0\x08\0\0\0\x01\0".to_vec();
+        exif.extend_from_slice(&0x0112_u16.to_le_bytes());
+        exif.extend_from_slice(&3_u16.to_le_bytes());
+        exif.extend_from_slice(&1_u32.to_le_bytes());
+        exif.extend_from_slice(&orientation.to_le_bytes());
+        exif.extend_from_slice(&0_u16.to_le_bytes());
+
+        let segment_length = u16::try_from(exif.len() + 2).unwrap();
+        let mut segment = vec![0xff, 0xe1];
+        segment.extend_from_slice(&segment_length.to_be_bytes());
+        segment.extend_from_slice(&exif);
+        image.splice(2..2, segment);
+        fs::write(path, image).unwrap();
+    }
+
     #[test]
     fn test_get_image_caption_reads_same_basename_txt() {
         let dir = tempdir().unwrap();
@@ -2941,6 +2957,21 @@ mod tests {
         assert!(metadata.metadata_supported);
         assert!(metadata.thumbnail_supported);
         assert_eq!(metadata.support_note, None);
+    }
+
+    #[test]
+    fn test_get_image_metadata_blocking_uses_exif_oriented_dimensions() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("oriented.jpg");
+
+        image::RgbImage::new(320, 160).save(&image_path).unwrap();
+        add_exif_orientation(&image_path, 6);
+
+        let metadata =
+            get_image_metadata_blocking(image_path.to_string_lossy().to_string()).unwrap();
+
+        assert_eq!(metadata.width, Some(160));
+        assert_eq!(metadata.height, Some(320));
     }
 
     #[test]
