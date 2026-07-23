@@ -1,7 +1,8 @@
 # LightFrame Roadmap Task State Machine
 
-This state machine controls one roadmap task from selection through merge cleanup. The orchestrator
-must not skip states.
+This state machine controls one user task from specification through PR delivery and merge cleanup.
+The orchestrator must not skip states, and must persist the current state with
+`scripts/agent-task.mjs` so an interrupted run can resume without duplicating work.
 
 ## State List
 
@@ -9,19 +10,37 @@ must not skip states.
 
 Entry criteria:
 
-- Exactly one `.agent/roadmap/tasks/*.md` file is selected.
+- Exactly one user task is selected.
 - User has not requested a combined task.
 
 Actions:
 
-- Read the task plan.
+- Read the task plan when one exists, otherwise derive a short specification from the user prompt.
 - Read current `git status --short`.
 - Identify likely files from the task plan.
 
 Exit to:
 
 - `BLOCKED_DIRTY_WORKTREE` if unrelated user changes make the task unsafe.
-- `BRANCH_READY` if safe to continue.
+- `SPECIFYING` if the task can be scoped safely.
+
+### SPECIFYING
+
+Entry criteria:
+
+- The task prompt has been accepted as one scoped change.
+
+Actions:
+
+- Record the goal, acceptance criteria, constraints, affected areas, test plan, and open decisions.
+- Ask the user only about decisions that materially change the implementation.
+- Do not start coding until the specification is sufficient to review.
+
+Exit to:
+
+- `BRANCH_READY` after the isolated worktree is created from freshly fetched `origin/main`.
+- `AUTHORIZATION_REQUIRED` only when the task is complete and delivery authorization is the only
+  remaining decision.
 
 ### BLOCKED_DIRTY_WORKTREE
 
@@ -46,8 +65,10 @@ Entry criteria:
 
 Actions:
 
-- Create or switch to `codex/<task-slug>`.
-- Confirm branch is current.
+- Run `node scripts/agent-task.mjs start --slug <task-slug> --title "<task title>" --spec-file <path>`.
+- Confirm the branch is `codex/<task-slug>`, the recorded base SHA is from `origin/main`, and the
+  specification hash is present when a spec file was used.
+- Do not use a dirty source checkout or carry unrelated changes into the task worktree.
 
 Exit to:
 
@@ -132,12 +153,15 @@ Entry criteria:
 Actions:
 
 - Send task plan, diff summary, and check results to GPT 5.5 reviewer.
+- Record the independent reviewer result with
+  `node scripts/agent-task.mjs record-review --slug <task-slug> --status APPROVED|CHANGES_REQUESTED`.
 - Reviewer returns `APPROVED` or `CHANGES_REQUESTED`.
 
 Exit to:
 
 - `REMEDIATING_REVIEW` if reviewer returns `CHANGES_REQUESTED`.
 - `PR_READY` if reviewer returns `APPROVED`.
+- `AUTHORIZATION_REQUIRED` if reviewer approval and local gates pass but delivery is not authorized.
 
 ### REMEDIATING_REVIEW
 
@@ -155,6 +179,23 @@ Exit to:
 
 - `REVIEWING`.
 
+### AUTHORIZATION_REQUIRED
+
+Entry criteria:
+
+- The implementation is reviewed and locally verified, but the user has not explicitly authorized
+  commit, push, and PR creation.
+
+Actions:
+
+- Report the exact branch, changed files, check results, reviewer result, and intended PR target.
+- Wait for explicit delivery authorization. Do not commit, push, open, merge, or force-push.
+
+Exit to:
+
+- `PR_READY` after authorization is received.
+- `ABANDONED` if the user stops the task.
+
 ### PR_READY
 
 Entry criteria:
@@ -168,6 +209,7 @@ Actions:
 - Create commit with a clear message.
 - Push branch.
 - Open PR.
+- Record the PR URL and head SHA with `node scripts/agent-task.mjs record-pr ...`.
 
 Exit to:
 
@@ -181,7 +223,7 @@ Entry criteria:
 
 Actions:
 
-- Poll GitHub Actions for the PR head SHA.
+- Poll GitHub Actions for the exact recorded PR head SHA, not merely the branch name.
 - Inspect failed jobs if any.
 
 Exit to:
@@ -237,7 +279,9 @@ Actions:
 
 ```text
 TASK_SELECTED -> BLOCKED_DIRTY_WORKTREE
-TASK_SELECTED -> BRANCH_READY
+TASK_SELECTED -> SPECIFYING
+SPECIFYING -> BRANCH_READY
+SPECIFYING -> AUTHORIZATION_REQUIRED
 BLOCKED_DIRTY_WORKTREE -> BRANCH_READY
 BRANCH_READY -> IMPLEMENTING
 IMPLEMENTING -> IMPLEMENTATION_FAILED
@@ -249,7 +293,10 @@ LOCAL_CHECKS -> REVIEWING
 REMEDIATING_LOCAL_FAILURES -> LOCAL_CHECKS
 REVIEWING -> REMEDIATING_REVIEW
 REVIEWING -> PR_READY
+REVIEWING -> AUTHORIZATION_REQUIRED
 REMEDIATING_REVIEW -> REVIEWING
+AUTHORIZATION_REQUIRED -> PR_READY
+AUTHORIZATION_REQUIRED -> ABANDONED
 PR_READY -> PIPELINE_WAIT
 PIPELINE_WAIT -> PIPELINE_REMEDIATION
 PIPELINE_WAIT -> DONE

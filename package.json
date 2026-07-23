@@ -23,6 +23,7 @@
     "quality:dead-code": "fallow dead-code",
     "quality:dupes": "fallow dupes",
     "quality:health": "fallow health",
+    "agent:task": "node ./scripts/agent-task.mjs",
     "ci:frontend": "pnpm run format:check && pnpm run lint && pnpm run test:run && pnpm run build && pnpm run quality:audit:ci",
     "commit:gate": "node ./scripts/run-commit-gate.mjs",
     "commit:message:check": "node ./scripts/check-commit-message.mjs",
