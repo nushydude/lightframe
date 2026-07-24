@@ -1,19 +1,20 @@
-import { useEffect, useState } from 'react';
 import type { ImageCaption } from '../services/tauriCommands';
 
 interface ImageCaptionOverlayProps {
   caption: ImageCaption;
+  expanded: boolean;
   hasThumbnails: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   onCopy: () => void;
 }
 
-export function ImageCaptionOverlay({ caption, hasThumbnails, onCopy }: ImageCaptionOverlayProps) {
-  const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    setExpanded(false);
-  }, [caption.sidecar_path]);
-
+export function ImageCaptionOverlay({
+  caption,
+  expanded,
+  hasThumbnails,
+  onExpandedChange,
+  onCopy,
+}: ImageCaptionOverlayProps) {
   return (
     <section
       className={`image-caption-overlay ${expanded ? 'image-caption-overlay--expanded' : ''} ${
@@ -27,7 +28,7 @@ export function ImageCaptionOverlay({ caption, hasThumbnails, onCopy }: ImageCap
         aria-expanded={expanded}
         aria-controls="image-caption-text"
         aria-label={expanded ? 'Collapse image caption' : 'Expand image caption'}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => onExpandedChange(!expanded)}
       >
         <span className="image-caption-label">Caption</span>
         <span className="image-caption-text" id="image-caption-text">

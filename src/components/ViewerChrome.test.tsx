@@ -152,6 +152,109 @@ describe('ViewerChrome', () => {
     );
   });
 
+  it('keeps caption expansion shared across image navigation', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 200,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(tauriCommands.getImageCaption).mockImplementation(async (filePath) => ({
+      text:
+        filePath === 'C:/Images/photo.jpg'
+          ? 'first caption, long prompt details'
+          : 'second caption, different prompt details',
+      sidecar_path:
+        filePath === 'C:/Images/photo.jpg' ? 'C:/Images/photo.txt' : 'C:/Images/next.txt',
+      extension: 'txt',
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(await screen.findByText('first caption, long prompt details')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand image caption' }));
+    expect(screen.getByRole('button', { name: 'Collapse image caption' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+
+    act(() => {
+      useViewerStore.setState({
+        currentImagePath: 'C:/Images/next.jpg',
+        currentIndex: 1,
+      });
+    });
+
+    expect(await screen.findByText('second caption, different prompt details')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse image caption' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+  });
+
+  it('toggles global caption expansion from the View actions menu', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(tauriCommands.getImageCaption).mockResolvedValue({
+      text: 'subject token, portrait, soft light',
+      sidecar_path: 'C:/Images/photo.txt',
+      extension: 'txt',
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(await screen.findByText('subject token, portrait, soft light')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand image caption' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+
+    const moreButton = screen.getByLabelText('More actions');
+    const moreMenu = moreButton.closest('details') as HTMLDetailsElement;
+    fireEvent.click(moreButton);
+
+    const expandCaptionsButton = screen.getByRole('button', { name: 'Expand image captions' });
+    expect(expandCaptionsButton).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(expandCaptionsButton);
+
+    expect(moreMenu.open).toBe(false);
+    expect(screen.getByRole('button', { name: 'Collapse image caption' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+
+    fireEvent.click(moreButton);
+    expect(screen.getByRole('button', { name: 'Expand image captions' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
   it('moves the caption into Image Info instead of overlapping the browsing overlay', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',

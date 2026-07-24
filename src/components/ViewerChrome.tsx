@@ -72,6 +72,7 @@ interface ViewerChromeProps {
 
 type SecondaryToolbarActionId =
   | 'captions'
+  | 'expand-captions'
   | 'copy'
   | 'copy-path'
   | 'copy-to'
@@ -459,6 +460,7 @@ export function ViewerChrome({
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
   const [captionRefreshToken, setCaptionRefreshToken] = useState(0);
   const [imageCaption, setImageCaption] = useState<ImageCaption | null>(null);
+  const [captionsExpanded, setCaptionsExpanded] = useState(false);
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
   const [isMarkedActionsMenuOpen, setIsMarkedActionsMenuOpen] = useState(false);
@@ -755,6 +757,11 @@ export function ViewerChrome({
   const handleToggleCaptions = () => {
     closeOverflowMenus();
     void updateSettings({ showImageCaptions: !showImageCaptions });
+  };
+
+  const handleToggleCaptionsExpanded = () => {
+    setCaptionsExpanded((value) => !value);
+    closeOverflowMenus();
   };
 
   const handleCopyCaption = async () => {
@@ -1504,6 +1511,24 @@ export function ViewerChrome({
       pinnedNode: null,
     },
     {
+      id: 'expand-captions',
+      label: 'Expand Captions',
+      icon: 'caption',
+      group: 'view',
+      menuNode: (
+        <button
+          className="top-bar-menu-item top-bar-menu-item--checkable"
+          onClick={handleToggleCaptionsExpanded}
+          type="button"
+          aria-label="Expand image captions"
+          aria-pressed={captionsExpanded}
+        >
+          <MenuLabel label="Expand Captions" />
+        </button>
+      ),
+      pinnedNode: null,
+    },
+    {
       id: 'info',
       label: showExif ? 'Hide Info' : 'Info',
       icon: 'info',
@@ -2066,7 +2091,9 @@ export function ViewerChrome({
       {imageCaption && showImageCaptions && viewMode === 'viewer' && !isCropMode && !showExif && (
         <ImageCaptionOverlay
           caption={imageCaption}
+          expanded={captionsExpanded}
           hasThumbnails={showThumbnails}
+          onExpandedChange={setCaptionsExpanded}
           onCopy={() => void handleCopyCaption()}
         />
       )}
