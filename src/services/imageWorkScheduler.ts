@@ -36,6 +36,7 @@ type ImageWorkTaskView = {
 type ImageWorkSnapshot = {
   queueDepth: number;
   inFlight: number;
+  canceledInFlight: number;
   droppedQueued: number;
   activeByPriority: Record<ImageWorkPriority, number>;
   queuedByPriority: Record<ImageWorkPriority, number>;
@@ -57,6 +58,7 @@ type ImageWorkJob<T> = {
   state: 'queued' | 'running';
   sequence: number;
   settled: boolean;
+  tombstoned: boolean;
   run: (context: { signal: AbortSignal }) => Promise<T>;
   controller: AbortController;
   consumers: Map<number, ImageWorkConsumer<T>>;
@@ -127,11 +129,13 @@ function compareJobs(left: ImageWorkJob<unknown>, right: ImageWorkJob<unknown>):
   return left.sequence - right.sequence;
 }
 
-// fallow-ignore-next-line unused-exports -- constructed directly in focused scheduler tests
 export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   const listeners = new Set<ImageWorkListener>();
   const queuedJobs: Array<ImageWorkJob<unknown>> = [];
   const jobsByKey = new Map<string, ImageWorkJob<unknown>>();
+  // A job can be removed from jobsByKey as soon as its last consumer cancels, but native work
+  // may still be executing. Keep that physical work in capacity accounting until run settles.
+  const runningJobs = new Set<ImageWorkJob<unknown>>();
   let nextSequence = 0;
   let nextConsumerId = 0;
   let droppedQueued = 0;
@@ -143,6 +147,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   function getSnapshot(): ImageWorkSnapshot {
     const activeByPriority = createPrioritySnapshot();
     const queuedByPriority = createPrioritySnapshot();
+    let canceledInFlight = 0;
     for (const job of jobsByKey.values()) {
       if (job.state === 'running') {
         activeByPriority[job.priority] += 1;
@@ -151,10 +156,18 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       }
     }
 
-    const inFlight = Array.from(jobsByKey.values()).filter((job) => job.state === 'running').length;
+    for (const job of runningJobs) {
+      if (job.tombstoned) {
+        activeByPriority[job.priority] += 1;
+        canceledInFlight += 1;
+      }
+    }
+
+    const inFlight = runningJobs.size;
     return {
       queueDepth: queuedJobs.length,
       inFlight,
+      canceledInFlight,
       droppedQueued,
       activeByPriority,
       queuedByPriority,
@@ -171,8 +184,8 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
 
   function countRunning(bucket: ImageWorkBucket): number {
     let count = 0;
-    for (const job of jobsByKey.values()) {
-      if (job.state === 'running' && priorityBucket(job.priority) === bucket) {
+    for (const job of runningJobs) {
+      if (priorityBucket(job.priority) === bucket) {
         count += 1;
       }
     }
@@ -184,15 +197,11 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   }
 
   function hasRunningInteractiveWork(): boolean {
-    return Array.from(jobsByKey.values()).some(
-      (job) => job.state === 'running' && priorityBucket(job.priority) === 'interactive'
-    );
+    return Array.from(runningJobs).some((job) => priorityBucket(job.priority) === 'interactive');
   }
 
   function canStart(job: ImageWorkJob<unknown>): boolean {
-    const runningTotal = Array.from(jobsByKey.values()).filter(
-      (item) => item.state === 'running'
-    ).length;
+    const runningTotal = runningJobs.size;
     if (runningTotal >= maxConcurrent) {
       return false;
     }
@@ -234,6 +243,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     }
 
     job.settled = true;
+    runningJobs.delete(job as ImageWorkJob<unknown>);
     if (jobsByKey.get(job.key) === job) {
       jobsByKey.delete(job.key);
     }
@@ -268,6 +278,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       }
 
       job.state = 'running';
+      runningJobs.add(job);
       notify();
 
       void Promise.resolve(job.run({ signal: job.controller.signal }))
@@ -309,6 +320,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
         state: 'queued',
         sequence: nextSequence,
         settled: false,
+        tombstoned: false,
         run: async ({ signal }) => options.run({ signal }),
         controller: new AbortController(),
         consumers: new Map<number, ImageWorkConsumer<T>>(),
@@ -356,10 +368,12 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
           job.settled = true;
         } else {
           job.controller.abort();
+          job.tombstoned = true;
           if (jobsByKey.get(job.key) === job) {
             jobsByKey.delete(job.key);
           }
-          job.settled = true;
+          // Keep the physical job in runningJobs. Abort is cooperative and a native
+          // spawn_blocking operation can continue after every consumer has settled.
           pump();
         }
       }
@@ -455,11 +469,14 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   }
 
   function resetForTests(): void {
-    for (const job of Array.from(jobsByKey.values())) {
+    const jobs = new Set([...jobsByKey.values(), ...runningJobs]);
+    for (const job of jobs) {
+      job.controller.abort();
       settleJob(job, (consumer) => consumer.reject(createAbortError()));
     }
     queuedJobs.length = 0;
     jobsByKey.clear();
+    runningJobs.clear();
     nextSequence = 0;
     nextConsumerId = 0;
     droppedQueued = 0;

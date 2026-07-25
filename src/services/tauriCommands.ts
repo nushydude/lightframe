@@ -288,6 +288,13 @@ export async function readCurationMetadata(): Promise<Record<string, ImageCurati
   return invoke<Record<string, ImageCuration>>('read_curation_metadata');
 }
 
+/** Read curation metadata only for the supplied active-folder or startup paths. */
+export async function readCurationMetadataForPaths(
+  filePaths: string[]
+): Promise<Record<string, ImageCuration>> {
+  return invoke<Record<string, ImageCuration>>('read_curation_metadata_for_paths', { filePaths });
+}
+
 /** Write favorite/rating metadata for a single image path */
 export async function writeImageCuration(
   filePath: string,

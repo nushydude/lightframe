@@ -4,6 +4,8 @@ mod curation;
 mod display_inhibition;
 mod folder_index;
 mod folder_watcher;
+mod generated_cache_maintenance;
+mod image_metadata;
 mod native_codecs;
 mod path_normalization;
 mod thumbnails;
@@ -98,6 +100,7 @@ pub fn run() {
             update_channels::check_update_channel,
             commands::save_diagnostics_snapshot,
             commands::read_curation_metadata,
+            commands::read_curation_metadata_for_paths,
             commands::write_image_curation,
             commands::write_image_curation_batch,
             commands::clear_image_curation,

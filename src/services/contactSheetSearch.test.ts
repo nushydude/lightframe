@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeContactSheetQuery, searchContactSheetImages } from './contactSheetSearch';
+import {
+  buildContactSheetResultIndex,
+  normalizeContactSheetPath,
+  normalizeContactSheetQuery,
+  searchContactSheetImages,
+} from './contactSheetSearch';
 import type { ImageFile } from '../types/image';
 
 const images: ImageFile[] = [
@@ -33,5 +38,19 @@ describe('searchContactSheetImages', () => {
 
   it('normalizes query whitespace and casing', () => {
     expect(normalizeContactSheetQuery('  MiXeD  ')).toBe('mixed');
+  });
+
+  it('builds a first-match normalized result index', () => {
+    const results = searchContactSheetImages(
+      [
+        { ...images[0], path: 'C:\\Photos\\Sunset.jpg' },
+        { ...images[1], path: 'c:/photos/sunset.jpg' },
+      ],
+      ''
+    );
+    const index = buildContactSheetResultIndex(results);
+    expect(normalizeContactSheetPath('C:\\Photos\\Sunset.jpg')).toBe('c:/photos/sunset.jpg');
+    expect(index.get('c:/photos/sunset.jpg')).toBe(0);
+    expect(index.size).toBe(1);
   });
 });

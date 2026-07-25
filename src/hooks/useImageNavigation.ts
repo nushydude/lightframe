@@ -4,18 +4,13 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { ImageFile } from '../types/image';
 import {
   getParentFolder,
-  listenToFolderWatcherChanges,
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
-  unwatchFolder,
-  watchFolder,
-  type FolderWatcherPayload,
 } from '../services/tauriCommands';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { sortImages } from '../services/imageSorting';
-import { reconcileFolderWatcherPayload } from '../services/folderWatcherReconciliation';
 import { rememberRecentFolder, type AppSettings } from '../types/settings';
 import type { CurationFilter } from '../services/curationFilter';
 import {
@@ -31,9 +26,12 @@ import {
 import { getPersistedMarkedPathsForFolder } from '../services/markedSelectionPersistence';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { useShallow } from 'zustand/react/shallow';
+import { useCurationStore } from '../state/curationStore';
 import { mainWindowTitle } from '../services/windowTitle';
 import { playBoundaryBeep } from '../services/boundaryFeedback';
 import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
+import { useFolderWatcherLifecycle } from './useFolderWatcherLifecycle';
 
 function normalizePathKey(path: string): string {
   return path.replace(/\\/g, '/').toLowerCase();
@@ -135,35 +133,64 @@ function getNow(): number {
 /** Hook for image navigation and file opening */
 export function useImageNavigation() {
   const emptyFolderOpenMessage = 'No supported images found in the selected folder';
-  const images = useViewerStore((state) => state.images);
-  const allImages = useViewerStore((state) => state.allImages);
-  const currentIndex = useViewerStore((state) => state.currentIndex);
-  const currentImagePath = useViewerStore((state) => state.currentImagePath);
-  const folderPath = useViewerStore((state) => state.folderPath);
-  const isFolderScanning = useViewerStore((state) => state.isFolderScanning);
-  const setCurrentImage = useViewerStore((state) => state.setCurrentImage);
-  const setImages = useViewerStore((state) => state.setImages);
-  const setFolderPath = useViewerStore((state) => state.setFolderPath);
-  const setFolderScanning = useViewerStore((state) => state.setFolderScanning);
-  const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
-  const prepareCurationFilter = useViewerStore((state) => state.prepareCurationFilter);
-  const setMarkedPaths = useViewerStore((state) => state.setMarkedPaths);
-  const navigateNext = useViewerStore((state) => state.navigateNext);
-  const navigatePrev = useViewerStore((state) => state.navigatePrev);
-  const navigateFirst = useViewerStore((state) => state.navigateFirst);
-  const navigateLast = useViewerStore((state) => state.navigateLast);
-  const setError = useViewerStore((state) => state.setError);
-  const beginLoadGeneration = useViewerStore((state) => state.beginLoadGeneration);
-  const setViewMode = useViewerStore((state) => state.setViewMode);
+  const {
+    images,
+    allImages,
+    currentIndex,
+    currentImagePath,
+    folderPath,
+    isFolderScanning,
+    setCurrentImage,
+    setImages,
+    setFolderPath,
+    setFolderScanning,
+    setCurrentIndex,
+    prepareCurationFilter,
+    setMarkedPaths,
+    navigateNext,
+    navigatePrev,
+    navigateFirst,
+    navigateLast,
+    setError,
+    beginLoadGeneration,
+    setViewMode,
+  } = useViewerStore(
+    useShallow((state) => ({
+      images: state.images,
+      allImages: state.allImages,
+      currentIndex: state.currentIndex,
+      currentImagePath: state.currentImagePath,
+      folderPath: state.folderPath,
+      isFolderScanning: state.isFolderScanning,
+      setCurrentImage: state.setCurrentImage,
+      setImages: state.setImages,
+      setFolderPath: state.setFolderPath,
+      setFolderScanning: state.setFolderScanning,
+      setCurrentIndex: state.setCurrentIndex,
+      prepareCurationFilter: state.prepareCurationFilter,
+      setMarkedPaths: state.setMarkedPaths,
+      navigateNext: state.navigateNext,
+      navigatePrev: state.navigatePrev,
+      navigateFirst: state.navigateFirst,
+      navigateLast: state.navigateLast,
+      setError: state.setError,
+      beginLoadGeneration: state.beginLoadGeneration,
+      setViewMode: state.setViewMode,
+    }))
+  );
 
-  const sortOrder = useSettingsStore((state) => state.settings.sortOrder);
-  const sortDirection = useSettingsStore((state) => state.settings.sortDirection);
-  const autoRefreshFolder = useSettingsStore((state) => state.settings.autoRefreshFolder);
+  const { sortOrder, sortDirection, autoRefreshFolder } = useSettingsStore(
+    useShallow((state) => ({
+      sortOrder: state.settings.sortOrder,
+      sortDirection: state.settings.sortDirection,
+      autoRefreshFolder: state.settings.autoRefreshFolder,
+    }))
+  );
   const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
-  const pendingWatcherRefreshFolderRef = useRef<string | null>(null);
   const randomOrderRef = useRef<string[] | null>(null);
   const randomSortKeyRef = useRef<string | null>(null);
   const randomFolderRef = useRef<string | null>(null);
+  const folderPathIndexRef = useRef<Map<string, bigint>>(new Map());
   const effectiveSortDirectionRef = useRef(sortDirection);
   const lastSortOrderRef = useRef<AppSettings['sortOrder'] | null>(null);
 
@@ -258,8 +285,17 @@ export function useImageNavigation() {
         emptyMessage: string;
         preferredIndex: number;
         preferredPath: string | null;
+        pathIndex?: Map<string, bigint>;
       }
     ) => {
+      folderPathIndexRef.current =
+        options.pathIndex ??
+        new Map(
+          folderImages.map((image, index) => [
+            normalizePathKey(image.path),
+            BigInt(index) * 1_000_000n,
+          ])
+        );
       setImages(folderImages);
       const visibleImages = useViewerStore.getState().images;
 
@@ -354,6 +390,10 @@ export function useImageNavigation() {
         preferredIndex: 0,
         preferredPath: null,
       });
+      void useCurationStore
+        .getState()
+        .loadCuration(folderImages.map((image) => image.path))
+        .catch(() => undefined);
       setMarkedPaths(
         getPersistedMarkedPathsForFolder(useSettingsStore.getState().settings, nextFolderPath)
       );
@@ -390,6 +430,10 @@ export function useImageNavigation() {
             preferredIndex: state.currentIndex >= 0 ? state.currentIndex : 0,
             preferredPath: state.currentImagePath,
           });
+          void useCurationStore
+            .getState()
+            .loadCuration(verifiedImages.map((image) => image.path))
+            .catch(() => undefined);
           recordFolderOpenBackgroundRefreshTelemetry(getNow() - backgroundRefreshStartedAt);
         } catch (err) {
           console.error('Failed to refresh folder:', err);
@@ -681,122 +725,16 @@ export function useImageNavigation() {
     await refreshFolderFromDisk();
   }, [refreshFolderFromDisk]);
 
-  const handleFolderWatcherPayload = useCallback(
-    (payload: FolderWatcherPayload) => {
-      const state = useViewerStore.getState();
-      if (
-        !state.folderPath ||
-        normalizePathKey(state.folderPath) !== normalizePathKey(payload.folderPath)
-      ) {
-        return;
-      }
-
-      if (state.isFolderScanning) {
-        pendingWatcherRefreshFolderRef.current = state.folderPath;
-        return;
-      }
-
-      const reconciliation = reconcileFolderWatcherPayload({
-        payload,
-        images: state.allImages.length > 0 ? state.allImages : state.images,
-        currentIndex: state.currentIndex,
-        currentImagePath: state.currentImagePath,
-        sortOrder: useSettingsStore.getState().settings.sortOrder,
-        sortDirection: useSettingsStore.getState().settings.sortDirection,
-        randomOrder: randomOrderRef.current,
-      });
-
-      if (reconciliation.requiresFullRefresh) {
-        void refreshFolderFromDisk();
-        return;
-      }
-
-      if (useSettingsStore.getState().settings.sortOrder === 'random') {
-        randomOrderRef.current = reconciliation.images.map((image) => image.path);
-      }
-
-      for (const path of reconciliation.invalidatedPaths) {
-        invalidateThumbnail(path);
-        invalidateImageAsset(path);
-      }
-
-      if (
-        state.currentImagePath &&
-        reconciliation.invalidatedPaths.some(
-          (path) => normalizePathKey(path) === normalizePathKey(state.currentImagePath ?? '')
-        )
-      ) {
-        useViewerStore.setState({ cacheBuster: Date.now() });
-      }
-
-      applyFolderImages(reconciliation.images, {
-        emptyMessage: 'No supported images found in the current folder',
-        preferredIndex: reconciliation.preferredIndex,
-        preferredPath: reconciliation.preferredPath,
-      });
-    },
-    [applyFolderImages, refreshFolderFromDisk]
-  );
-
-  const handleFolderWatcherPayloadRef = useRef(handleFolderWatcherPayload);
-  useEffect(() => {
-    handleFolderWatcherPayloadRef.current = handleFolderWatcherPayload;
-  }, [handleFolderWatcherPayload]);
-
-  useEffect(() => {
-    if (isFolderScanning) {
-      return;
-    }
-
-    const dirtyFolderPath = pendingWatcherRefreshFolderRef.current;
-    if (!dirtyFolderPath) {
-      return;
-    }
-
-    pendingWatcherRefreshFolderRef.current = null;
-    if (!folderPath || normalizePathKey(folderPath) !== normalizePathKey(dirtyFolderPath)) {
-      return;
-    }
-
-    void refreshFolderFromDisk();
-  }, [folderPath, isFolderScanning, refreshFolderFromDisk]);
-
-  useEffect(() => {
-    if (!isMainWindowRef.current || !folderPath || !autoRefreshFolder) {
-      return;
-    }
-
-    const watchId = `folder-watch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-
-    void (async () => {
-      try {
-        unlisten = await listenToFolderWatcherChanges((payload) =>
-          handleFolderWatcherPayloadRef.current(payload)
-        );
-        if (disposed) {
-          unlisten();
-          return;
-        }
-
-        await watchFolder(folderPath, watchId);
-        if (disposed) {
-          await unwatchFolder(watchId);
-        }
-      } catch (err) {
-        console.warn('Failed to start folder watcher:', err);
-      }
-    })();
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-      void unwatchFolder(watchId).catch((err) => {
-        console.warn('Failed to stop folder watcher:', err);
-      });
-    };
-  }, [autoRefreshFolder, folderPath]);
+  useFolderWatcherLifecycle({
+    isMainWindow: isMainWindowRef.current,
+    folderPath,
+    autoRefreshFolder,
+    isFolderScanning,
+    randomOrderRef,
+    folderPathIndexRef,
+    applyFolderImages,
+    refreshFolderFromDisk,
+  });
 
   /** Navigate to the next image */
   const goNext = useCallback(

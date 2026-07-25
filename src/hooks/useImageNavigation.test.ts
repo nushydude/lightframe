@@ -22,6 +22,7 @@ const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 vi.mock('../services/tauriCommands', () => ({
   scanFolder: vi.fn(),
   readFolderIndex: vi.fn(),
+  readCurationMetadataForPaths: vi.fn().mockResolvedValue({}),
   refreshFolderIndex: vi.fn(),
   writeSettings: vi.fn().mockResolvedValue(undefined),
   watchFolder: vi.fn().mockResolvedValue(undefined),

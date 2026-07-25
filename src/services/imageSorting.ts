@@ -79,7 +79,7 @@ function compareImagesByDate(
   return comparison * direction || compareImagesByName(a, b);
 }
 
-function createImageComparator(
+export function createImageComparator(
   sortOrder: Exclude<AppSettings['sortOrder'], 'random'>,
   direction: number
 ): (a: ImageFile, b: ImageFile) => number {

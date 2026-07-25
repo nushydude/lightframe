@@ -3,11 +3,13 @@ import { useCurationStore } from './curationStore';
 
 const {
   readCurationMetadataMock,
+  readCurationMetadataForPathsMock,
   writeImageCurationMock,
   writeImageCurationBatchMock,
   clearImageCurationMock,
 } = vi.hoisted(() => ({
   readCurationMetadataMock: vi.fn(),
+  readCurationMetadataForPathsMock: vi.fn(),
   writeImageCurationMock: vi.fn(),
   writeImageCurationBatchMock: vi.fn((): Promise<void> => Promise.resolve()),
   clearImageCurationMock: vi.fn(),
@@ -15,6 +17,7 @@ const {
 
 vi.mock('../services/tauriCommands', () => ({
   readCurationMetadata: readCurationMetadataMock,
+  readCurationMetadataForPaths: readCurationMetadataForPathsMock,
   writeImageCuration: writeImageCurationMock,
   writeImageCurationBatch: writeImageCurationBatchMock,
   clearImageCuration: clearImageCurationMock,
@@ -30,7 +33,17 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
 
 describe('curationStore', () => {
   beforeEach(() => {
-    useCurationStore.setState({ curationByPath: {}, isLoaded: false });
+    useCurationStore.setState({
+      curationByPath: {},
+      favoritePaths: new Set(),
+      isLoaded: false,
+      loadStatus: 'idle',
+      loadError: null,
+      mutationStatus: 'idle',
+      mutationError: null,
+      failedOperation: null,
+      errorDismissed: false,
+    });
     vi.clearAllMocks();
   });
 
@@ -63,6 +76,22 @@ describe('curationStore', () => {
     expect(state.curationByPath['C:/images/two.jpg']).toBeUndefined();
   });
 
+  it('merges targeted folder hydration without dropping startup records outside the folder', async () => {
+    readCurationMetadataMock.mockResolvedValue({
+      'C:/outside.jpg': { path: 'C:/outside.jpg', favorite: true, rating: 1, updated_at: 1 },
+    });
+    await useCurationStore.getState().loadCuration();
+
+    readCurationMetadataForPathsMock.mockResolvedValue({
+      'C:/active.jpg': { path: 'C:/active.jpg', favorite: true, rating: 5, updated_at: 2 },
+    });
+    await useCurationStore.getState().loadCuration(['C:/active.jpg']);
+
+    const state = useCurationStore.getState();
+    expect(state.curationByPath['C:/outside.jpg']).toBeDefined();
+    expect(state.curationByPath['C:/active.jpg']).toMatchObject({ rating: 5 });
+  });
+
   it('toggles favorite for the current path and persists metadata', async () => {
     writeImageCurationMock.mockResolvedValue(undefined);
 
@@ -74,6 +103,25 @@ describe('curationStore', () => {
       favorite: true,
       rating: 0,
     });
+  });
+
+  it('updates a large curation index in place for a single confirmed mutation', async () => {
+    const metadata = Object.fromEntries(
+      Array.from({ length: 10_000 }, (_, index) => {
+        const path = `C:/library/${index}.jpg`;
+        return [path, { path, favorite: true, rating: 1, updated_at: 1 }];
+      })
+    );
+    readCurationMetadataMock.mockResolvedValue(metadata);
+    writeImageCurationMock.mockResolvedValue(undefined);
+
+    await useCurationStore.getState().loadCuration();
+    const index = useCurationStore.getState().curationIndex;
+    await useCurationStore.getState().setRating('C:/library/5000.jpg', 5);
+
+    expect(useCurationStore.getState().curationIndex).toBe(index);
+    expect(index.entries.size).toBe(10_000);
+    expect(index.entries.get('C:/library/5000.jpg')?.rating).toBe(5);
   });
 
   it('allows favorite to be removed from an already high-rated image', async () => {
@@ -236,6 +284,55 @@ describe('curationStore', () => {
     expect(useCurationStore.getState().curationByPath['C:/images/one.jpg']).toMatchObject({
       favorite: true,
       rating: 2,
+    });
+  });
+
+  it('rejects failed writes, exposes a retryable intent, and allows later writes to proceed', async () => {
+    writeImageCurationMock
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      useCurationStore.getState().toggleFavorite('C:/images/failed.jpg')
+    ).rejects.toThrow('disk full');
+    expect(useCurationStore.getState()).toMatchObject({
+      mutationStatus: 'error',
+      mutationError: 'disk full',
+      failedOperation: { intent: { kind: 'toggleFavorite', filePath: 'C:/images/failed.jpg' } },
+    });
+
+    await expect(
+      useCurationStore.getState().toggleFavorite('C:/images/later.jpg')
+    ).resolves.toBeUndefined();
+    expect(useCurationStore.getState().mutationStatus).toBe('idle');
+    expect(useCurationStore.getState().curationByPath['C:/images/later.jpg']).toBeDefined();
+  });
+
+  it('retries the latest failed intent and clears the error only after success', async () => {
+    writeImageCurationMock
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(useCurationStore.getState().setRating('C:/images/retry.jpg', 3)).rejects.toThrow();
+    await expect(useCurationStore.getState().retryLastFailedOperation()).resolves.toBeUndefined();
+    expect(writeImageCurationMock).toHaveBeenNthCalledWith(2, 'C:/images/retry.jpg', false, 3);
+    expect(useCurationStore.getState()).toMatchObject({
+      mutationStatus: 'idle',
+      mutationError: null,
+      failedOperation: null,
+    });
+  });
+
+  it('keeps initial-load failures separate from mutation state', async () => {
+    readCurationMetadataMock.mockRejectedValueOnce(new Error('metadata unavailable'));
+    await expect(useCurationStore.getState().loadCuration()).rejects.toThrow(
+      'metadata unavailable'
+    );
+    expect(useCurationStore.getState()).toMatchObject({
+      isLoaded: true,
+      loadStatus: 'error',
+      loadError: 'metadata unavailable',
+      mutationStatus: 'idle',
     });
   });
 });

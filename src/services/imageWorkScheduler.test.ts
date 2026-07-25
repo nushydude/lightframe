@@ -167,7 +167,7 @@ describe('imageWorkScheduler', () => {
     expect(scheduler.getSnapshot().queueDepth).toBe(0);
   });
 
-  it('frees an interactive slot when running work loses its last consumer', async () => {
+  it('keeps a physical slot occupied until non-cooperative running work settles', async () => {
     const scheduler = createImageWorkScheduler({
       maxConcurrent: 1,
       maxInteractiveConcurrent: 1,
@@ -208,10 +208,80 @@ describe('imageWorkScheduler', () => {
     abortController.abort();
 
     await expect(staleWork.promise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(scheduler.getSnapshot()).toMatchObject({ inFlight: 1, canceledInFlight: 1 });
+    expect(started).toEqual(['stale']);
+
+    staleBlocker.resolve('stale');
     await expect(freshWork.promise).resolves.toBe('fresh');
     expect(staleAbortObserved).toBe(true);
     expect(started).toEqual(['stale', 'fresh']);
+    expect(scheduler.getSnapshot()).toMatchObject({ inFlight: 0, canceledInFlight: 0 });
+  });
 
-    staleBlocker.resolve('stale');
+  it('allows a replacement key while retaining tombstone capacity accounting', async () => {
+    const scheduler = createImageWorkScheduler({ maxConcurrent: 1 });
+    const oldWork = createDeferred<string>();
+    const started: string[] = [];
+    const oldController = new AbortController();
+    const old = scheduler.schedule({
+      key: 'same',
+      priority: IMAGE_WORK_PRIORITY.currentFull,
+      sourcePath: 'C:/images/same.jpg',
+      signal: oldController.signal,
+      run: async () => {
+        started.push('old');
+        return oldWork.promise;
+      },
+    });
+    oldController.abort();
+    await expect(old.promise).rejects.toMatchObject({ name: 'AbortError' });
+
+    const replacement = scheduler.schedule({
+      key: 'same',
+      priority: IMAGE_WORK_PRIORITY.currentFull,
+      sourcePath: 'C:/images/same.jpg',
+      run: async () => {
+        started.push('replacement');
+        return 'replacement';
+      },
+    });
+
+    // The replacement is deduplicated separately but cannot start while the tombstone runs.
+    expect(started).toEqual(['old']);
+    expect(scheduler.getSnapshot()).toMatchObject({ inFlight: 1, canceledInFlight: 1 });
+    oldWork.resolve('old');
+    await expect(replacement.promise).resolves.toBe('replacement');
+    expect(started).toEqual(['old', 'replacement']);
+  });
+
+  it('releases capacity after a cooperative abort settles the worker promise', async () => {
+    const scheduler = createImageWorkScheduler({ maxConcurrent: 1 });
+    const controller = new AbortController();
+    const started: string[] = [];
+    const work = scheduler.schedule({
+      key: 'cooperative',
+      priority: IMAGE_WORK_PRIORITY.currentFull,
+      sourcePath: 'C:/images/cooperative.jpg',
+      signal: controller.signal,
+      run: ({ signal }) =>
+        new Promise<string>((_, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('cooperative abort')));
+          started.push('cooperative');
+        }),
+    });
+    const replacement = scheduler.schedule({
+      key: 'replacement',
+      priority: IMAGE_WORK_PRIORITY.currentFull,
+      sourcePath: 'C:/images/replacement.jpg',
+      run: async () => {
+        started.push('replacement');
+        return 'replacement';
+      },
+    });
+
+    controller.abort();
+    await expect(work.promise).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(replacement.promise).resolves.toBe('replacement');
+    expect(started).toEqual(['cooperative', 'replacement']);
   });
 });

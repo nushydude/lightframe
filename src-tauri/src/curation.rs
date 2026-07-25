@@ -388,6 +388,46 @@ pub(crate) fn read_curation_metadata(
     read_curation_metadata_locked(config_dir)
 }
 
+/// Read only the shards addressed by the active folder or startup file list. Stored paths are
+/// normalized only for matching; the original spelling remains the persisted key for legacy data.
+pub(crate) fn read_curation_metadata_for_paths(
+    config_dir: &Path,
+    file_paths: &[String],
+) -> Result<HashMap<String, ImageCuration>, String> {
+    let _store_lock = acquire_store_lock(config_dir)?;
+    prepare_store(config_dir)?;
+    let requested = file_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(normalize_lookup_path)
+        .collect::<HashSet<_>>();
+    let shard_ids = file_paths
+        .iter()
+        .flat_map(|path| [path.clone(), path.replace('\\', "/"), path.to_lowercase()])
+        .map(|path| shard_id(path.trim()))
+        .collect::<HashSet<_>>();
+    let mut metadata = HashMap::new();
+    for id in shard_ids {
+        let path = shard_path(config_dir, id);
+        match read_shard_metadata_file(&path) {
+            Ok(shard) => metadata.extend(
+                shard
+                    .into_iter()
+                    .filter(|(_, value)| requested.contains(&normalize_lookup_path(&value.path))),
+            ),
+            Err(error) => {
+                eprintln!("{error}. Skipping this shard while loading healthy curation data.")
+            }
+        }
+    }
+    Ok(metadata)
+}
+
+fn normalize_lookup_path(path: &str) -> String {
+    path.trim().replace('\\', "/").to_lowercase()
+}
+
 fn read_curation_metadata_locked(
     config_dir: &Path,
 ) -> Result<HashMap<String, ImageCuration>, String> {
@@ -628,6 +668,37 @@ mod tests {
             assert_eq!(fs::read(shard_path(dir.path(), id)).unwrap(), bytes);
         }
         assert_eq!(read_curation_metadata(dir.path()).unwrap()[target].updated_at, 2);
+    }
+
+    #[test]
+    fn folder_scoped_reads_return_only_requested_records_at_library_scale() {
+        for count in [10_000, 100_000] {
+            let dir = tempdir().unwrap();
+            prepare_store(dir.path()).unwrap();
+            let mut grouped = HashMap::<u8, HashMap<String, ImageCuration>>::new();
+            for index in 0..count {
+                let path = format!("C:/library/unrelated/{index}.jpg");
+                grouped.entry(shard_id(&path)).or_default().insert(
+                    path.clone(),
+                    ImageCuration { path, favorite: true, rating: 3, updated_at: 1 },
+                );
+            }
+            let requested =
+                ["C:/library/active/one.jpg".to_string(), "C:/library/active/two.jpg".to_string()];
+            for path in &requested {
+                grouped.entry(shard_id(path)).or_default().insert(
+                    path.clone(),
+                    ImageCuration { path: path.clone(), favorite: true, rating: 5, updated_at: 2 },
+                );
+            }
+            for (id, shard) in grouped {
+                write_metadata_file(&shard_path(dir.path(), id), &shard).unwrap();
+            }
+
+            let metadata = read_curation_metadata_for_paths(dir.path(), &requested).unwrap();
+            assert_eq!(metadata.len(), requested.len());
+            assert!(metadata.keys().all(|path| path.starts_with("C:/library/active/")));
+        }
     }
 
     #[test]

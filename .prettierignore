@@ -1,4 +1,5 @@
 .fallow
+.worktrees
 .agent/archives
 .agent/orchestration
 .agent/roadmap

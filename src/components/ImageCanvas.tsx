@@ -1,12 +1,4 @@
-import {
-  useRef,
-  useState,
-  useCallback,
-  useEffect,
-  useMemo,
-  type CSSProperties,
-  type SyntheticEvent,
-} from 'react';
+import { useRef, useState, useCallback, useEffect, useMemo, type SyntheticEvent } from 'react';
 import { useViewerStore, type ZoomMode } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import {
@@ -28,6 +20,7 @@ import {
   NAVIGATION_CACHE_PRELOAD_DEBOUNCE_MS,
 } from '../services/navigationCacheConfig';
 import { getPerformanceModeProfile } from '../services/performanceMode';
+import { BoundedPathMetadataCache } from '../services/pathMetadataCache';
 import { getImageMetadata } from '../services/tauriCommands';
 import type { ImageMetadata } from '../types/image';
 import { useZoomPan } from '../hooks/useZoomPan';
@@ -40,13 +33,14 @@ import {
   shouldRequestFullResolution,
 } from './imagePreviewStrategy';
 import { CropOverlay } from './CropOverlay';
-import { getPreviewClipPath } from './cropPreview';
 import { TiledImageRenderer } from './TiledImageRenderer';
 import {
   isTiledRendererCandidate,
   shouldDeferFullResolutionForTiledCandidate,
   shouldUseTiledRenderer,
 } from './tiledRenderer';
+import { getRenderedImageBounds, getImageStyle, type ImageBounds } from './imageCanvasLayout';
+import { getAdjacentPreloadPlan, type NavigationDirection } from './imageCanvasPreload';
 
 type ImageCanvasProps = {
   onWheelNext?: () => void;
@@ -56,38 +50,6 @@ type ImageCanvasProps = {
 type LoadedImageAsset = {
   path: string;
   url: string;
-};
-
-type ImageStyleOptions = {
-  zoomMode: ZoomMode;
-  panX: number;
-  panY: number;
-  rotation: number;
-  zoomLevel: number;
-  isFullResolutionReady: boolean;
-  metadata: ImageMetadata | null;
-  pendingCropPreview: ReturnType<typeof useViewerStore.getState>['pendingCropPreview'];
-  isCropMode: boolean;
-};
-
-type NavigationDirection = 'forward' | 'backward' | 'idle';
-
-type ImageBounds = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
-
-type AdjacentPreloadPlan = {
-  keepIndices: number[];
-  preloadIndices: number[];
-  leadingIndices: Set<number>;
-};
-
-type DirectionalWindow = {
-  backwardCount: number;
-  forwardCount: number;
 };
 
 type MetadataLoadState = {
@@ -107,310 +69,8 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function getDirectionalWindow(
-  direction: NavigationDirection,
-  adjacentPreviousImages: number,
-  adjacentNextImages: number
-): DirectionalWindow {
-  const totalWindow = adjacentPreviousImages + adjacentNextImages;
-
-  if (direction === 'forward') {
-    const backwardCount = 1;
-    return {
-      backwardCount,
-      forwardCount: Math.max(1, totalWindow - backwardCount),
-    };
-  }
-
-  if (direction === 'backward') {
-    const forwardCount = 1;
-    return {
-      backwardCount: Math.max(1, totalWindow - forwardCount),
-      forwardCount,
-    };
-  }
-
-  return {
-    backwardCount: adjacentPreviousImages,
-    forwardCount: adjacentNextImages,
-  };
-}
-
-function appendPreloadIndex(
-  currentIndex: number,
-  imageCount: number,
-  preloadIndices: number[],
-  leadingIndices: Set<number>,
-  queued: Set<number>,
-  index: number,
-  isLeading: boolean
-): void {
-  if (index < 0 || index >= imageCount || index === currentIndex || queued.has(index)) {
-    return;
-  }
-
-  queued.add(index);
-  preloadIndices.push(index);
-  if (isLeading) {
-    leadingIndices.add(index);
-  }
-}
-
-function collectDirectionalPreloads(
-  currentIndex: number,
-  imageCount: number,
-  preloadIndices: number[],
-  leadingIndices: Set<number>,
-  queued: Set<number>,
-  direction: NavigationDirection,
-  window: DirectionalWindow
-): void {
-  if (direction === 'forward') {
-    for (let offset = 1; offset <= window.forwardCount; offset += 1) {
-      appendPreloadIndex(
-        currentIndex,
-        imageCount,
-        preloadIndices,
-        leadingIndices,
-        queued,
-        currentIndex + offset,
-        true
-      );
-    }
-    for (let offset = 1; offset <= window.backwardCount; offset += 1) {
-      appendPreloadIndex(
-        currentIndex,
-        imageCount,
-        preloadIndices,
-        leadingIndices,
-        queued,
-        currentIndex - offset,
-        false
-      );
-    }
-    return;
-  }
-
-  if (direction === 'backward') {
-    for (let offset = 1; offset <= window.backwardCount; offset += 1) {
-      appendPreloadIndex(
-        currentIndex,
-        imageCount,
-        preloadIndices,
-        leadingIndices,
-        queued,
-        currentIndex - offset,
-        true
-      );
-    }
-    for (let offset = 1; offset <= window.forwardCount; offset += 1) {
-      appendPreloadIndex(
-        currentIndex,
-        imageCount,
-        preloadIndices,
-        leadingIndices,
-        queued,
-        currentIndex + offset,
-        false
-      );
-    }
-    return;
-  }
-
-  const maxOffset = Math.max(window.backwardCount, window.forwardCount);
-  for (let offset = 1; offset <= maxOffset; offset += 1) {
-    if (offset <= window.forwardCount) {
-      appendPreloadIndex(
-        currentIndex,
-        imageCount,
-        preloadIndices,
-        leadingIndices,
-        queued,
-        currentIndex + offset,
-        false
-      );
-    }
-    if (offset <= window.backwardCount) {
-      appendPreloadIndex(
-        currentIndex,
-        imageCount,
-        preloadIndices,
-        leadingIndices,
-        queued,
-        currentIndex - offset,
-        false
-      );
-    }
-  }
-}
-
-function getAdjacentPreloadPlan(
-  currentIndex: number,
-  imageCount: number,
-  direction: NavigationDirection,
-  adjacentPreviousImages: number,
-  adjacentNextImages: number
-): AdjacentPreloadPlan {
-  const window = getDirectionalWindow(direction, adjacentPreviousImages, adjacentNextImages);
-  const preloadIndices: number[] = [];
-  const leadingIndices = new Set<number>();
-  const queued = new Set<number>();
-
-  collectDirectionalPreloads(
-    currentIndex,
-    imageCount,
-    preloadIndices,
-    leadingIndices,
-    queued,
-    direction,
-    window
-  );
-
-  return {
-    keepIndices: [currentIndex, ...preloadIndices],
-    preloadIndices,
-    leadingIndices,
-  };
-}
-
-function getRotationTransform(rotation: number): string {
-  return rotation !== 0 ? `rotate(${rotation}deg)` : '';
-}
-
-function applyZoomStyle(
-  style: CSSProperties,
-  {
-    zoomMode,
-    panX,
-    panY,
-    rotation,
-    zoomLevel,
-  }: Pick<ImageStyleOptions, 'zoomMode' | 'panX' | 'panY' | 'rotation' | 'zoomLevel'>
-): void {
-  const rotationStr = getRotationTransform(rotation);
-
-  if (zoomMode === 'actual') {
-    style.transform = `translate(${panX}px, ${panY}px) ${rotationStr}`;
-    style.maxWidth = 'none';
-    style.maxHeight = 'none';
-    return;
-  }
-
-  if (zoomMode === 'custom') {
-    style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel}) ${rotationStr}`;
-    style.maxWidth = 'none';
-    style.maxHeight = 'none';
-    return;
-  }
-
-  if (zoomMode === 'fill') {
-    style.width = '100%';
-    style.height = '100%';
-    style.objectFit = 'cover';
-    style.transform = rotationStr;
-    return;
-  }
-
-  style.transform = rotationStr;
-  if (rotation === 90 || rotation === 270) {
-    style.maxWidth = '100vh';
-    style.maxHeight = '100vw';
-  }
-}
-
-function applyPreviewDimensions(
-  style: CSSProperties,
-  {
-    zoomMode,
-    isFullResolutionReady,
-    metadata,
-  }: Pick<ImageStyleOptions, 'zoomMode' | 'isFullResolutionReady' | 'metadata'>
-): void {
-  const shouldPinPreviewSize =
-    !isFullResolutionReady &&
-    metadata?.width != null &&
-    metadata?.height != null &&
-    (zoomMode === 'actual' || zoomMode === 'custom');
-
-  if (!shouldPinPreviewSize) {
-    return;
-  }
-
-  style.width = `${metadata.width}px`;
-  style.height = `${metadata.height}px`;
-}
-
-function applyCropPreviewStyle(
-  style: CSSProperties,
-  { pendingCropPreview, isCropMode }: Pick<ImageStyleOptions, 'pendingCropPreview' | 'isCropMode'>
-): void {
-  if (!pendingCropPreview || isCropMode) {
-    return;
-  }
-
-  style.clipPath = getPreviewClipPath(pendingCropPreview);
-  style.transformOrigin = 'center center';
-}
-
-function getImageStyle(options: ImageStyleOptions): CSSProperties {
-  const style: CSSProperties = {};
-
-  applyZoomStyle(style, options);
-  applyPreviewDimensions(style, options);
-  applyCropPreviewStyle(style, options);
-
-  return style;
-}
-
-function getRenderedImageBounds({
-  containerRect,
-  image,
-  imageRect,
-  metadata,
-  zoomMode,
-}: {
-  containerRect: DOMRect;
-  image: HTMLImageElement;
-  imageRect: DOMRect;
-  metadata: ImageMetadata | null;
-  zoomMode: ZoomMode;
-}): ImageBounds {
-  const baseBounds = {
-    left: imageRect.left - containerRect.left,
-    top: imageRect.top - containerRect.top,
-    width: imageRect.width,
-    height: imageRect.height,
-  };
-
-  if (zoomMode !== 'fit') {
-    return baseBounds;
-  }
-
-  const intrinsicWidth = image.naturalWidth || metadata?.width || 0;
-  const intrinsicHeight = image.naturalHeight || metadata?.height || 0;
-  if (
-    intrinsicWidth <= 0 ||
-    intrinsicHeight <= 0 ||
-    imageRect.width <= 0 ||
-    imageRect.height <= 0
-  ) {
-    return baseBounds;
-  }
-
-  const scale = Math.min(imageRect.width / intrinsicWidth, imageRect.height / intrinsicHeight);
-  const width = intrinsicWidth * scale;
-  const height = intrinsicHeight * scale;
-
-  return {
-    left: baseBounds.left + (imageRect.width - width) / 2,
-    top: baseBounds.top + (imageRect.height - height) / 2,
-    width,
-    height,
-  };
-}
-
 /** Main image display canvas with zoom/pan support */
-// fallow-ignore-next-line complexity
+// fallow-ignore-next-line complexity -- image loading orchestration boundary
 export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -420,7 +80,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const fullLoadKeyRef = useRef<string | null>(null);
   const imageDisplayErrorRef = useRef<string | null>(null);
   const fullResolutionSafetyMessageRef = useRef<string | null>(null);
-  const metadataByPathRef = useRef(new Map<string, ImageMetadata>());
+  const metadataByPathRef = useRef(new BoundedPathMetadataCache<ImageMetadata>());
   const previousIndexRef = useRef<number | null>(null);
   const navigationDirectionRef = useRef<NavigationDirection>('idle');
   const zoomStateRef = useRef<{ zoomMode: ZoomMode; zoomLevel: number }>({
@@ -614,6 +274,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   // Load preview first, then full-resolution pixels on demand.
   useEffect(() => {
     if (!currentImagePath) {
+      metadataByPathRef.current.retain([]);
       activeWorkAbortControllerRef.current?.abort();
       activeWorkAbortControllerRef.current = null;
       setPreviewAsset(null);
@@ -630,6 +291,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     }
 
     let cancelled = false;
+    metadataByPathRef.current.retain([currentImagePath]);
     let previewSettled = false;
     let previewFallbackTimer: number | null = null;
     const currentWorkAbortController = new AbortController();
@@ -939,6 +601,10 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       performanceProfile.adjacentNextImages
     );
     const keepSet = new Set(keepIndices.map((index) => images[index].path));
+    if (currentImagePath) {
+      keepSet.add(currentImagePath);
+    }
+    metadataByPathRef.current.retain(keepSet);
     const scheduledLoadGeneration = loadGeneration;
     const canStore = () =>
       !cancelled &&

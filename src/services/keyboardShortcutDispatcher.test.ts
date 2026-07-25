@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  dispatchApplicationShortcut,
   dispatchCropShortcut,
   dispatchViewerShortcut,
   type KeyboardHandlers,
+  type ApplicationShortcutContext,
   type ViewerShortcutContext,
 } from './keyboardShortcutDispatcher';
 
@@ -29,6 +31,60 @@ function handlers(overrides: Partial<KeyboardHandlers> = {}): KeyboardHandlers {
     ...overrides,
   };
 }
+
+function applicationContext(
+  shortcutHandlers: KeyboardHandlers,
+  overrides: Partial<ApplicationShortcutContext> = {}
+): ApplicationShortcutContext {
+  return {
+    currentImagePath: 'C:/Images/a.jpg',
+    isFullscreen: false,
+    isSlideshowActive: false,
+    showSettings: false,
+    showCommandPalette: false,
+    isCompareMode: false,
+    loopSlideshow: false,
+    zoomMode: 'fit',
+    setFullscreen: vi.fn(),
+    setShowSettings: vi.fn(),
+    setZoomMode: vi.fn(),
+    handlers: shortcutHandlers,
+    lastUnhandledEscapeAtRef: { current: null },
+    ...overrides,
+  };
+}
+
+describe('dispatchApplicationShortcut', () => {
+  it('handles shell commands synchronously before viewer dispatch', () => {
+    const openFilePicker = vi.fn();
+    const setZoomMode = vi.fn();
+    const shortcutHandlers = handlers({ openFilePicker });
+    const context = applicationContext(shortcutHandlers, { setZoomMode });
+
+    const openEvent = new KeyboardEvent('keydown', { key: 'o', ctrlKey: true, cancelable: true });
+    expect(dispatchApplicationShortcut(openEvent, context)).toBe(true);
+    expect(openEvent.defaultPrevented).toBe(true);
+    expect(openFilePicker).toHaveBeenCalledTimes(1);
+
+    const resetEvent = new KeyboardEvent('keydown', {
+      key: '0',
+      ctrlKey: true,
+      cancelable: true,
+    });
+    expect(dispatchApplicationShortcut(resetEvent, context)).toBe(true);
+    expect(setZoomMode).toHaveBeenCalledWith('fit');
+  });
+
+  it('dispatches direct curation actions only for unmodified keys', () => {
+    const toggleFavoriteCurrent = vi.fn();
+    const shortcutHandlers = handlers({ toggleFavoriteCurrent });
+    const context = applicationContext(shortcutHandlers);
+
+    const event = new KeyboardEvent('keydown', { key: 'f', cancelable: true });
+    expect(dispatchApplicationShortcut(event, context)).toBe(true);
+    expect(toggleFavoriteCurrent).toHaveBeenCalledTimes(1);
+  });
+});
 
 function viewerContext(
   shortcutHandlers: KeyboardHandlers,
