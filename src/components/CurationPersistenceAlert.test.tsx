@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CurationPersistenceAlert } from './CurationPersistenceAlert';
 
@@ -39,7 +39,9 @@ describe('CurationPersistenceAlert', () => {
     fireEvent.click(retry);
     expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
 
-    resolveRetry?.();
+    await act(async () => {
+      resolveRetry?.();
+    });
     await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled());
   });
 });

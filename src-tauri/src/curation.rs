@@ -141,6 +141,41 @@ fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration
                 parse_error,
                 quarantine_path.display()
             );
+
+            if let Some(parent) = path.parent() {
+                if let Ok(entries) = fs::read_dir(parent) {
+                    let mut backups = Vec::new();
+                    for entry in entries.flatten() {
+                        let backup_path = entry.path();
+                        if let Some(destination) = staged_backup_destination(parent, &backup_path) {
+                            if destination == path {
+                                backups.push(backup_path);
+                            }
+                        }
+                    }
+                    backups.sort_by_key(|backup| {
+                        fs::metadata(backup)
+                            .and_then(|metadata| metadata.modified())
+                            .unwrap_or(std::time::UNIX_EPOCH)
+                    });
+                    if let Some(latest_backup) = backups.pop() {
+                        if let Ok(backup_content) = fs::read_to_string(&latest_backup) {
+                            if let Ok(parsed_backup) = serde_json::from_str::<
+                                HashMap<String, ImageCuration>,
+                            >(&backup_content)
+                            {
+                                let _ = fs::rename(&latest_backup, path);
+                                eprintln!(
+                                    "Recovered curation shard metadata from staged backup '{}'",
+                                    latest_backup.display()
+                                );
+                                return Ok(normalize_metadata(parsed_backup));
+                            }
+                        }
+                    }
+                }
+            }
+
             Ok(HashMap::new())
         }
     }
