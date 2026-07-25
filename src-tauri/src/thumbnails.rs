@@ -23,7 +23,9 @@ const TILE_CACHE_VERSION: &str = "tile-v2";
 const MIN_TILE_SIZE: u32 = 128;
 const MAX_TILE_SIZE: u32 = 2_048;
 const TILE_SOURCE_CACHE_VERSION: &str = "tile-source-v1";
-const MAX_TILE_SOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const DEFAULT_MAX_TILE_SOURCE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+static CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES: AtomicU64 =
+    AtomicU64::new(DEFAULT_MAX_TILE_SOURCE_CACHE_BYTES);
 const MAX_RAW_NATIVE_DECODE_FAILURES: usize = 4_096;
 static CACHE_TMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_CACHE_HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -721,13 +723,31 @@ fn get_cached_jpeg_tile_source(
         fs::read(file_path)
             .map_err(|error| format!("Failed to read JPEG source for tile: {}", error))?,
     );
-    if metadata.size_bytes <= MAX_TILE_SOURCE_CACHE_BYTES {
+    let max_cache_bytes = CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES.load(Ordering::Relaxed);
+    if metadata.size_bytes <= max_cache_bytes {
         *guard = Some(CachedJpegSource { key: source_key, bytes: Arc::clone(&bytes) });
     } else {
         *guard = None;
     }
 
     Ok(bytes)
+}
+
+pub fn set_tile_source_cache_limit(limit_bytes: u64) {
+    CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES.store(limit_bytes, Ordering::Relaxed);
+}
+
+pub fn get_tile_source_cache_limit() -> u64 {
+    CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES.load(Ordering::Relaxed)
+}
+
+pub fn calculate_tile_cache_limit_for_performance_mode(performance_mode: &str) -> u64 {
+    match performance_mode {
+        "fast" => 128 * 1024 * 1024,
+        "balanced" => 256 * 1024 * 1024,
+        "quality" => 512 * 1024 * 1024,
+        _ => DEFAULT_MAX_TILE_SOURCE_CACHE_BYTES,
+    }
 }
 
 pub fn oriented_image_dimensions(file_path: &Path) -> Result<(u32, u32), String> {
@@ -2150,5 +2170,17 @@ mod tests {
 
         assert_ne!(key_a, key_b);
         assert_ne!(preview_key_a, preview_key_b);
+    }
+
+    #[test]
+    fn test_dynamic_tile_source_cache_limit() {
+        let default_limit = get_tile_source_cache_limit();
+        set_tile_source_cache_limit(calculate_tile_cache_limit_for_performance_mode("fast"));
+        assert_eq!(get_tile_source_cache_limit(), 128 * 1024 * 1024);
+
+        set_tile_source_cache_limit(calculate_tile_cache_limit_for_performance_mode("quality"));
+        assert_eq!(get_tile_source_cache_limit(), 512 * 1024 * 1024);
+
+        set_tile_source_cache_limit(default_limit);
     }
 }

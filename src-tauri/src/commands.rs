@@ -1186,19 +1186,28 @@ fn unix_timestamp_seconds() -> u64 {
 pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
     let _lock = lock_settings_io()?;
     let path = settings_path(&app)?;
-    if !path.exists() {
-        return Ok(AppSettings::default());
-    }
+    let settings: AppSettings = if !path.exists() {
+        AppSettings::default()
+    } else {
+        let content =
+            fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?
+    };
 
-    let content =
-        fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))
+    thumbnails::set_tile_source_cache_limit(
+        thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
+    );
+
+    Ok(settings)
 }
 
 /// Write application settings
 #[tauri::command]
 pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
     let _lock = lock_settings_io()?;
+    thumbnails::set_tile_source_cache_limit(
+        thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
+    );
     let path = settings_path(&app)?;
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
