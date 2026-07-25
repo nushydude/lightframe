@@ -148,7 +148,7 @@ fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration
                     for entry in entries.flatten() {
                         let backup_path = entry.path();
                         if let Some(destination) = staged_backup_destination(parent, &backup_path) {
-                            if destination == path {
+                            if destination.file_name() == path.file_name() {
                                 backups.push(backup_path);
                             }
                         }
@@ -664,6 +664,30 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(&format!("{damaged_shard:02x}.corrupt-"))
         ));
+    }
+
+    #[test]
+    fn read_curation_metadata_auto_recovers_staged_replace_backups() {
+        let dir = tempdir().unwrap();
+        let path = "C:/photos/cat.jpg";
+        let target_shard = shard_id(path);
+        let shard_file = shard_path(dir.path(), target_shard);
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+
+        let backup_path = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000000-0.json"
+        ));
+        let mut map = HashMap::new();
+        map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: true, rating: 5, updated_at: 100 },
+        );
+        fs::write(&backup_path, serde_json::to_string(&map).unwrap()).unwrap();
+        fs::write(&shard_file, "{corrupt-json-truncated").unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+        assert_eq!(metadata.get(path).map(|c| c.rating), Some(5));
+        assert!(shard_file.exists());
     }
 
     #[test]
