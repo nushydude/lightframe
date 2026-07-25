@@ -270,7 +270,10 @@ interface ViewerState {
   setMarkedPaths: (paths: string[]) => void;
   setCurationFilter: (filter: CurationFilter) => void;
   prepareCurationFilter: (filter: CurationFilter) => void;
-  syncFavoriteFilter: (curationByPath: Record<string, CurationStateSnapshot>) => void;
+  syncFavoriteFilter: (
+    curationByPath: Record<string, CurationStateSnapshot>,
+    favoritePaths?: ReadonlySet<string>
+  ) => void;
   setFolderPath: (path: string) => void;
   setFolderScanning: (scanning: boolean) => void;
   setCurrentIndex: (index: number, options?: { zoomMode?: ZoomMode }) => void;
@@ -721,13 +724,15 @@ export const useViewerStore = create<ViewerState>((set, get) => {
         };
       }),
 
-    syncFavoriteFilter: (curationByPath) =>
+    syncFavoriteFilter: (curationByPath, favoritePaths) =>
       set((state) => {
-        const nextFavoritePaths = Object.fromEntries(
-          Object.entries(curationByPath)
-            .filter(([, curation]) => isFavoriteCuration(curation))
-            .map(([path]) => [path, true])
-        );
+        const nextFavoritePaths = favoritePaths
+          ? Object.fromEntries(Array.from(favoritePaths, (path) => [path, true]))
+          : Object.fromEntries(
+              Object.entries(curationByPath)
+                .filter(([, curation]) => isFavoriteCuration(curation))
+                .map(([path]) => [path, true])
+            );
         if (state.curationFilter === 'all') {
           return {
             favoritePaths: nextFavoritePaths,

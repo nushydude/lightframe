@@ -23,6 +23,8 @@ import { useProjectorState } from '../hooks/useProjectorState';
 import { FolderSortMenu } from './FolderSortMenu';
 import { selectRangePaths, toggleSelectionPath } from '../services/contactSheetSelection';
 import {
+  buildContactSheetResultIndex,
+  normalizeContactSheetPath,
   normalizeContactSheetQuery,
   searchContactSheetImages,
   type ContactSheetSearchResult,
@@ -63,7 +65,7 @@ interface ContactSheetProps {
  * A full-screen grid view of all images in the current folder.
  * Windowed rendering keeps large folders responsive.
  */
-// fallow-ignore-next-line complexity
+// fallow-ignore-next-line complexity -- contact-sheet interaction orchestration
 export function ContactSheet({
   onExitGridView,
   onGoHome,
@@ -117,10 +119,13 @@ export function ContactSheet({
     () => searchContactSheetImages(images, normalizedQuery),
     [images, normalizedQuery]
   );
-  const displayedImages = useMemo(() => searchResults.map(({ image }) => image), [searchResults]);
-  const currentResultIndex = searchResults.findIndex(
-    ({ image }) => image.path === images[currentIndex]?.path
+  const resultIndexByPath = useMemo(
+    () => buildContactSheetResultIndex(searchResults),
+    [searchResults]
   );
+  const displayedImages = useMemo(() => searchResults.map(({ image }) => image), [searchResults]);
+  const currentResultIndex =
+    resultIndexByPath.get(normalizeContactSheetPath(images[currentIndex]?.path ?? '')) ?? -1;
   const totalRows = Math.ceil(searchResults.length / columns);
   const activeRow = currentResultIndex >= 0 ? Math.floor(currentResultIndex / columns) : 0;
   const visibleRange = useMemo(() => {
@@ -219,7 +224,6 @@ export function ContactSheet({
         modifiedAt: image.modified_at,
       })),
       {
-        concurrency: 6,
         onLoaded: handleThumbnailLoaded,
         isActive: isThumbnailConsumerActive,
       }
@@ -578,7 +582,7 @@ export function ContactSheet({
   }, []);
 
   useEffect(() => {
-    // fallow-ignore-next-line complexity
+    // fallow-ignore-next-line complexity -- keyboard grid navigation boundary
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const isSearchInput = target === searchInputRef.current;
@@ -998,7 +1002,7 @@ export function ContactSheet({
             {visibleRange.topHeight > 0 && (
               <div className="grid-spacer" style={{ height: visibleRange.topHeight }} />
             )}
-            {/* fallow-ignore-next-line complexity */}
+            {/* fallow-ignore-next-line complexity -- virtualized grid rendering boundary */}
             {visibleResults.map((result, visibleIndex) => {
               const resultIndex = visibleRange.startIndex + visibleIndex;
               const { image } = result;

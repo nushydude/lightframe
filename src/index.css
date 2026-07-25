@@ -1813,10 +1813,12 @@ body,
   cursor: not-allowed;
 }
 
-.slideshow-options-panel {
+.slideshow-options-panel,
+.quality-panel,
+.crop-actions-panel {
   position: absolute;
-  left: 50%;
   bottom: calc(100% + 12px);
+  left: 50%;
   transform: translateX(-50%);
   width: min(280px, calc(100vw - 32px));
   display: grid;
@@ -1828,10 +1830,16 @@ body,
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+}
+
+.slideshow-options-panel {
   color: var(--text-primary);
 }
 
-.slideshow-options-field {
+.slideshow-options-field,
+.quality-field,
+.quality-number-field,
+.crop-actions-field {
   display: grid;
   gap: 6px;
   color: var(--text-secondary);
@@ -1998,31 +2006,6 @@ body,
   gap: 4px;
 }
 
-.quality-panel {
-  position: absolute;
-  bottom: calc(100% + 12px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(280px, calc(100vw - 32px));
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  background: var(--bg-control);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-
-.quality-field,
-.quality-number-field {
-  display: grid;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
 .quality-field input[type='range'] {
   width: 100%;
 }
@@ -2077,30 +2060,6 @@ body,
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.crop-actions-panel {
-  position: absolute;
-  bottom: calc(100% + 12px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(280px, calc(100vw - 32px));
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  background: var(--bg-control);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-
-.crop-actions-field {
-  display: grid;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
 }
 
 .crop-actions-field .crop-aspect-select {

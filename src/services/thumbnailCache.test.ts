@@ -290,12 +290,10 @@ describe('thumbnailCache', () => {
     const onLoaded = vi.fn();
     preloadThumbnails(['C:/images/visible.jpg'], {
       onLoaded,
-      concurrency: 4,
       isActive: () => true,
     });
     preloadThumbnails(['C:/images/visible.jpg'], {
       onLoaded,
-      concurrency: 4,
       isActive: () => true,
     });
 
@@ -313,7 +311,6 @@ describe('thumbnailCache', () => {
     let isMounted = true;
     preloadThumbnails(['C:/images/unmounted.jpg'], {
       onLoaded: onUnmountedLoaded,
-      concurrency: 6,
       isActive: () => isMounted,
     });
 
@@ -356,15 +353,13 @@ describe('thumbnailCache', () => {
     const keptListener = vi.fn();
     const paths = ['C:/images/a.jpg', 'C:/images/b.jpg', 'C:/images/c.jpg', 'C:/images/d.jpg'];
 
-    preloadThumbnails(paths, { concurrency: 4 });
+    preloadThumbnails(paths);
     preloadThumbnails(['C:/images/b.jpg'], {
       onLoaded: droppedListener,
-      concurrency: 4,
       isActive: () => true,
     });
     preloadThumbnails(['C:/images/c.jpg'], {
       onLoaded: keptListener,
-      concurrency: 4,
       isActive: () => true,
     });
 

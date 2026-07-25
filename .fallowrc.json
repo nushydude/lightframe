@@ -1,6 +1,13 @@
 {
   "entry": ["src/main.tsx", "vite.config.ts"],
-  "ignorePatterns": [".fallow/**", "coverage/**", "dist/**", "node_modules/**", "src-tauri/**"],
+  "ignorePatterns": [
+    ".fallow/**",
+    ".worktrees/**",
+    "coverage/**",
+    "dist/**",
+    "node_modules/**",
+    "src-tauri/**"
+  ],
   "framework": [
     {
       "name": "lightframe-tooling",

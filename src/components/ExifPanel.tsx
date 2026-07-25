@@ -25,7 +25,7 @@ function formatFNumber(f: number): string {
   return `f/${f % 1 === 0 ? f.toFixed(0) : f.toFixed(1)}`;
 }
 
-// fallow-ignore-next-line complexity
+// fallow-ignore-next-line complexity -- metadata formatting boundary
 export function ExifPanel({
   filePath,
   onClose,

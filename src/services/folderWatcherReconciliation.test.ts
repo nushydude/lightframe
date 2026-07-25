@@ -140,6 +140,30 @@ describe('reconcileFolderWatcherPayload', () => {
     expect(result.preferredIndex).toBe(0);
   });
 
+  it('uses the supplied normalized catalog index for changed-path lookup', () => {
+    const images = Array.from({ length: 10_000 }, (_, index) => image(`${index}.jpg`, index));
+    const pathIndex = new Map(
+      images.map((item, index) => [item.path.toLowerCase(), BigInt(index) * 1_000_000n])
+    );
+    const result = reconcileFolderWatcherPayload({
+      payload: {
+        folderPath: 'C:/images',
+        requiresFullRefresh: false,
+        changes: [{ kind: 'removed', path: 'C:/images/5000.jpg' }],
+      },
+      images,
+      currentIndex: 5000,
+      currentImagePath: 'C:/images/5000.jpg',
+      sortOrder: 'name',
+      pathIndex,
+    });
+
+    expect(result.images).toHaveLength(9_999);
+    expect(pathIndex.has('c:/images/5000.jpg')).toBe(false);
+    expect(pathIndex.get('c:/images/5001.jpg')).toBe(5_001_000_000n);
+    expect(result.preferredPath).toBeNull();
+  });
+
   it('requests a full refresh for large or low-confidence batches', () => {
     const changes = Array.from({ length: 65 }, (_, index) => ({
       kind: 'modified' as const,

@@ -427,4 +427,15 @@ describe('imageAssetCache', () => {
     await expect(stalePromise).rejects.toMatchObject({ name: 'AbortError' });
     expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
   });
+
+  it('bounds mutation-version history after many invalidations', async () => {
+    const { invalidateImageAsset, getImageAssetCacheVersionEntryCountForTests } =
+      await loadCacheModule();
+
+    for (let index = 0; index < 2500; index += 1) {
+      invalidateImageAsset(`C:/images/folder-${index}/image.jpg`);
+    }
+
+    expect(getImageAssetCacheVersionEntryCountForTests()).toBeLessThanOrEqual(2048);
+  });
 });

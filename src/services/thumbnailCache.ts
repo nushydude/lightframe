@@ -28,7 +28,6 @@ type ThumbnailCacheEntry = {
 type ThumbnailLoadedCallback = (path: string) => void;
 
 type PreloadThumbnailOptions = {
-  concurrency?: number;
   onLoaded?: ThumbnailLoadedCallback;
   isActive?: () => boolean;
 };
@@ -327,7 +326,7 @@ export function getCachedThumbnail(request: string | ThumbnailRequest): string |
 }
 
 // Direct loader is part of the cache test seam.
-// fallow-ignore-next-line unused-export
+// fallow-ignore-next-line unused-export -- direct cache loader test seam
 export function loadThumbnail(request: string | ThumbnailRequest): Promise<string> {
   return loadThumbnailWithPriority(request, 'visible-thumbnail');
 }
@@ -392,7 +391,7 @@ export function configureThumbnailCache(options: { cacheBudgetBytes?: number }):
 }
 
 // Reset hook is intentionally test-only.
-// fallow-ignore-next-line unused-export
+// fallow-ignore-next-line unused-export -- test-only cache reset seam
 export function clearThumbnailCacheForTests(): void {
   imageWorkScheduler.resetForTests();
   for (const entry of thumbnailCache.values()) {

@@ -64,6 +64,8 @@ const fullImageAssetCache = new Map<string, ImageAssetEntry>();
 const previewImageAssetCache = new Map<string, PreviewAssetEntry>();
 const pendingInvalidations = new Map<string, number>();
 const latestMutationVersions = new Map<string, number>();
+const activeMutationVersionRefs = new Map<string, number>();
+const MAX_MUTATION_VERSION_ENTRIES = 2048;
 const DEFAULT_PREVIEW_MAX_DIMENSION = 2048;
 let previewCacheBudgetBytes = getPerformanceModeProfile('balanced').previewCacheBudgetBytes;
 let previewImageAssetCacheEstimatedBytes = 0;
@@ -117,6 +119,46 @@ function createCacheEntry(path: string, version: number): ImageAssetEntry {
 
 function currentVersion(path: string): number {
   return Math.max(pendingInvalidations.get(path) ?? 0, latestMutationVersions.get(path) ?? 0);
+}
+
+function mutationRefKey(path: string, version: number): string {
+  return `${path}\u0000${version}`;
+}
+
+function retainMutationVersion(path: string, version: number): void {
+  const key = mutationRefKey(path, version);
+  activeMutationVersionRefs.set(key, (activeMutationVersionRefs.get(key) ?? 0) + 1);
+}
+
+function releaseMutationVersion(path: string, version: number): void {
+  const key = mutationRefKey(path, version);
+  const count = activeMutationVersionRefs.get(key) ?? 0;
+  if (count <= 1) activeMutationVersionRefs.delete(key);
+  else activeMutationVersionRefs.set(key, count - 1);
+}
+
+function pruneMutationVersionHistory(): void {
+  if (latestMutationVersions.size <= MAX_MUTATION_VERSION_ENTRIES) return;
+  const candidates = Array.from(latestMutationVersions.entries())
+    .filter(([path]) => {
+      const hasActiveRequest = Array.from(activeMutationVersionRefs.keys()).some((key) =>
+        key.startsWith(`${path}\u0000`)
+      );
+      const hasCachedAsset = fullImageAssetCache.has(path) || previewImageAssetCache.has(path);
+      return !hasActiveRequest && !hasCachedAsset;
+    })
+    .sort(([, left], [, right]) => left - right);
+  for (const [path] of candidates) {
+    if (latestMutationVersions.size <= MAX_MUTATION_VERSION_ENTRIES) break;
+    latestMutationVersions.delete(path);
+    pendingInvalidations.delete(path);
+  }
+}
+
+// Test-only cardinality inspector for the bounded stale-result history.
+// fallow-ignore-next-line unused-export -- deterministic cache retention tests
+export function getImageAssetCacheVersionEntryCountForTests(): number {
+  return latestMutationVersions.size;
 }
 
 function getLeastRecentlyUsedEntries<T extends { lastUsedAt: number }>(
@@ -381,27 +423,33 @@ async function loadFullAssetWithPriority(
     return cached.url;
   }
 
-  return imageWorkScheduler.schedule({
-    key: scopedFullAssetWorkKey(path, version, priority),
-    priority,
-    sourcePath: path,
-    generationToken: version,
-    signal: options?.signal,
-    run: ({ signal }) => {
-      if (signal.aborted) {
-        throw createAbortError('Full asset work aborted before execution.');
-      }
+  retainMutationVersion(path, version);
+  return imageWorkScheduler
+    .schedule({
+      key: scopedFullAssetWorkKey(path, version, priority),
+      priority,
+      sourcePath: path,
+      generationToken: version,
+      signal: options?.signal,
+      run: ({ signal }) => {
+        if (signal.aborted) {
+          throw createAbortError('Full asset work aborted before execution.');
+        }
 
-      recordFullAssetCacheMiss();
-      const entry = buildFullAssetEntry(path);
+        recordFullAssetCacheMiss();
+        const entry = buildFullAssetEntry(path);
 
-      if (signal.aborted) {
-        throw createAbortError('Full asset work aborted after execution.');
-      }
+        if (signal.aborted) {
+          throw createAbortError('Full asset work aborted after execution.');
+        }
 
-      return storeFullAsset(path, entry, options);
-    },
-  }).promise;
+        return storeFullAsset(path, entry, options);
+      },
+    })
+    .promise.finally(() => {
+      releaseMutationVersion(path, version);
+      pruneMutationVersionHistory();
+    });
 }
 
 async function loadPreviewAssetWithPriority(
@@ -419,49 +467,55 @@ async function loadPreviewAssetWithPriority(
     return existing.url;
   }
 
-  return imageWorkScheduler.schedule({
-    key: scopedPreviewAssetWorkKey(path, maxDimension, version, priority),
-    priority,
-    sourcePath: path,
-    generationToken: version,
-    signal: options?.signal,
-    run: async ({ signal }) => {
-      if (signal.aborted) {
-        throw createAbortError('Preview work aborted before execution.');
-      }
+  retainMutationVersion(path, version);
+  return imageWorkScheduler
+    .schedule({
+      key: scopedPreviewAssetWorkKey(path, maxDimension, version, priority),
+      priority,
+      sourcePath: path,
+      generationToken: version,
+      signal: options?.signal,
+      run: async ({ signal }) => {
+        if (signal.aborted) {
+          throw createAbortError('Preview work aborted before execution.');
+        }
 
-      recordPreviewAssetCacheMiss();
-      const initialVersion = currentVersion(path);
-      const initialBust = initialVersion > 0 ? initialVersion : undefined;
-      let entry = createPreviewAssetEntry(
-        await measurePerformanceSpan('previewGeneration', () =>
-          getPreviewImage(path, maxDimension, initialBust)
-        ),
-        initialVersion,
-        maxDimension
-      );
-
-      const resolvedVersion = Math.max(initialVersion, currentVersion(path));
-      if (resolvedVersion !== entry.version) {
-        releasePreviewAssetEntry(entry);
-        const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
-        entry = createPreviewAssetEntry(
+        recordPreviewAssetCacheMiss();
+        const initialVersion = currentVersion(path);
+        const initialBust = initialVersion > 0 ? initialVersion : undefined;
+        let entry = createPreviewAssetEntry(
           await measurePerformanceSpan('previewGeneration', () =>
-            getPreviewImage(path, maxDimension, resolvedBust)
+            getPreviewImage(path, maxDimension, initialBust)
           ),
-          resolvedVersion,
+          initialVersion,
           maxDimension
         );
-      }
 
-      if (signal.aborted) {
-        releasePreviewAssetEntry(entry);
-        throw createAbortError('Preview work aborted after execution.');
-      }
+        const resolvedVersion = Math.max(initialVersion, currentVersion(path));
+        if (resolvedVersion !== entry.version) {
+          releasePreviewAssetEntry(entry);
+          const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
+          entry = createPreviewAssetEntry(
+            await measurePerformanceSpan('previewGeneration', () =>
+              getPreviewImage(path, maxDimension, resolvedBust)
+            ),
+            resolvedVersion,
+            maxDimension
+          );
+        }
 
-      return storePreviewAsset(path, entry, options);
-    },
-  }).promise;
+        if (signal.aborted) {
+          releasePreviewAssetEntry(entry);
+          throw createAbortError('Preview work aborted after execution.');
+        }
+
+        return storePreviewAsset(path, entry, options);
+      },
+    })
+    .promise.finally(() => {
+      releaseMutationVersion(path, version);
+      pruneMutationVersionHistory();
+    });
 }
 
 export function requestFullAsset(path: string, options?: CacheReadOptions): Promise<string> {
@@ -528,6 +582,7 @@ export function invalidateImageAsset(path: string): void {
   fullImageAssetCache.delete(path);
   deletePreviewAssetEntry(path);
   syncImageAssetTelemetry();
+  pruneMutationVersionHistory();
 }
 
 export function trimImageAssetCache(
@@ -557,4 +612,5 @@ export function trimImageAssetCache(
       (task.key.startsWith('preview::') || task.key.startsWith('full::'))
   );
   syncImageAssetTelemetry();
+  pruneMutationVersionHistory();
 }

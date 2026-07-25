@@ -1,3 +1,6 @@
+use crate::generated_cache_maintenance::{
+    ensure_cache_root, record_cache_write, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES,
+};
 use crate::native_codecs;
 use crate::path_normalization::normalize_path_for_key;
 use image::metadata::Orientation;
@@ -17,15 +20,11 @@ const THUMBNAIL_SIZE: u32 = 160;
 const THUMBNAIL_CACHE_VERSION: &str = "thumb-v4";
 const PREVIEW_CACHE_VERSION: &str = "preview-v2";
 const TILE_CACHE_VERSION: &str = "tile-v2";
-const MAX_CACHE_ENTRIES: usize = 2_000;
-const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
-const CLEANUP_INTERVAL: usize = 32;
 const MIN_TILE_SIZE: u32 = 128;
 const MAX_TILE_SIZE: u32 = 2_048;
 const TILE_SOURCE_CACHE_VERSION: &str = "tile-source-v1";
 const MAX_TILE_SOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RAW_NATIVE_DECODE_FAILURES: usize = 4_096;
-static CACHE_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CACHE_TMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_CACHE_HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PREVIEW_CACHE_HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -51,7 +50,6 @@ static RUST_TILE_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
 static RUST_TILE_MAX_MS: AtomicU64 = AtomicU64::new(0);
 static JPEG_TILE_SOURCE_CACHE: OnceLock<Mutex<Option<CachedJpegSource>>> = OnceLock::new();
 static RAW_NATIVE_DECODE_FAILURE_CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-
 #[derive(Debug, Clone)]
 struct CachedJpegSource {
     key: String,
@@ -359,7 +357,7 @@ pub fn get_or_create_thumbnail(
 ) -> Result<GeneratedImageAsset, String> {
     let cache_key = build_cache_key(file_path, metadata);
     let cache_hash = hash_cache_key(&cache_key);
-    let cache_available = ensure_cache_root(cache_root);
+    let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
 
     if cache_available {
         if let Some(asset) = cached_asset_from_disk(
@@ -428,7 +426,7 @@ pub fn get_or_create_preview(
 
     let cache_key = build_preview_cache_key(file_path, metadata, max_dimension, invalidation_bust);
     let cache_hash = hash_cache_key(&cache_key);
-    let cache_available = ensure_cache_root(cache_root);
+    let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
 
     if cache_available {
         if let Some(asset) = cached_asset_from_disk(
@@ -589,7 +587,7 @@ pub fn get_or_create_tile(
     let bounds = validate_tile_request(request)?;
     let cache_key = build_tile_cache_key(file_path, metadata, request)?;
     let cache_hash = hash_cache_key(&cache_key);
-    let cache_available = ensure_cache_root(cache_root);
+    let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
 
     if cache_available {
         if let Some(asset) =
@@ -1078,32 +1076,6 @@ fn parse_modified_epoch_nanos(value: &str) -> Option<u128> {
     })
 }
 
-fn ensure_cache_root(cache_root: &Path) -> bool {
-    match fs::create_dir_all(cache_root) {
-        Ok(_) => {
-            maybe_cleanup_cache(cache_root);
-            true
-        }
-        Err(error) => {
-            eprintln!(
-                "Warning: generated image cache unavailable at '{}': {}",
-                cache_root.display(),
-                error
-            );
-            false
-        }
-    }
-}
-
-fn maybe_cleanup_cache(cache_root: &Path) {
-    let request_count = CACHE_REQUEST_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    if !request_count.is_multiple_of(CLEANUP_INTERVAL) {
-        return;
-    }
-
-    cleanup_cache_best_effort(cache_root);
-}
-
 fn cached_asset_from_disk(
     cache_root: &Path,
     cache_hash: &str,
@@ -1141,6 +1113,7 @@ fn store_generated_asset(
     write_cache_file(&asset_path, bytes).map_err(|error| {
         format!("Failed to write generated cache file '{}': {}", asset_path.display(), error)
     })?;
+    record_cache_write(root, bytes.len() as u64, cleanup_cache_best_effort);
 
     Ok(build_generated_image_asset(&asset_path, cache_hash, format, dimensions))
 }
@@ -1196,7 +1169,7 @@ fn cache_asset_bytes(
     }
 
     let temp_root = temp_generated_asset_root();
-    if !ensure_cache_root(&temp_root) {
+    if !ensure_cache_root(&temp_root, cleanup_cache_best_effort) {
         return Err(format!(
             "Generated image cache unavailable and temporary generated asset storage at '{}' could not be prepared",
             temp_root.display()

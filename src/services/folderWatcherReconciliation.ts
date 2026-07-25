@@ -1,17 +1,17 @@
 import type { ImageFile } from '../types/image';
 import type { AppSettings } from '../types/settings';
-import { sortImages } from './imageSorting';
+import { createImageComparator, sortImages } from './imageSorting';
 import type { FolderWatcherPayload } from './tauriCommands';
 
 const MAX_INCREMENTAL_FOLDER_WATCHER_CHANGES = 64;
 type FolderWatcherChange = FolderWatcherPayload['changes'][number];
-type ImagesByPath = Map<string, ImageFile>;
 
 interface FolderWatcherReconciliationDraft {
-  imagesByPath: ImagesByPath;
+  images: ImageFile[];
+  pathIndex: Map<string, bigint>;
   invalidatedPaths: Set<string>;
   preferredPath: string | null;
-  currentImagePath: string | null;
+  preferredIndex: number;
 }
 
 export interface FolderWatcherReconciliationOptions {
@@ -22,6 +22,8 @@ export interface FolderWatcherReconciliationOptions {
   sortOrder: AppSettings['sortOrder'];
   sortDirection?: AppSettings['sortDirection'];
   randomOrder?: string[] | null;
+  /** Normalized catalog index maintained by the viewer across watcher payloads. */
+  pathIndex?: Map<string, bigint>;
 }
 
 export interface FolderWatcherReconciliationResult {
@@ -42,14 +44,48 @@ export function reconcileFolderWatcherPayload(
     currentImagePath,
     sortOrder,
     sortDirection = sortOrder === 'name' ? 'ascending' : 'descending',
-    randomOrder,
   } = options;
-  if (requiresFullRefresh(payload)) {
+  if (requiresFullRefresh(payload))
     return fullRefreshResult(images, currentIndex, currentImagePath);
+
+  const baselineImages =
+    sortOrder === 'random' || options.pathIndex
+      ? [...images]
+      : sortImages(images, sortOrder, sortDirection);
+  const pathIndex = options.pathIndex ?? buildPathIndex(baselineImages);
+  const baselineIndex = currentImagePath
+    ? resolveImageIndex(baselineImages, pathIndex, currentImagePath)
+    : currentIndex;
+  const draft: FolderWatcherReconciliationDraft = {
+    images: baselineImages,
+    pathIndex,
+    invalidatedPaths: new Set<string>(),
+    preferredPath: currentImagePath,
+    preferredIndex: baselineIndex,
+  };
+  for (const change of payload.changes) {
+    applyFolderWatcherChange(draft, change, sortOrder, sortDirection);
   }
 
-  const draft = applyFolderWatcherChanges(images, payload.changes, currentImagePath);
-  return reconcileDraft(draft, currentIndex, sortOrder, sortDirection, randomOrder);
+  const preferredImage = draft.images[draft.preferredIndex];
+  const preferredPath =
+    draft.preferredPath && preferredImage && isSamePath(preferredImage.path, draft.preferredPath)
+      ? draft.preferredPath
+      : null;
+  if (draft.images.length === 0) draft.preferredIndex = -1;
+  else if (draft.preferredPath) {
+    draft.preferredIndex = resolveImageIndex(draft.images, draft.pathIndex, draft.preferredPath);
+  } else {
+    draft.preferredIndex = Math.min(Math.max(draft.preferredIndex, 0), draft.images.length - 1);
+  }
+
+  return {
+    images: draft.images,
+    invalidatedPaths: Array.from(draft.invalidatedPaths),
+    preferredIndex: draft.preferredIndex,
+    preferredPath,
+    requiresFullRefresh: false,
+  };
 }
 
 function requiresFullRefresh(payload: FolderWatcherPayload): boolean {
@@ -72,138 +108,165 @@ function fullRefreshResult(
   };
 }
 
-function applyFolderWatcherChanges(
-  images: ImageFile[],
-  changes: FolderWatcherChange[],
-  currentImagePath: string | null
-): FolderWatcherReconciliationDraft {
-  const draft: FolderWatcherReconciliationDraft = {
-    imagesByPath: new Map(images.map((image) => [pathKey(image.path), image])),
-    invalidatedPaths: new Set<string>(),
-    preferredPath: currentImagePath,
-    currentImagePath,
-  };
-
-  for (const change of changes) {
-    applyFolderWatcherChange(draft, change);
-  }
-
-  return draft;
-}
-
 function applyFolderWatcherChange(
   draft: FolderWatcherReconciliationDraft,
-  change: FolderWatcherChange
-) {
+  change: FolderWatcherChange,
+  sortOrder: AppSettings['sortOrder'],
+  sortDirection: AppSettings['sortDirection']
+): void {
   switch (change.kind) {
     case 'added':
-      applyAddedChange(draft, change);
+      if (change.image) {
+        draft.invalidatedPaths.add(change.image.path);
+        insertImage(draft, change.image, sortOrder, sortDirection);
+      }
       break;
     case 'removed':
-      applyRemovedChange(draft, change);
+      removeImage(draft, change.path);
+      draft.invalidatedPaths.add(change.path);
       break;
     case 'modified':
-      applyModifiedChange(draft, change);
+      draft.invalidatedPaths.add(change.path);
+      if (change.image) replaceImage(draft, change.path, change.image, sortOrder, sortDirection);
       break;
     case 'renamed':
-      applyRenamedChange(draft, change);
+      if (change.oldPath) draft.invalidatedPaths.add(change.oldPath);
+      draft.invalidatedPaths.add(change.path);
+      if (change.image)
+        replaceImage(draft, change.oldPath ?? change.path, change.image, sortOrder, sortDirection);
+      else removeImage(draft, change.oldPath ?? change.path);
       break;
   }
 }
 
-function reconcileDraft(
-  draft: FolderWatcherReconciliationDraft,
-  currentIndex: number,
-  sortOrder: AppSettings['sortOrder'],
-  sortDirection: AppSettings['sortDirection'],
-  randomOrder?: string[] | null
-): FolderWatcherReconciliationResult {
-  const nextImages = sortImages(
-    Array.from(draft.imagesByPath.values()),
-    sortOrder,
-    sortDirection,
-    randomOrder
-  );
-  const preferredIndex = resolvePreferredIndex(nextImages, currentIndex, draft.preferredPath);
-  const preferredPath = draft.preferredPath;
-  const resolvedPreferredPath =
-    preferredPath && nextImages.some((image) => isSamePath(image.path, preferredPath))
-      ? preferredPath
-      : null;
-
-  return {
-    images: nextImages,
-    invalidatedPaths: Array.from(draft.invalidatedPaths),
-    preferredIndex,
-    preferredPath: resolvedPreferredPath,
-    requiresFullRefresh: false,
-  };
+function removeImage(draft: FolderWatcherReconciliationDraft, path: string): number {
+  const index = resolveImageIndex(draft.images, draft.pathIndex, path);
+  if (index < 0) return -1;
+  draft.images.splice(index, 1);
+  draft.pathIndex.delete(pathKey(path));
+  if (draft.preferredPath && isSamePath(path, draft.preferredPath)) {
+    draft.preferredPath = null;
+    draft.preferredIndex = Math.min(index, draft.images.length - 1);
+  } else if (index < draft.preferredIndex) {
+    draft.preferredIndex -= 1;
+  }
+  return index;
 }
 
-function applyAddedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
-  if (!change.image) {
+function replaceImage(
+  draft: FolderWatcherReconciliationDraft,
+  oldPath: string,
+  image: ImageFile,
+  sortOrder: AppSettings['sortOrder'],
+  sortDirection: AppSettings['sortDirection']
+): void {
+  const wasPreferred = Boolean(draft.preferredPath && isSamePath(draft.preferredPath, oldPath));
+  const oldIndex = removeImage(draft, oldPath);
+  if (wasPreferred) draft.preferredPath = image.path;
+  if (sortOrder === 'random' && oldIndex >= 0) {
+    draft.images.splice(oldIndex, 0, image);
+    draft.pathIndex.set(pathKey(image.path), labelBetween(draft, oldIndex));
+    if (draft.preferredPath && isSamePath(image.path, draft.preferredPath)) {
+      draft.preferredIndex = oldIndex;
+    } else if (oldIndex <= draft.preferredIndex) {
+      draft.preferredIndex += 1;
+    }
+    return;
+  }
+  insertImage(draft, image, sortOrder, sortDirection);
+}
+
+function insertImage(
+  draft: FolderWatcherReconciliationDraft,
+  image: ImageFile,
+  sortOrder: AppSettings['sortOrder'],
+  sortDirection: AppSettings['sortDirection']
+): void {
+  const existingIndex = resolveImageIndex(draft.images, draft.pathIndex, image.path);
+  if (existingIndex >= 0) {
+    draft.images[existingIndex] = image;
+    if (draft.preferredPath && isSamePath(image.path, draft.preferredPath)) {
+      draft.preferredIndex = existingIndex;
+    }
     return;
   }
 
-  draft.invalidatedPaths.add(change.image.path);
-  draft.imagesByPath.set(pathKey(change.image.path), change.image);
-  if (draft.currentImagePath && isSamePath(change.image.path, draft.currentImagePath)) {
-    draft.preferredPath = change.image.path;
+  const index =
+    sortOrder === 'random'
+      ? draft.images.length
+      : findInsertionIndex(draft.images, image, sortOrder, sortDirection);
+  draft.images.splice(index, 0, image);
+  draft.pathIndex.set(pathKey(image.path), labelBetween(draft, index));
+  if (draft.preferredPath && isSamePath(image.path, draft.preferredPath)) {
+    draft.preferredIndex = index;
+  } else if (index <= draft.preferredIndex) {
+    draft.preferredIndex += 1;
   }
 }
 
-function applyRemovedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
-  draft.imagesByPath.delete(pathKey(change.path));
-  draft.invalidatedPaths.add(change.path);
-  if (draft.currentImagePath && isSamePath(change.path, draft.currentImagePath)) {
-    draft.preferredPath = null;
-  }
-}
-
-function applyModifiedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
-  draft.invalidatedPaths.add(change.path);
-  if (change.image) {
-    draft.imagesByPath.set(pathKey(change.image.path), change.image);
-  }
-}
-
-function applyRenamedChange(draft: FolderWatcherReconciliationDraft, change: FolderWatcherChange) {
-  if (change.oldPath) {
-    draft.imagesByPath.delete(pathKey(change.oldPath));
-    draft.invalidatedPaths.add(change.oldPath);
-  }
-
-  draft.invalidatedPaths.add(change.path);
-  if (change.image) {
-    draft.imagesByPath.set(pathKey(change.image.path), change.image);
-  }
-
-  if (
-    draft.currentImagePath &&
-    change.oldPath &&
-    isSamePath(change.oldPath, draft.currentImagePath)
-  ) {
-    draft.preferredPath = change.image?.path ?? change.path;
-  }
-}
-
-function resolvePreferredIndex(
+function findInsertionIndex(
   images: ImageFile[],
-  previousIndex: number,
-  preferredPath: string | null
+  image: ImageFile,
+  sortOrder: Exclude<AppSettings['sortOrder'], 'random'>,
+  sortDirection: AppSettings['sortDirection']
 ): number {
-  if (images.length === 0) {
-    return -1;
+  const compare = createImageComparator(sortOrder, sortDirection === 'ascending' ? 1 : -1);
+  let low = 0;
+  let high = images.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (compare(images[middle], image) <= 0) low = middle + 1;
+    else high = middle;
   }
+  return low;
+}
 
-  if (preferredPath) {
-    const matchedIndex = images.findIndex((image) => isSamePath(image.path, preferredPath));
-    if (matchedIndex >= 0) {
-      return matchedIndex;
-    }
+const ORDER_STEP = 1_000_000n;
+
+function buildPathIndex(images: ImageFile[]): Map<string, bigint> {
+  return new Map(images.map((image, index) => [pathKey(image.path), BigInt(index) * ORDER_STEP]));
+}
+
+function resolveImageIndex(
+  images: ImageFile[],
+  pathIndex: Map<string, bigint>,
+  path: string
+): number {
+  const key = pathKey(path);
+  const targetLabel = pathIndex.get(key);
+  if (targetLabel === undefined) return -1;
+  let low = 0;
+  let high = images.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const middleLabel = pathIndex.get(pathKey(images[middle].path));
+    if (middleLabel === undefined || middleLabel < targetLabel) low = middle + 1;
+    else high = middle;
   }
+  return low < images.length && pathKey(images[low].path) === key ? low : -1;
+}
 
-  return Math.min(Math.max(previousIndex, 0), images.length - 1);
+function labelBetween(draft: FolderWatcherReconciliationDraft, index: number): bigint {
+  const previous =
+    index > 0 ? draft.pathIndex.get(pathKey(draft.images[index - 1].path)) : undefined;
+  const next =
+    index + 1 < draft.images.length
+      ? draft.pathIndex.get(pathKey(draft.images[index + 1].path))
+      : undefined;
+  if (previous === undefined && next === undefined) return 0n;
+  if (previous === undefined) return next! - ORDER_STEP;
+  if (next === undefined) return previous + ORDER_STEP;
+  if (next - previous > 1n) return previous + (next - previous) / 2n;
+
+  // The bounded watcher batch can exhaust a gap after many inserts. Re-space once, then continue
+  // with a stable label rather than renumbering on every ordinary mutation.
+  for (let currentIndex = 0; currentIndex < draft.images.length; currentIndex += 1) {
+    draft.pathIndex.set(
+      pathKey(draft.images[currentIndex].path),
+      BigInt(currentIndex) * ORDER_STEP
+    );
+  }
+  return BigInt(index) * ORDER_STEP;
 }
 
 function pathKey(path: string): string {
