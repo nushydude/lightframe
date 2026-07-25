@@ -232,7 +232,8 @@ fn recover_staged_backups(config_dir: &Path) -> Result<(), String> {
     }
 
     for (destination, mut backups) in backups_by_destination {
-        if !destination.exists() {
+        let destination_valid = destination.exists() && read_metadata_file(&destination).is_ok();
+        if !destination_valid {
             backups.sort_by_key(|path| {
                 fs::metadata(path)
                     .and_then(|metadata| metadata.modified())
@@ -241,6 +242,10 @@ fn recover_staged_backups(config_dir: &Path) -> Result<(), String> {
             let Some(backup_path) = backups.pop() else {
                 continue;
             };
+            if destination.exists() {
+                let quarantine_path = build_unique_sibling_path(&destination, "corrupt")?;
+                let _ = fs::rename(&destination, &quarantine_path);
+            }
             fs::rename(&backup_path, &destination).map_err(|error| {
                 format!(
                     "Failed to restore staged curation backup '{}' to '{}': {}",
