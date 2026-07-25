@@ -737,6 +737,7 @@ pub fn set_tile_source_cache_limit(limit_bytes: u64) {
     CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES.store(limit_bytes, Ordering::Relaxed);
 }
 
+#[expect(dead_code)]
 pub fn get_tile_source_cache_limit() -> u64 {
     CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES.load(Ordering::Relaxed)
 }

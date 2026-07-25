@@ -5,7 +5,6 @@ pub use curation_commands::*;
 pub use settings_commands::*;
 
 use crate::atomic_file::{build_unique_sibling_path, replace_file_safely};
-use crate::curation::{ImageCuration, ImageCurationUpdate};
 pub use crate::image_metadata::ExifData;
 use crate::{folder_index, native_codecs, thumbnails};
 use image::GenericImageView;
@@ -1147,42 +1146,6 @@ pub async fn get_image_tile(
     })
     .await
     .map_err(|err| format!("Image tile worker failed: {}", err))?
-}
-
-/// Get the settings file path
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let config_dir =
-        app.path().app_config_dir().map_err(|e| format!("Failed to get config dir: {}", e))?;
-    fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    Ok(config_dir.join("settings.json"))
-}
-
-fn curation_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let config_dir =
-        app.path().app_config_dir().map_err(|e| format!("Failed to get config dir: {}", e))?;
-    fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    Ok(config_dir)
-}
-
-static CURATION_METADATA_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-static SETTINGS_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn lock_curation_metadata() -> Result<MutexGuard<'static, ()>, String> {
-    CURATION_METADATA_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| "Curation metadata lock poisoned".to_string())
-}
-
-fn lock_settings_io() -> Result<MutexGuard<'static, ()>, String> {
-    SETTINGS_IO_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| "Settings I/O lock poisoned".to_string())
-}
-
-fn unix_timestamp_seconds() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 fn diagnostics_export_path(path: &str) -> Result<PathBuf, String> {
