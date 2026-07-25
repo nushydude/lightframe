@@ -1719,6 +1719,23 @@ fn open_in_external_application_blocking(
         return Err(format!("'{}' is not a valid application", application_path));
     }
 
+    #[cfg(windows)]
+    {
+        let extension = editor_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .unwrap_or_default();
+        const ALLOWED_EXECUTABLE_EXTENSIONS: &[&str] = &["exe", "cmd", "bat", "com", "ps1"];
+        if !ALLOWED_EXECUTABLE_EXTENSIONS.contains(&extension.as_str()) {
+            return Err(format!(
+                "'{}' does not have a recognized executable extension ({})",
+                application_path,
+                ALLOWED_EXECUTABLE_EXTENSIONS.join(", ")
+            ));
+        }
+    }
+
     Command::new(editor_path)
         .arg(image_path)
         .spawn()
@@ -3426,5 +3443,23 @@ mod tests {
         assert_eq!(settings.external_editor_path, None);
         assert_eq!(settings.external_editor_label, None);
         assert!(settings.persisted_marked_folders.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_open_in_external_application_validates_executable_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("photo.jpg");
+        let txt_app = dir.path().join("script.txt");
+        fs::write(&image, b"dummy-image").unwrap();
+        fs::write(&txt_app, b"dummy-script").unwrap();
+
+        let error = open_in_external_application_blocking(
+            image.to_string_lossy().to_string(),
+            txt_app.to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("does not have a recognized executable extension"));
     }
 }
