@@ -744,9 +744,9 @@ pub fn get_tile_source_cache_limit() -> u64 {
 
 pub fn calculate_tile_cache_limit_for_performance_mode(performance_mode: &str) -> u64 {
     match performance_mode {
-        "fast" => 128 * 1024 * 1024,
+        "fast" => 512 * 1024 * 1024,
         "balanced" => 256 * 1024 * 1024,
-        "quality" => 512 * 1024 * 1024,
+        "lowMemory" => 128 * 1024 * 1024,
         _ => DEFAULT_MAX_TILE_SOURCE_CACHE_BYTES,
     }
 }
@@ -2177,10 +2177,13 @@ mod tests {
     fn test_dynamic_tile_source_cache_limit() {
         let default_limit = get_tile_source_cache_limit();
         set_tile_source_cache_limit(calculate_tile_cache_limit_for_performance_mode("fast"));
-        assert_eq!(get_tile_source_cache_limit(), 128 * 1024 * 1024);
-
-        set_tile_source_cache_limit(calculate_tile_cache_limit_for_performance_mode("quality"));
         assert_eq!(get_tile_source_cache_limit(), 512 * 1024 * 1024);
+
+        set_tile_source_cache_limit(calculate_tile_cache_limit_for_performance_mode("balanced"));
+        assert_eq!(get_tile_source_cache_limit(), 256 * 1024 * 1024);
+
+        set_tile_source_cache_limit(calculate_tile_cache_limit_for_performance_mode("lowMemory"));
+        assert_eq!(get_tile_source_cache_limit(), 128 * 1024 * 1024);
 
         set_tile_source_cache_limit(default_limit);
     }
