@@ -1,7 +1,11 @@
-use crate::atomic_file::{
-    build_unique_sibling_path, replace_file_safely, write_text_file_atomically,
-};
-use crate::curation::{self, ImageCuration, ImageCurationUpdate};
+pub mod curation_commands;
+pub mod settings_commands;
+
+pub use curation_commands::*;
+pub use settings_commands::*;
+
+use crate::atomic_file::{build_unique_sibling_path, replace_file_safely};
+use crate::curation::{ImageCuration, ImageCurationUpdate};
 pub use crate::image_metadata::ExifData;
 use crate::{folder_index, native_codecs, thumbnails};
 use image::GenericImageView;
@@ -1181,39 +1185,6 @@ fn unix_timestamp_seconds() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
-/// Read application settings
-#[tauri::command]
-pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
-    let _lock = lock_settings_io()?;
-    let path = settings_path(&app)?;
-    let settings: AppSettings = if !path.exists() {
-        AppSettings::default()
-    } else {
-        let content =
-            fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?
-    };
-
-    thumbnails::set_tile_source_cache_limit(
-        thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
-    );
-
-    Ok(settings)
-}
-
-/// Write application settings
-#[tauri::command]
-pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
-    let _lock = lock_settings_io()?;
-    thumbnails::set_tile_source_cache_limit(
-        thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
-    );
-    let path = settings_path(&app)?;
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    write_text_file_atomically(&path, &content, "settings")
-}
-
 fn diagnostics_export_path(path: &str) -> Result<PathBuf, String> {
     let normalized_path = path.trim();
     if normalized_path.is_empty() {
@@ -1255,76 +1226,6 @@ pub async fn save_diagnostics_snapshot(path: String, content: String) -> Result<
     })
     .await
     .map_err(|err| format!("Diagnostics export worker failed: {}", err))?
-}
-
-#[tauri::command]
-pub async fn read_curation_metadata(
-    app: AppHandle,
-) -> Result<HashMap<String, ImageCuration>, String> {
-    let config_dir = curation_config_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || curation::read_curation_metadata(&config_dir))
-        .await
-        .map_err(|error| format!("Curation read worker failed: {error}"))?
-}
-
-#[tauri::command]
-pub async fn read_curation_metadata_for_paths(
-    app: AppHandle,
-    file_paths: Vec<String>,
-) -> Result<HashMap<String, ImageCuration>, String> {
-    let config_dir = curation_config_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        curation::read_curation_metadata_for_paths(&config_dir, &file_paths)
-    })
-    .await
-    .map_err(|error| format!("Curation read worker failed: {error}"))?
-}
-
-#[tauri::command]
-pub async fn write_image_curation(
-    app: AppHandle,
-    file_path: String,
-    favorite: bool,
-    rating: i32,
-) -> Result<(), String> {
-    let normalized_path = file_path.trim().to_string();
-    if normalized_path.is_empty() {
-        return Err("file_path must not be empty".to_string());
-    }
-
-    let _lock = lock_curation_metadata()?;
-    let config_dir = curation_config_dir(&app)?;
-    curation::write_curation_updates(
-        &config_dir,
-        vec![ImageCurationUpdate { file_path: normalized_path, favorite, rating }],
-        unix_timestamp_seconds(),
-    )
-}
-
-#[tauri::command]
-pub async fn write_image_curation_batch(
-    app: AppHandle,
-    updates: Vec<ImageCurationUpdate>,
-) -> Result<(), String> {
-    let _lock = lock_curation_metadata()?;
-    let config_dir = curation_config_dir(&app)?;
-    curation::write_curation_updates(&config_dir, updates, unix_timestamp_seconds())
-}
-
-#[tauri::command]
-pub async fn clear_image_curation(app: AppHandle, file_path: String) -> Result<(), String> {
-    let normalized_path = file_path.trim().to_string();
-    if normalized_path.is_empty() {
-        return Err("file_path must not be empty".to_string());
-    }
-
-    let _lock = lock_curation_metadata()?;
-    let config_dir = curation_config_dir(&app)?;
-    curation::write_curation_updates(
-        &config_dir,
-        vec![ImageCurationUpdate { file_path: normalized_path, favorite: false, rating: 0 }],
-        unix_timestamp_seconds(),
-    )
 }
 
 fn build_copy_name(file_stem: &str, extension: &str, attempt: u32) -> String {
@@ -2451,11 +2352,11 @@ mod tests {
     #[test]
     fn test_supported_extension_manifest_matches_scanner_and_file_associations() {
         let manifest: Vec<String> =
-            serde_json::from_str(include_str!("../../supported-image-extensions.json")).unwrap();
+            serde_json::from_str(include_str!("../../../supported-image-extensions.json")).unwrap();
         let scanner: Vec<String> =
             SUPPORTED_EXTENSIONS.iter().map(|extension| (*extension).to_string()).collect();
         let tauri_config: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let associations: Vec<String> = tauri_config["bundle"]["fileAssociations"][0]["ext"]
             .as_array()
             .unwrap()
