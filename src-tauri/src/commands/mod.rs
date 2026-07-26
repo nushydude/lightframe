@@ -3334,4 +3334,88 @@ mod tests {
 
         assert!(error.contains("does not have a recognized executable extension"));
     }
+
+    #[test]
+    fn test_metadata_xmp_resilience_crafted_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // 1. Start element with many unique attributes
+        let mut many_attrs = String::from(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description ",
+        );
+        for i in 0..500 {
+            many_attrs.push_str(&format!("attr_{}=\"val_{}\" ", i, i));
+        }
+        many_attrs.push_str("/></rdf:RDF></x:xmpmeta>");
+
+        let png_many_attrs = dir.path().join("many_attrs.png");
+        fs::write(&png_many_attrs, create_dummy_png_with_itxt_xmp(many_attrs.as_bytes())).unwrap();
+        let out_many_attrs = dir.path().join("out_many_attrs.png");
+        let res = restore_normal_orientation(&png_many_attrs, &out_many_attrs, "test");
+        assert!(res.is_ok());
+
+        // 2. Excessive namespace declarations
+        let mut excessive_ns = String::from("<x:xmpmeta ");
+        for i in 0..500 {
+            excessive_ns.push_str(&format!("xmlns:ns{}=\"http://example.com/ns/{}\" ", i, i));
+        }
+        excessive_ns.push_str("><rdf:RDF></rdf:RDF></x:xmpmeta>");
+
+        let png_ns = dir.path().join("excessive_ns.png");
+        fs::write(&png_ns, create_dummy_png_with_itxt_xmp(excessive_ns.as_bytes())).unwrap();
+        let out_ns = dir.path().join("out_ns.png");
+        let res_ns = restore_normal_orientation(&png_ns, &out_ns, "test");
+        assert!(res_ns.is_ok());
+
+        // 3. Malformed/truncated XMP
+        let truncated_xmp =
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description attr=\"unclosed";
+        let png_trunc = dir.path().join("truncated.png");
+        fs::write(&png_trunc, create_dummy_png_with_itxt_xmp(truncated_xmp)).unwrap();
+        let out_trunc = dir.path().join("out_trunc.png");
+        let res_trunc = restore_normal_orientation(&png_trunc, &out_trunc, "test");
+        assert!(res_trunc.is_ok());
+
+        // 4. Valid XMP packet with non-EXIF content
+        let valid_xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description custom:Title=\"TestImage\"/></rdf:RDF></x:xmpmeta>";
+        let png_valid = dir.path().join("valid.png");
+        fs::write(&png_valid, create_dummy_png_with_itxt_xmp(valid_xmp)).unwrap();
+        let out_valid = dir.path().join("out_valid.png");
+        let res_valid = restore_normal_orientation(&png_valid, &out_valid, "test");
+        assert!(res_valid.is_ok());
+    }
+
+    fn create_dummy_png_with_itxt_xmp(xmp_bytes: &[u8]) -> Vec<u8> {
+        let mut png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
+
+        // IHDR chunk
+        let mut ihdr_data = Vec::new();
+        ihdr_data.extend_from_slice(&1u32.to_be_bytes()); // width
+        ihdr_data.extend_from_slice(&1u32.to_be_bytes()); // height
+        ihdr_data.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit truecolor
+        append_png_chunk(&mut png, b"IHDR", &ihdr_data);
+
+        // iTXt chunk with XML:com.adobe.xmp
+        let mut itxt_data = Vec::new();
+        itxt_data.extend_from_slice(b"XML:com.adobe.xmp\0\0\0\0\0");
+        itxt_data.extend_from_slice(xmp_bytes);
+        append_png_chunk(&mut png, b"iTXt", &itxt_data);
+
+        // IEND chunk
+        append_png_chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    fn append_png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
+        let len = data.len() as u32;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(tag);
+        out.extend_from_slice(data);
+
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(tag);
+        hasher.update(data);
+        let checksum = hasher.finalize();
+        out.extend_from_slice(&checksum.to_be_bytes());
+    }
 }

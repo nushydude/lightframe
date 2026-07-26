@@ -137,11 +137,8 @@ branches. It builds the release executable, launches it with seeded window-posit
 fails if the app exits, never shows a main window, or records a fresh Windows crash event.
 
 Pull requests also run two dependency gates: OSV-Scanner `v2.3.8` checks `pnpm-lock.yaml`, and
-RustSec `audit-check@v2.0.0` checks `src-tauri/Cargo.lock`. Both fail on every non-exempt
-vulnerability. RustSec advisories `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` are temporarily
-exempt because the latest `little_exif` release pins the affected `quick-xml` line; issue #101 tracks
-its upgrade or replacement and the exception must be reviewed by 2026-10-15. Any future exception
-must likewise include a linked tracking issue, an applicability rationale, and a review-by date next
+RustSec `audit-check@v2.0.0` checks `src-tauri/Cargo.lock`. Both fail on any detected vulnerability.
+Any future exception must include a linked tracking issue, an applicability rationale, and a review-by date next
 to the ignore entry. Dependabot owns weekly updates for GitHub Actions, npm, and Cargo pins.
 The pnpm `esbuild` override keeps Vite 7 on the first patched `0.28.x` release; remove it only when
 Vite's declared range includes a non-vulnerable release and the OSV gate remains green.

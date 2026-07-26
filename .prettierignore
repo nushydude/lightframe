@@ -8,6 +8,7 @@ dist
 node_modules
 src-tauri/gen
 src-tauri/target
+src-tauri/vendor
 
 *.log
 *.tsbuildinfo
