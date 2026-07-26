@@ -115,6 +115,68 @@ fn read_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration>, Str
     Ok(normalize_metadata(parsed))
 }
 
+fn read_metadata_file_unquarantined(path: &Path) -> Result<HashMap<String, ImageCuration>, String> {
+    let content = fs::read_to_string(path).map_err(|error| {
+        format!("Failed to read curation metadata '{}': {}", path.display(), error)
+    })?;
+    let parsed =
+        serde_json::from_str::<HashMap<String, ImageCuration>>(&content).map_err(|error| {
+            format!("Failed to parse curation metadata '{}': {}", path.display(), error)
+        })?;
+    Ok(normalize_metadata(parsed))
+}
+
+fn parse_backup_sort_key(path: &Path) -> (u128, u64, std::time::SystemTime) {
+    let mtime = fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(std::time::UNIX_EPOCH);
+
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return (0, 0, mtime);
+    };
+
+    let Some((_, backup_suffix)) = [".lightframe-backup-", ".lightframe-replace-backup-"]
+        .into_iter()
+        .find_map(|marker| file_name.split_once(marker))
+    else {
+        return (0, 0, mtime);
+    };
+
+    let Some(version) = backup_suffix.strip_suffix(".json") else {
+        return (0, 0, mtime);
+    };
+
+    let Some((timestamp_str, attempt_str)) = version.rsplit_once('-') else {
+        return (0, 0, mtime);
+    };
+
+    let timestamp = timestamp_str.parse::<u128>().unwrap_or(0);
+    let attempt = attempt_str.parse::<u64>().unwrap_or(0);
+
+    (timestamp, attempt, mtime)
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_PROMOTION_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub fn set_inject_promotion_failure(fail: bool) {
+    INJECT_PROMOTION_FAILURE.with(|cell| cell.set(fail));
+}
+
+fn should_inject_promotion_failure() -> bool {
+    #[cfg(test)]
+    {
+        INJECT_PROMOTION_FAILURE.with(|cell| cell.get())
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration>, String> {
     if !path.exists() {
         return Ok(HashMap::new());
@@ -141,6 +203,58 @@ fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration
                 parse_error,
                 quarantine_path.display()
             );
+
+            if let Some(parent) = path.parent() {
+                if let Ok(entries) = fs::read_dir(parent) {
+                    let mut backups = Vec::new();
+                    for entry in entries.flatten() {
+                        let backup_path = entry.path();
+                        if let Some(destination) = staged_backup_destination(parent, &backup_path) {
+                            if destination.file_name() == path.file_name() {
+                                backups.push(backup_path);
+                            }
+                        }
+                    }
+                    backups.sort_by_key(|backup| parse_backup_sort_key(backup));
+                    while let Some(candidate_backup) = backups.pop() {
+                        match read_metadata_file_unquarantined(&candidate_backup) {
+                            Ok(parsed_backup) => {
+                                if should_inject_promotion_failure() {
+                                    return Err(format!(
+                                        "Failed to promote newest valid staged backup '{}' to '{}': Injected promotion failure",
+                                        candidate_backup.display(),
+                                        path.display()
+                                    ));
+                                }
+                                return fs::rename(&candidate_backup, path)
+                                    .map(|_| {
+                                        eprintln!(
+                                            "Recovered curation shard metadata from staged backup '{}'",
+                                            candidate_backup.display()
+                                        );
+                                        parsed_backup
+                                    })
+                                    .map_err(|rename_err| {
+                                        format!(
+                                            "Failed to promote newest valid staged backup '{}' to '{}': {}",
+                                            candidate_backup.display(),
+                                            path.display(),
+                                            rename_err
+                                        )
+                                    });
+                            }
+                            Err(parse_err) => {
+                                eprintln!(
+                                    "Skipping invalid/corrupt staged backup '{}' during auto-recovery: {}",
+                                    candidate_backup.display(),
+                                    parse_err
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             Ok(HashMap::new())
         }
     }
@@ -196,42 +310,63 @@ fn recover_staged_backups(config_dir: &Path) -> Result<(), String> {
         }
     }
 
+    let mut all_destinations_valid_or_restored = true;
+
     for (destination, mut backups) in backups_by_destination {
-        if !destination.exists() {
-            backups.sort_by_key(|path| {
-                fs::metadata(path)
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or(std::time::UNIX_EPOCH)
-            });
-            let Some(backup_path) = backups.pop() else {
-                continue;
-            };
-            fs::rename(&backup_path, &destination).map_err(|error| {
-                format!(
-                    "Failed to restore staged curation backup '{}' to '{}': {}",
+        let destination_valid =
+            destination.exists() && read_metadata_file_unquarantined(&destination).is_ok();
+        let mut restored_successfully = destination_valid;
+
+        if !destination_valid {
+            backups.sort_by_key(|path| parse_backup_sort_key(path));
+            while let Some(backup_path) = backups.pop() {
+                if read_metadata_file_unquarantined(&backup_path).is_err() {
+                    let quarantine_path = build_unique_sibling_path(&backup_path, "corrupt-backup")
+                        .unwrap_or_else(|_| backup_path.with_extension("corrupt"));
+                    let _ = fs::rename(&backup_path, &quarantine_path);
+                    eprintln!("Quarantined invalid staged backup '{}'.", backup_path.display());
+                    continue;
+                }
+
+                if destination.exists() {
+                    let quarantine_path = build_unique_sibling_path(&destination, "corrupt")?;
+                    let _ = fs::rename(&destination, &quarantine_path);
+                }
+
+                fs::rename(&backup_path, &destination).map_err(|error| {
+                    format!(
+                        "Failed to restore staged curation backup '{}' to '{}': {}",
+                        backup_path.display(),
+                        destination.display(),
+                        error
+                    )
+                })?;
+
+                eprintln!(
+                    "Restored staged curation backup '{}' to '{}'.",
                     backup_path.display(),
-                    destination.display(),
-                    error
-                )
-            })?;
-            eprintln!(
-                "Restored staged curation backup '{}' to '{}'.",
-                backup_path.display(),
-                destination.display()
-            );
+                    destination.display()
+                );
+                restored_successfully = true;
+                break;
+            }
         }
 
-        for stale_backup in backups {
-            fs::remove_file(&stale_backup).map_err(|error| {
-                format!(
-                    "Failed to remove stale curation backup '{}': {}",
-                    stale_backup.display(),
-                    error
-                )
-            })?;
+        if restored_successfully {
+            for remaining_backup in backups {
+                let _ = fs::remove_file(&remaining_backup);
+            }
+        } else {
+            all_destinations_valid_or_restored = false;
         }
     }
-    recovered_backup_stores().lock().unwrap_or_else(|error| error.into_inner()).insert(store_key);
+
+    if all_destinations_valid_or_restored {
+        recovered_backup_stores()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(store_key);
+    }
     Ok(())
 }
 
@@ -632,6 +767,30 @@ mod tests {
     }
 
     #[test]
+    fn read_curation_metadata_auto_recovers_staged_replace_backups() {
+        let dir = tempdir().unwrap();
+        let path = "C:/photos/cat.jpg";
+        let target_shard = shard_id(path);
+        let shard_file = shard_path(dir.path(), target_shard);
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+
+        let backup_path = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000000-0.json"
+        ));
+        let mut map = HashMap::new();
+        map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: true, rating: 5, updated_at: 100 },
+        );
+        fs::write(&backup_path, serde_json::to_string(&map).unwrap()).unwrap();
+        fs::write(&shard_file, "{corrupt-json-truncated").unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+        assert_eq!(metadata.get(path).map(|c| c.rating), Some(5));
+        assert!(shard_file.exists());
+    }
+
+    #[test]
     fn store_lock_rejects_a_second_independent_holder() {
         let dir = tempdir().unwrap();
         let held_lock = acquire_store_lock(dir.path()).unwrap();
@@ -725,5 +884,90 @@ mod tests {
                 edit_started.elapsed()
             );
         }
+    }
+
+    #[test]
+    fn read_curation_metadata_recovers_from_valid_older_backup_when_newest_is_malformed() {
+        let dir = tempdir().unwrap();
+        let path = "C:/photos/dog.jpg";
+        let target_shard = shard_id(path);
+        let shard_file = shard_path(dir.path(), target_shard);
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+
+        let newer_corrupt_backup = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000002-0.json"
+        ));
+        let older_valid_backup = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000001-0.json"
+        ));
+
+        fs::write(&newer_corrupt_backup, "{invalid-corrupt-json").unwrap();
+
+        let mut valid_map = HashMap::new();
+        valid_map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: true, rating: 4, updated_at: 50 },
+        );
+        fs::write(&older_valid_backup, serde_json::to_string(&valid_map).unwrap()).unwrap();
+        fs::write(&shard_file, "{corrupt-destination-shard").unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+        assert_eq!(metadata.get(path).map(|c| c.rating), Some(4));
+        assert!(shard_file.exists());
+    }
+
+    #[test]
+    fn read_shard_metadata_file_propagates_rename_failure_and_preserves_newest_backup() {
+        let dir = tempdir().unwrap();
+        let path = "C:/photos/cat.jpg";
+        let target_shard = shard_id(path);
+        let shard_file = shard_path(dir.path(), target_shard);
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+
+        let older_valid_backup = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000001-0.json"
+        ));
+        let newer_valid_backup = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000002-0.json"
+        ));
+
+        let mut older_map = HashMap::new();
+        older_map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: false, rating: 2, updated_at: 10 },
+        );
+        fs::write(&older_valid_backup, serde_json::to_string(&older_map).unwrap()).unwrap();
+
+        let mut newer_map = HashMap::new();
+        newer_map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: true, rating: 5, updated_at: 20 },
+        );
+        fs::write(&newer_valid_backup, serde_json::to_string(&newer_map).unwrap()).unwrap();
+
+        fs::write(&shard_file, "{corrupt-shard").unwrap();
+
+        // Inject promotion failure via test seam so fs::read_to_string(shard_file) succeeds and quarantines,
+        // read_metadata_file_unquarantined(newer_valid_backup) succeeds,
+        // and promotion operation is explicitly reached and fails.
+        set_inject_promotion_failure(true);
+
+        let recovery_result = read_shard_metadata_file(&shard_file);
+        assert!(recovery_result.is_err());
+        let err_msg = recovery_result.unwrap_err();
+        assert!(
+            err_msg.contains("Failed to promote newest valid staged backup"),
+            "Expected promotion error message, got: {err_msg}"
+        );
+        assert!(newer_valid_backup.exists());
+        assert!(older_valid_backup.exists());
+
+        // Clear test seam failure injection, recreate corrupt shard file, and verify retry promotion succeeds
+        set_inject_promotion_failure(false);
+        fs::write(&shard_file, "{corrupt-shard-retry").unwrap();
+
+        let recovered = read_shard_metadata_file(&shard_file).unwrap();
+        assert_eq!(recovered.get(path).map(|c| c.rating), Some(5));
+        assert!(!newer_valid_backup.exists());
     }
 }
