@@ -368,4 +368,40 @@ mod tests {
             SessionManager::canonicalize_path(&app).unwrap()
         );
     }
+
+    #[test]
+    fn test_capabilities_and_asset_scope_isolation() {
+        let tauri_conf_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let content = fs::read_to_string(&tauri_conf_path).expect("Read tauri.conf.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&content).expect("Parse tauri.conf.json");
+
+        let scope = json["app"]["security"]["assetProtocol"]["scope"]
+            .as_array()
+            .expect("assetProtocol.scope array");
+
+        let scope_strings: Vec<&str> = scope.iter().filter_map(|v| v.as_str()).collect();
+
+        // 1. Ensure global wildcard "**" is completely removed
+        assert!(
+            !scope_strings.contains(&"**"),
+            "assetProtocol.scope must not contain broad '**' wildcard"
+        );
+
+        // 2. Ensure permitted roots exist
+        assert!(scope_strings.contains(&"$APPCACHE/**/*"));
+        assert!(scope_strings.contains(&"$TEMP/**/*"));
+        assert!(scope_strings.contains(&"$APPDATA/**/*"));
+
+        // 3. Ensure capabilities main.json and projector.json exist
+        let capabilities_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        assert!(capabilities_dir.join("main.json").exists(), "main.json capability must exist");
+        assert!(
+            capabilities_dir.join("projector.json").exists(),
+            "projector.json capability must exist"
+        );
+        assert!(!capabilities_dir.join("default.json").exists(), "default.json should be removed");
+    }
 }
