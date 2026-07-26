@@ -61,10 +61,8 @@ paths when supported.
 
 ## Installation
 
-Windows builds are generated from tagged releases as draft GitHub releases. A maintainer still has
-to replace the draft's placeholder text with user-facing release notes, verify the installer and
-updater assets, and publish the draft. Download the latest Windows installer from the [Releases
-page](../../releases) only after that publication step.
+Windows builds are published from tagged releases as draft GitHub releases. Download the latest
+Windows installer from the [Releases page](../../releases) when a release has been published.
 
 Because LightFrame is a newer open-source Windows app, Windows SmartScreen may show a "Windows
 protected your PC" warning. Choose **More info** and then **Run anyway** if you trust the build.
@@ -153,16 +151,12 @@ The repository installs local git hooks with `pnpm install`. The pre-commit hook
 
 ## Release Channels
 
-Stable releases use source tags such as `v8.2.2`; the release workflow creates the corresponding
-`app-v8.2.2` GitHub release as a draft. The draft is not a complete release: its notes must be
-replaced with concise user-facing Markdown, its Windows installer and signed updater assets must be
-verified, and it must be published. The app's Stable update channel consumes only the `latest.json`
-manifest from GitHub's latest published stable release, never from a draft.
+Stable releases use tags such as `v8.2.2`. The release workflow creates a draft GitHub release and
+the app's Stable update channel reads GitHub's latest published stable updater manifest.
 
 Preview releases use semver prerelease tags such as `v8.3.0-beta.1`. They are created as prerelease
-drafts with matching `app-v8.3.0-beta.1` release tags. They follow the same notes, asset, and
-publication checks; when a maintainer publishes one, `.github/workflows/preview-channel.yml` copies
-its `latest.json` into the fixed `app-preview-channel` prerelease. Users who opt into Preview in
+drafts; when a maintainer publishes one, `.github/workflows/preview-channel.yml` copies its
+`latest.json` into the fixed `app-preview-channel` prerelease. Users who opt into Preview in
 Settings check that manifest instead of the stable `/latest` release.
 
 ## Project Structure

@@ -40,17 +40,6 @@ When the user asks to implement, fix, refactor, or build a task:
    recorded task state to remove the task worktree and fast-forward the primary checkout to
    `origin/main`.
 
-## Release completion guardrail
-
-Tag-driven release work is not complete when the build succeeds or when GitHub creates a draft
-release. Follow [`.agent/workflows/release.md`](.agent/workflows/release.md): prepare and merge the
-synchronized version on `main`, push the `v<version>` source tag, wait for the release workflow, and
-inspect the generated `app-v<version>` draft. Replace the workflow's placeholder body with concise,
-user-facing Markdown notes based on the merged PRs, verify the Windows installer/MSI, updater
-signatures, and `latest.json`, then publish the draft. Confirm the final public release URL, tag, and
-assets before reporting the release complete. A draft with placeholder-only notes, even with a green
-workflow, is still incomplete.
-
 ## Repository context
 
 - Read `.agent/ANTIGRAVITY.md` and the applicable files under `.agent/skills/` before editing.
