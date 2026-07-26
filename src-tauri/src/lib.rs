@@ -6,6 +6,7 @@ mod folder_index;
 mod folder_watcher;
 mod generated_cache_maintenance;
 mod image_metadata;
+pub mod image_resource_policy;
 mod native_codecs;
 mod path_normalization;
 mod thumbnails;

@@ -1051,6 +1051,13 @@ fn get_preview_image_blocking(
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Preview,
+    );
+    crate::image_resource_policy::validate_requested_output_dimension(max_dimension, &limits)
+        .map_err(|e| e.to_string())?;
+    crate::image_resource_policy::validate_file_size(path, &limits).map_err(|e| e.to_string())?;
+
     let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
     let preview_cache_dir = app_cache_dir.join("previews");
     thumbnails::get_or_create_preview(
@@ -1553,7 +1560,23 @@ pub async fn transfer_images_to_folder(
 
 /// Copy an image file to the OS clipboard
 fn copy_image_to_clipboard_blocking(file_path: String) -> Result<(), String> {
-    let img = image::open(&file_path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    let (width, height) = image::image_dimensions(path)
+        .map_err(|e| format!("Failed to read image dimensions: {}", e))?;
+
+    crate::image_resource_policy::validate_decode(
+        path,
+        width,
+        height,
+        crate::image_resource_policy::OperationClass::Clipboard,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let img = image::open(path).map_err(|e| format!("Failed to open image: {}", e))?;
     let rgba = img.into_rgba8();
     let (width, height) = rgba.dimensions();
     let image_data = arboard::ImageData {
@@ -1634,6 +1657,16 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
     let path = Path::new(&file_path);
     if !path.is_file() {
         return Err(format!("'{}' is not a valid file", file_path));
+    }
+
+    if let Ok((width, height)) = image::image_dimensions(path) {
+        crate::image_resource_policy::validate_decode(
+            path,
+            width,
+            height,
+            crate::image_resource_policy::OperationClass::Rotate,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     let extension =
@@ -2035,6 +2068,16 @@ fn save_cropped_copy_blocking(
         return Err("Output path already exists; choose a new file name".to_string());
     }
 
+    let (src_width, src_height) = image::image_dimensions(input_path)
+        .map_err(|e| format!("Failed to read image dimensions: {}", e))?;
+    crate::image_resource_policy::validate_decode(
+        input_path,
+        src_width,
+        src_height,
+        crate::image_resource_policy::OperationClass::Crop,
+    )
+    .map_err(|e| e.to_string())?;
+
     let img =
         image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
     let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
@@ -2075,6 +2118,16 @@ fn overwrite_with_crop_blocking(
         .and_then(|value| value.to_str())
         .map(|value| value.to_lowercase())
         .unwrap_or_default();
+
+    let (src_width, src_height) = image::image_dimensions(input_path)
+        .map_err(|e| format!("Failed to read image dimensions: {}", e))?;
+    crate::image_resource_policy::validate_decode(
+        input_path,
+        src_width,
+        src_height,
+        crate::image_resource_policy::OperationClass::Overwrite,
+    )
+    .map_err(|e| e.to_string())?;
 
     let img =
         image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
@@ -3383,6 +3436,33 @@ mod tests {
         let out_valid = dir.path().join("out_valid.png");
         let res_valid = restore_normal_orientation(&png_valid, &out_valid, "test");
         assert!(res_valid.is_ok());
+    }
+
+    #[test]
+    fn test_get_preview_image_rejects_out_of_bounds_max_dimension() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("test.jpg");
+        fs::write(&image_path, b"dummy").unwrap();
+
+        // 1. Zero max_dimension
+        let err_zero = get_preview_image_blocking(
+            image_path.to_string_lossy().to_string(),
+            0,
+            None,
+            dir.path().to_path_buf(),
+        )
+        .unwrap_err();
+        assert!(err_zero.contains("greater than zero"));
+
+        // 2. Excessive max_dimension (> 8192)
+        let err_huge = get_preview_image_blocking(
+            image_path.to_string_lossy().to_string(),
+            65_535,
+            None,
+            dir.path().to_path_buf(),
+        )
+        .unwrap_err();
+        assert!(err_huge.contains("exceeds limit"));
     }
 
     fn create_dummy_png_with_itxt_xmp(xmp_bytes: &[u8]) -> Vec<u8> {
