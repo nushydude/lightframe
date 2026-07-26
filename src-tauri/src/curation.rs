@@ -196,27 +196,32 @@ fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration
                     }
                     backups.sort_by_key(|backup| parse_backup_sort_key(backup));
                     while let Some(candidate_backup) = backups.pop() {
-                        if let Ok(parsed_backup) =
-                            read_metadata_file_unquarantined(&candidate_backup)
-                        {
-                            if fs::rename(&candidate_backup, path).is_ok() {
+                        match read_metadata_file_unquarantined(&candidate_backup) {
+                            Ok(parsed_backup) => {
+                                return fs::rename(&candidate_backup, path)
+                                    .map(|_| {
+                                        eprintln!(
+                                            "Recovered curation shard metadata from staged backup '{}'",
+                                            candidate_backup.display()
+                                        );
+                                        parsed_backup
+                                    })
+                                    .map_err(|rename_err| {
+                                        format!(
+                                            "Failed to promote newest valid staged backup '{}' to '{}': {}",
+                                            candidate_backup.display(),
+                                            path.display(),
+                                            rename_err
+                                        )
+                                    });
+                            }
+                            Err(parse_err) => {
                                 eprintln!(
-                                    "Recovered curation shard metadata from staged backup '{}'",
-                                    candidate_backup.display()
-                                );
-                                return Ok(parsed_backup);
-                            } else {
-                                eprintln!(
-                                    "Failed to move staged backup '{}' to '{}' during auto-recovery.",
+                                    "Skipping invalid/corrupt staged backup '{}' during auto-recovery: {}",
                                     candidate_backup.display(),
-                                    path.display()
+                                    parse_err
                                 );
                             }
-                        } else {
-                            eprintln!(
-                                "Skipping invalid/corrupt staged backup '{}' during auto-recovery.",
-                                candidate_backup.display()
-                            );
                         }
                     }
                 }
@@ -277,6 +282,8 @@ fn recover_staged_backups(config_dir: &Path) -> Result<(), String> {
         }
     }
 
+    let mut all_destinations_valid_or_restored = true;
+
     for (destination, mut backups) in backups_by_destination {
         let destination_valid =
             destination.exists() && read_metadata_file_unquarantined(&destination).is_ok();
@@ -298,15 +305,14 @@ fn recover_staged_backups(config_dir: &Path) -> Result<(), String> {
                     let _ = fs::rename(&destination, &quarantine_path);
                 }
 
-                if let Err(error) = fs::rename(&backup_path, &destination) {
-                    eprintln!(
+                fs::rename(&backup_path, &destination).map_err(|error| {
+                    format!(
                         "Failed to restore staged curation backup '{}' to '{}': {}",
                         backup_path.display(),
                         destination.display(),
                         error
-                    );
-                    continue;
-                }
+                    )
+                })?;
 
                 eprintln!(
                     "Restored staged curation backup '{}' to '{}'.",
@@ -322,9 +328,17 @@ fn recover_staged_backups(config_dir: &Path) -> Result<(), String> {
             for remaining_backup in backups {
                 let _ = fs::remove_file(&remaining_backup);
             }
+        } else {
+            all_destinations_valid_or_restored = false;
         }
     }
-    recovered_backup_stores().lock().unwrap_or_else(|error| error.into_inner()).insert(store_key);
+
+    if all_destinations_valid_or_restored {
+        recovered_backup_stores()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(store_key);
+    }
     Ok(())
 }
 
@@ -872,5 +886,55 @@ mod tests {
         let metadata = read_curation_metadata(dir.path()).unwrap();
         assert_eq!(metadata.get(path).map(|c| c.rating), Some(4));
         assert!(shard_file.exists());
+    }
+
+    #[test]
+    fn read_shard_metadata_file_propagates_rename_failure_and_preserves_newest_backup() {
+        let dir = tempdir().unwrap();
+        let path = "C:/photos/cat.jpg";
+        let target_shard = shard_id(path);
+        let shard_file = shard_path(dir.path(), target_shard);
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+
+        let older_valid_backup = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000001-0.json"
+        ));
+        let newer_valid_backup = store_directory(dir.path()).join(format!(
+            "{target_shard:02x}.lightframe-replace-backup-1700000000000000002-0.json"
+        ));
+
+        let mut older_map = HashMap::new();
+        older_map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: false, rating: 2, updated_at: 10 },
+        );
+        fs::write(&older_valid_backup, serde_json::to_string(&older_map).unwrap()).unwrap();
+
+        let mut newer_map = HashMap::new();
+        newer_map.insert(
+            path.to_string(),
+            ImageCuration { path: path.to_string(), favorite: true, rating: 5, updated_at: 20 },
+        );
+        fs::write(&newer_valid_backup, serde_json::to_string(&newer_map).unwrap()).unwrap();
+
+        fs::write(&shard_file, "{corrupt-shard").unwrap();
+
+        // Inject a rename error by making the target destination file read-only or an un-overwritable directory
+        fs::remove_file(&shard_file).unwrap();
+        fs::create_dir(&shard_file).unwrap();
+        fs::write(shard_file.join("blocking.txt"), "block").unwrap();
+
+        let recovery_result = read_shard_metadata_file(&shard_file);
+        assert!(recovery_result.is_err());
+        assert!(newer_valid_backup.exists());
+        assert!(older_valid_backup.exists());
+
+        // Now remove the blocking directory and replace with corrupt file to verify retry succeeds
+        fs::remove_dir_all(&shard_file).unwrap();
+        fs::write(&shard_file, "{corrupt-shard").unwrap();
+
+        let recovered = read_shard_metadata_file(&shard_file).unwrap();
+        assert_eq!(recovered.get(path).map(|c| c.rating), Some(5));
+        assert!(newer_valid_backup.exists() == false);
     }
 }
