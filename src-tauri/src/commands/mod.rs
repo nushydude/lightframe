@@ -1114,6 +1114,21 @@ pub async fn grant_external_editor(
 }
 
 #[tauri::command]
+pub async fn cancel_media_request(
+    executor: tauri::State<'_, crate::media_executor::MediaExecutor>,
+    request_id: String,
+) -> Result<bool, String> {
+    Ok(executor.cancel_request(&request_id))
+}
+
+#[tauri::command]
+pub async fn get_media_executor_telemetry(
+    executor: tauri::State<'_, crate::media_executor::MediaExecutor>,
+) -> Result<crate::media_executor::ExecutorTelemetry, String> {
+    Ok(executor.telemetry())
+}
+
+#[tauri::command]
 pub async fn get_preview_image_by_id(
     app: AppHandle,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,

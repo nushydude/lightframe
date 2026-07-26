@@ -89,6 +89,24 @@ export async function grantExternalEditor(applicationPath: string): Promise<stri
   return await invoke<string>('grant_external_editor', { applicationPath });
 }
 
+export interface ExecutorTelemetry {
+  queued_jobs: number;
+  running_jobs: number;
+  completed_jobs: number;
+  canceled_jobs: number;
+  coalesced_jobs: number;
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for bounded native media executor
+export async function cancelMediaRequest(requestId: string): Promise<boolean> {
+  return await invoke<boolean>('cancel_media_request', { requestId });
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for bounded native media executor
+export async function getMediaExecutorTelemetry(): Promise<ExecutorTelemetry> {
+  return await invoke<ExecutorTelemetry>('get_media_executor_telemetry');
+}
+
 interface GeneratedCacheBucket {
   scope: string;
   path: string;

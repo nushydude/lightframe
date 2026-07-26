@@ -8,6 +8,7 @@ mod folder_watcher;
 mod generated_cache_maintenance;
 mod image_metadata;
 pub mod image_resource_policy;
+pub mod media_executor;
 mod native_codecs;
 mod path_normalization;
 mod thumbnails;
@@ -62,6 +63,7 @@ pub fn run() {
     builder
         .manage(display_inhibition::DisplayInhibition::default())
         .manage(authority::SessionManager::new())
+        .manage(media_executor::MediaExecutor::default())
         .setup(|_| {
             windows_shortcuts::repair_lightframe_shortcuts_async();
             Ok(())
@@ -90,6 +92,8 @@ pub fn run() {
             commands::close_folder_session,
             commands::grant_destination,
             commands::grant_external_editor,
+            commands::cancel_media_request,
+            commands::get_media_executor_telemetry,
             commands::get_preview_image_by_id,
             commands::is_dir,
             commands::scan_folder,
