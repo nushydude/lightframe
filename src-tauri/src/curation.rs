@@ -156,6 +156,27 @@ fn parse_backup_sort_key(path: &Path) -> (u128, u64, std::time::SystemTime) {
     (timestamp, attempt, mtime)
 }
 
+#[cfg(test)]
+thread_local! {
+    static INJECT_PROMOTION_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub fn set_inject_promotion_failure(fail: bool) {
+    INJECT_PROMOTION_FAILURE.with(|cell| cell.set(fail));
+}
+
+fn should_inject_promotion_failure() -> bool {
+    #[cfg(test)]
+    {
+        INJECT_PROMOTION_FAILURE.with(|cell| cell.get())
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration>, String> {
     if !path.exists() {
         return Ok(HashMap::new());
@@ -198,6 +219,13 @@ fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration
                     while let Some(candidate_backup) = backups.pop() {
                         match read_metadata_file_unquarantined(&candidate_backup) {
                             Ok(parsed_backup) => {
+                                if should_inject_promotion_failure() {
+                                    return Err(format!(
+                                        "Failed to promote newest valid staged backup '{}' to '{}': Injected promotion failure",
+                                        candidate_backup.display(),
+                                        path.display()
+                                    ));
+                                }
                                 return fs::rename(&candidate_backup, path)
                                     .map(|_| {
                                         eprintln!(
@@ -919,22 +947,27 @@ mod tests {
 
         fs::write(&shard_file, "{corrupt-shard").unwrap();
 
-        // Inject a rename error by making the target destination file read-only or an un-overwritable directory
-        fs::remove_file(&shard_file).unwrap();
-        fs::create_dir(&shard_file).unwrap();
-        fs::write(shard_file.join("blocking.txt"), "block").unwrap();
+        // Inject promotion failure via test seam so fs::read_to_string(shard_file) succeeds and quarantines,
+        // read_metadata_file_unquarantined(newer_valid_backup) succeeds,
+        // and promotion operation is explicitly reached and fails.
+        set_inject_promotion_failure(true);
 
         let recovery_result = read_shard_metadata_file(&shard_file);
         assert!(recovery_result.is_err());
+        let err_msg = recovery_result.unwrap_err();
+        assert!(
+            err_msg.contains("Failed to promote newest valid staged backup"),
+            "Expected promotion error message, got: {err_msg}"
+        );
         assert!(newer_valid_backup.exists());
         assert!(older_valid_backup.exists());
 
-        // Now remove the blocking directory and replace with corrupt file to verify retry succeeds
-        fs::remove_dir_all(&shard_file).unwrap();
-        fs::write(&shard_file, "{corrupt-shard").unwrap();
+        // Clear test seam failure injection, recreate corrupt shard file, and verify retry promotion succeeds
+        set_inject_promotion_failure(false);
+        fs::write(&shard_file, "{corrupt-shard-retry").unwrap();
 
         let recovered = read_shard_metadata_file(&shard_file).unwrap();
         assert_eq!(recovered.get(path).map(|c| c.rating), Some(5));
-        assert!(newer_valid_backup.exists() == false);
+        assert!(!newer_valid_backup.exists());
     }
 }
