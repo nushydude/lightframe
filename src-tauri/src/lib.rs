@@ -1,4 +1,5 @@
 mod atomic_file;
+pub mod authority;
 mod commands;
 mod curation;
 mod display_inhibition;
@@ -60,6 +61,7 @@ pub fn run() {
 
     builder
         .manage(display_inhibition::DisplayInhibition::default())
+        .manage(authority::SessionManager::new())
         .setup(|_| {
             windows_shortcuts::repair_lightframe_shortcuts_async();
             Ok(())
@@ -83,6 +85,12 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::open_folder_session,
+            commands::open_file_session,
+            commands::close_folder_session,
+            commands::grant_destination,
+            commands::grant_external_editor,
+            commands::get_preview_image_by_id,
             commands::is_dir,
             commands::scan_folder,
             folder_watcher::watch_folder,

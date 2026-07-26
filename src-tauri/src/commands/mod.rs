@@ -1070,6 +1070,74 @@ fn get_preview_image_blocking(
 }
 
 #[tauri::command]
+pub async fn open_folder_session(
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    folder_path: String,
+) -> Result<crate::authority::FolderSessionSnapshot, String> {
+    let path = Path::new(&folder_path);
+    session_manager.open_folder_session(path)
+}
+
+#[tauri::command]
+pub async fn open_file_session(
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    file_path: String,
+) -> Result<crate::authority::FolderSessionSnapshot, String> {
+    let path = Path::new(&file_path);
+    session_manager.open_file_session(path)
+}
+
+#[tauri::command]
+pub async fn close_folder_session(
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    session_id: String,
+) -> Result<(), String> {
+    session_manager.close_session(&session_id)
+}
+
+#[tauri::command]
+pub async fn grant_destination(
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    folder_path: String,
+) -> Result<String, String> {
+    let path = Path::new(&folder_path);
+    session_manager.grant_destination(path)
+}
+
+#[tauri::command]
+pub async fn grant_external_editor(
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    application_path: String,
+) -> Result<String, String> {
+    let path = Path::new(&application_path);
+    session_manager.grant_external_editor(path)
+}
+
+#[tauri::command]
+pub async fn get_preview_image_by_id(
+    app: AppHandle,
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    session_id: String,
+    image_id: String,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let resolved_path = session_manager.resolve_image_path(&session_id, &image_id)?;
+    let app_cache_dir =
+        app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        get_preview_image_blocking(
+            resolved_path.to_string_lossy().to_string(),
+            max_dimension,
+            invalidation_bust,
+            app_cache_dir,
+        )
+    })
+    .await
+    .map_err(|err| format!("Preview image worker failed: {}", err))?
+}
+
+#[tauri::command]
 pub async fn get_preview_image(
     app: AppHandle,
     file_path: String,

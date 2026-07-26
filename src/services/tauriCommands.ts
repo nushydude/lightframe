@@ -48,6 +48,47 @@ export interface GeneratedImageAsset {
   file_size_bytes?: number | null;
 }
 
+export interface AuthorizedImageRecord {
+  id: string;
+  path: string;
+  file_name: string;
+  extension: string;
+  size_bytes: number;
+  modified_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface FolderSessionSnapshot {
+  session_id: string;
+  canonical_folder: string;
+  images: AuthorizedImageRecord[];
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+export async function openFolderSession(folderPath: string): Promise<FolderSessionSnapshot> {
+  return await invoke<FolderSessionSnapshot>('open_folder_session', { folderPath });
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+export async function openFileSession(filePath: string): Promise<FolderSessionSnapshot> {
+  return await invoke<FolderSessionSnapshot>('open_file_session', { filePath });
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+export async function closeFolderSession(sessionId: string): Promise<void> {
+  await invoke('close_folder_session', { sessionId });
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+export async function grantDestination(folderPath: string): Promise<string> {
+  return await invoke<string>('grant_destination', { folderPath });
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+export async function grantExternalEditor(applicationPath: string): Promise<string> {
+  return await invoke<string>('grant_external_editor', { applicationPath });
+}
+
 interface GeneratedCacheBucket {
   scope: string;
   path: string;
