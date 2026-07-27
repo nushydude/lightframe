@@ -36,9 +36,14 @@ export function useProjectorSyncLifecycle({
           state.setCurrentIndex(nextIndex, { zoomMode: 'fit' });
           return;
         }
-        void openImage(event.payload.imagePath);
+
+        // Only open image if it belongs to current active folder session
+        if (state.folderPath && event.payload.imagePath.startsWith(state.folderPath)) {
+          void openImage(event.payload.imagePath);
+        }
       }
     );
+
     requestStateSync().catch((error) => console.error('Failed to request projector state:', error));
 
     return () => {

@@ -49,6 +49,19 @@ impl Default for CancellationToken {
     }
 }
 
+struct WorkerScopeGuard {
+    executor: MediaExecutor,
+    request_id: String,
+    start_time: std::time::Instant,
+}
+
+impl Drop for WorkerScopeGuard {
+    fn drop(&mut self) {
+        let duration_ms = self.start_time.elapsed().as_millis() as u64;
+        self.executor.on_worker_exit(&self.request_id, std::thread::panicking(), duration_ms);
+    }
+}
+
 pub struct ScheduledJob {
     pub request_id: String,
     pub priority: PriorityClass,
@@ -66,6 +79,7 @@ pub struct MediaExecutorInner {
     pub completed_jobs: u64,
     pub canceled_jobs: u64,
     pub coalesced_jobs: u64,
+    pub total_execution_ms: u64,
 }
 
 #[derive(Clone)]
@@ -85,6 +99,7 @@ impl MediaExecutor {
                 completed_jobs: 0,
                 canceled_jobs: 0,
                 coalesced_jobs: 0,
+                total_execution_ms: 0,
             })),
         }
     }
@@ -104,14 +119,10 @@ impl MediaExecutor {
         let token_clone = token.clone();
         let cancel_tok = CancellationToken { canceled: token.clone() };
 
-        let executor_self = self.clone();
-        let req_id_clone = request_id.clone();
-
         let job_wrapper = Box::new(move || {
             if !cancel_tok.is_canceled() {
                 let _ = work(&cancel_tok);
             }
-            executor_self.on_job_finished(&req_id_clone, cancel_tok.is_canceled());
         });
 
         let mut inner = self.inner.lock().unwrap();
@@ -173,21 +184,31 @@ impl MediaExecutor {
             }
 
             inner.running_count += 1;
+            let executor_clone = self.clone();
+            let req_id = job.request_id.clone();
             thread::spawn(move || {
-                (job.work)();
+                let _guard = WorkerScopeGuard {
+                    executor: executor_clone,
+                    request_id: req_id,
+                    start_time: std::time::Instant::now(),
+                };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    (job.work)();
+                }));
             });
         }
     }
 
-    fn on_job_finished(&self, request_id: &str, was_canceled: bool) {
+    fn on_worker_exit(&self, request_id: &str, is_panic: bool, duration_ms: u64) {
         let mut inner = self.inner.lock().unwrap();
         if inner.running_count > 0 {
             inner.running_count -= 1;
         }
-        if was_canceled {
-            inner.canceled_jobs += 1;
-        } else {
+        if !is_panic {
             inner.completed_jobs += 1;
+            inner.total_execution_ms += duration_ms;
+        } else {
+            inner.canceled_jobs += 1;
         }
 
         inner.cancellation_map.remove(request_id);

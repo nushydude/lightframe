@@ -992,14 +992,25 @@ fn restore_normal_orientation(
         .unwrap_or_default();
 
     if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        if source_path != output_path && !output_path.exists() {
+            let _ = fs::copy(source_path, output_path);
+        }
         return Ok(());
     }
 
     if let Ok(mut metadata) = Metadata::new_from_path(source_path) {
         metadata.set_tag(ExifTag::Orientation(vec![1]));
-        metadata
-            .write_to_file(output_path)
-            .map_err(|e| format!("Failed to write image metadata after {}: {}", context, e))?;
+        if let Err(e) = metadata.write_to_file(output_path) {
+            if source_path != output_path && !output_path.exists() {
+                fs::copy(source_path, output_path)
+                    .map_err(|e| format!("Failed to copy output file after {}: {}", context, e))?;
+            } else {
+                return Err(format!("Failed to write image metadata after {}: {}", context, e));
+            }
+        }
+    } else if source_path != output_path && !output_path.exists() {
+        fs::copy(source_path, output_path)
+            .map_err(|e| format!("Failed to copy output file after {}: {}", context, e))?;
     }
 
     Ok(())
@@ -1087,6 +1098,16 @@ pub async fn open_file_session(
     session_manager.open_file_session(path)
 }
 
+pub fn enforce_main_window(window: &tauri::Window) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err(format!(
+            "Window '{}' is not authorized to execute privileged or destructive commands",
+            window.label()
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn close_folder_session(
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
@@ -1097,18 +1118,22 @@ pub async fn close_folder_session(
 
 #[tauri::command]
 pub async fn grant_destination(
+    window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     folder_path: String,
 ) -> Result<String, String> {
+    enforce_main_window(&window)?;
     let path = Path::new(&folder_path);
     session_manager.grant_destination(path)
 }
 
 #[tauri::command]
 pub async fn grant_external_editor(
+    window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     application_path: String,
 ) -> Result<String, String> {
+    enforce_main_window(&window)?;
     let path = Path::new(&application_path);
     session_manager.grant_external_editor(path)
 }
@@ -1132,6 +1157,7 @@ pub async fn get_media_executor_telemetry(
 pub async fn get_preview_image_by_id(
     app: AppHandle,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    executor: tauri::State<'_, crate::media_executor::MediaExecutor>,
     session_id: String,
     image_id: String,
     max_dimension: u32,
@@ -1140,32 +1166,62 @@ pub async fn get_preview_image_by_id(
     let resolved_path = session_manager.resolve_image_path(&session_id, &image_id)?;
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        get_preview_image_blocking(
-            resolved_path.to_string_lossy().to_string(),
-            max_dimension,
-            invalidation_bust,
-            app_cache_dir,
-        )
-    })
-    .await
-    .map_err(|err| format!("Preview image worker failed: {}", err))?
+    let path_str = resolved_path.to_string_lossy().to_string();
+    let req_id = format!("preview_{}_{}", image_id, max_dimension);
+    let dedup_key = format!("preview_{}_{}_{:?}", path_str, max_dimension, invalidation_bust);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    executor.spawn(
+        req_id,
+        crate::media_executor::PriorityClass::InteractivePreview,
+        Some(dedup_key),
+        move |_cancel_tok| {
+            let res = get_preview_image_blocking(
+                path_str,
+                max_dimension,
+                invalidation_bust,
+                app_cache_dir,
+            );
+            let _ = tx.send(res);
+            Ok::<(), String>(())
+        },
+    );
+
+    rx.recv().map_err(|_| "Media executor worker dropped".to_string())?
 }
 
 #[tauri::command]
 pub async fn get_preview_image(
     app: AppHandle,
+    executor: tauri::State<'_, crate::media_executor::MediaExecutor>,
     file_path: String,
     max_dimension: u32,
     invalidation_bust: Option<u64>,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        get_preview_image_blocking(file_path, max_dimension, invalidation_bust, app_cache_dir)
-    })
-    .await
-    .map_err(|err| format!("Preview image worker failed: {}", err))?
+    let req_id = format!("preview_{}_{}", file_path, max_dimension);
+    let dedup_key = format!("preview_{}_{}_{:?}", file_path, max_dimension, invalidation_bust);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path_clone = file_path.clone();
+    executor.spawn(
+        req_id,
+        crate::media_executor::PriorityClass::InteractivePreview,
+        Some(dedup_key),
+        move |_cancel_tok| {
+            let res = get_preview_image_blocking(
+                path_clone,
+                max_dimension,
+                invalidation_bust,
+                app_cache_dir,
+            );
+            let _ = tx.send(res);
+            Ok::<(), String>(())
+        },
+    );
+
+    rx.recv().map_err(|_| "Media executor worker dropped".to_string())?
 }
 
 fn get_image_tile_blocking(
@@ -1742,15 +1798,22 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
-    if let Ok((width, height)) = image::image_dimensions(path) {
-        crate::image_resource_policy::validate_decode(
-            path,
-            width,
-            height,
-            crate::image_resource_policy::OperationClass::Rotate,
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Rotate,
+    );
+    crate::image_resource_policy::validate_file_size(path, &limits).map_err(|e| e.to_string())?;
+
+    let (width, height) = image::image_dimensions(path).map_err(|e| {
+        format!("Failed to inspect image dimensions for rotation validation: {}", e)
+    })?;
+
+    crate::image_resource_policy::validate_decode(
+        path,
+        width,
+        height,
+        crate::image_resource_policy::OperationClass::Rotate,
+    )
+    .map_err(|e| e.to_string())?;
 
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
@@ -1779,7 +1842,12 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
 
 /// Rotate an image file on disk and save it
 #[tauri::command]
-pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Result<(), String> {
+pub async fn save_rotated_image(
+    window: tauri::Window,
+    file_path: String,
+    rotation_degrees: i32,
+) -> Result<(), String> {
+    enforce_main_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
         save_rotated_image_blocking(file_path, rotation_degrees)
     })
@@ -3475,7 +3543,13 @@ mod tests {
     fn test_metadata_xmp_resilience_crafted_payloads() {
         let dir = tempfile::tempdir().unwrap();
 
-        // 1. Start element with many unique attributes
+        // Create a base image with valid image data and EXIF payload
+        let base_image_path = dir.path().join("base.png");
+        image::RgbImage::from_pixel(10, 10, image::Rgb([255, 0, 0]))
+            .save(&base_image_path)
+            .unwrap();
+
+        // 1. Start element with 500 unique attributes
         let mut many_attrs = String::from(
             "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description ",
         );
@@ -3489,6 +3563,7 @@ mod tests {
         let out_many_attrs = dir.path().join("out_many_attrs.png");
         let res = restore_normal_orientation(&png_many_attrs, &out_many_attrs, "test");
         assert!(res.is_ok());
+        assert!(out_many_attrs.exists());
 
         // 2. Excessive namespace declarations
         let mut excessive_ns = String::from("<x:xmpmeta ");
@@ -3502,6 +3577,7 @@ mod tests {
         let out_ns = dir.path().join("out_ns.png");
         let res_ns = restore_normal_orientation(&png_ns, &out_ns, "test");
         assert!(res_ns.is_ok());
+        assert!(out_ns.exists());
 
         // 3. Malformed/truncated XMP
         let truncated_xmp =
@@ -3511,14 +3587,21 @@ mod tests {
         let out_trunc = dir.path().join("out_trunc.png");
         let res_trunc = restore_normal_orientation(&png_trunc, &out_trunc, "test");
         assert!(res_trunc.is_ok());
+        assert!(out_trunc.exists());
 
-        // 4. Valid XMP packet with non-EXIF content
+        // 4. Valid XMP packet with custom title - assert XMP is preserved in output
         let valid_xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description custom:Title=\"TestImage\"/></rdf:RDF></x:xmpmeta>";
         let png_valid = dir.path().join("valid.png");
         fs::write(&png_valid, create_dummy_png_with_itxt_xmp(valid_xmp)).unwrap();
         let out_valid = dir.path().join("out_valid.png");
         let res_valid = restore_normal_orientation(&png_valid, &out_valid, "test");
         assert!(res_valid.is_ok());
+        assert!(out_valid.exists());
+        let written_bytes = fs::read(&out_valid).unwrap();
+        assert!(
+            written_bytes.windows(b"TestImage".len()).any(|w| w == b"TestImage"),
+            "XMP content 'TestImage' must be preserved in output image"
+        );
     }
 
     #[test]

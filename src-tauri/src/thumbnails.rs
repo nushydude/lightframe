@@ -671,7 +671,27 @@ fn build_versioned_cache_key(
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Thumbnail,
+    );
+    if let Err(policy_err) = crate::image_resource_policy::validate_file_size(file_path, &limits) {
+        return Err(image::ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            policy_err.to_string(),
+        )));
+    }
+
     let img = decode_image_with_orientation(file_path)?;
+    let (width, height) = img.dimensions();
+    if let Err(policy_err) =
+        crate::image_resource_policy::validate_dimensions(width, height, &limits)
+    {
+        return Err(image::ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            policy_err.to_string(),
+        )));
+    }
+
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
 
     let mut buffer = std::io::Cursor::new(Vec::new());

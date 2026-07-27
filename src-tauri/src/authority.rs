@@ -282,9 +282,19 @@ pub fn is_path_contained_in(child: &Path, parent: &Path) -> bool {
 
     #[cfg(windows)]
     {
-        let child_str = norm_child.to_string_lossy().to_lowercase();
-        let parent_str = norm_parent.to_string_lossy().to_lowercase();
-        child_str.starts_with(&parent_str)
+        let child_components: Vec<_> = norm_child.components().collect();
+        let parent_components: Vec<_> = norm_parent.components().collect();
+        if child_components.len() < parent_components.len() {
+            return false;
+        }
+        for (c, p) in child_components.iter().zip(parent_components.iter()) {
+            let c_str = c.as_os_str().to_string_lossy().to_lowercase();
+            let p_str = p.as_os_str().to_string_lossy().to_lowercase();
+            if c_str != p_str {
+                return false;
+            }
+        }
+        true
     }
 
     #[cfg(not(windows))]
@@ -389,10 +399,10 @@ mod tests {
             "assetProtocol.scope must not contain broad '**' wildcard"
         );
 
-        // 2. Ensure permitted roots exist
-        assert!(scope_strings.contains(&"$APPCACHE/**/*"));
-        assert!(scope_strings.contains(&"$TEMP/**/*"));
-        assert!(scope_strings.contains(&"$APPDATA/**/*"));
+        // 2. Ensure permitted roots are strictly narrowed
+        assert!(scope_strings.contains(&"$APPCACHE/lightframe/**/*"));
+        assert!(scope_strings.contains(&"$TEMP/lightframe-generated-assets/**/*"));
+        assert!(scope_strings.contains(&"$APPDATA/lightframe/**/*"));
 
         // 3. Ensure capabilities main.json and projector.json exist
         let capabilities_dir =
@@ -403,5 +413,15 @@ mod tests {
             "projector.json capability must exist"
         );
         assert!(!capabilities_dir.join("default.json").exists(), "default.json should be removed");
+    }
+
+    #[test]
+    fn test_path_containment_prevents_prefix_collisions() {
+        let parent = Path::new(r"C:\photos");
+        let valid_child = Path::new(r"C:\photos\vacation\img1.jpg");
+        let invalid_prefix_collision = Path::new(r"C:\photos-private\secret.jpg");
+
+        assert!(is_path_contained_in(valid_child, parent));
+        assert!(!is_path_contained_in(invalid_prefix_collision, parent));
     }
 }

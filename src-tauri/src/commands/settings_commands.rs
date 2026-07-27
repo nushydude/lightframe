@@ -44,7 +44,12 @@ pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
 
 /// Write application settings
 #[tauri::command]
-pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+pub async fn write_settings(
+    window: tauri::Window,
+    app: AppHandle,
+    settings: AppSettings,
+) -> Result<(), String> {
+    super::enforce_main_window(&window)?;
     let _lock = lock_settings_io()?;
     thumbnails::set_tile_source_cache_limit(
         thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),

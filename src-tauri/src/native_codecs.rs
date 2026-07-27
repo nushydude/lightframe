@@ -641,6 +641,20 @@ mod platform {
             return Err("Windows native tile region must be greater than zero".to_string());
         }
 
+        let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+            crate::image_resource_policy::OperationClass::Tile,
+        );
+        crate::image_resource_policy::validate_dimensions(region.width, region.height, &limits)
+            .map_err(|e| e.to_string())?;
+        crate::image_resource_policy::validate_memory_footprint(
+            region.width,
+            region.height,
+            4,
+            2,
+            &limits,
+        )
+        .map_err(|e| e.to_string())?;
+
         let (source_width, source_height) = bitmap_source_size(source)?;
         if region.x >= source_width || region.y >= source_height {
             return Err("Windows native tile region is outside the source image".to_string());
