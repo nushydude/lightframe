@@ -220,6 +220,8 @@ export function ContactSheet({
     preloadThumbnails(
       visibleResults.map(({ image }) => ({
         path: image.path,
+        sessionId: image.sessionId,
+        imageId: image.id,
         sizeBytes: image.size_bytes,
         modifiedAt: image.modified_at,
       })),
@@ -366,7 +368,11 @@ export function ContactSheet({
 
     const result = await transferImagesToDestination(targetPaths, destination, mode);
     if (mode === 'move') {
-      const movedPaths = new Set(result.successes.map((success) => success.sourcePath));
+      const movedPaths = new Set(
+        result.successes
+          .filter((success) => success.sourceRemoved !== false)
+          .map((success) => success.sourcePath)
+      );
       removeMovedImages([...movedPaths]);
       setSelectedPaths((current) => current.filter((path) => !movedPaths.has(path)));
     }
@@ -1009,6 +1015,8 @@ export function ContactSheet({
               const isActive = image.path === currentImagePath && currentResultIndex >= 0;
               const url = getCachedThumbnail({
                 path: image.path,
+                sessionId: image.sessionId,
+                imageId: image.id,
                 sizeBytes: image.size_bytes,
                 modifiedAt: image.modified_at,
               });

@@ -1,4 +1,5 @@
 import type { ImageFile } from '../types/image';
+import { pathIdentityKey } from './pathIdentity';
 
 export interface ContactSheetSearchResult {
   image: ImageFile;
@@ -6,7 +7,7 @@ export interface ContactSheetSearchResult {
 }
 
 export function normalizeContactSheetPath(path: string): string {
-  return path.replace(/\\/g, '/').toLowerCase();
+  return pathIdentityKey(path);
 }
 
 export function buildContactSheetResultIndex(

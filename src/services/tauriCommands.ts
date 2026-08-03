@@ -1,20 +1,25 @@
 import { convertFileSrc as tauriConvertFileSrc, invoke } from '@tauri-apps/api/core';
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import {
   availableMonitors,
   currentMonitor,
+  getCurrentWindow,
   PhysicalPosition,
   PhysicalSize,
   type Monitor,
 } from '@tauri-apps/api/window';
-import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import type { ImageFile, ImageMetadata } from '../types/image';
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
-import { settingsFromRust, settingsToRust } from '../types/settings';
+import { DEFAULT_SETTINGS, settingsFromRust, settingsToRust } from '../types/settings';
 import { projectorWindowTitle } from './windowTitle';
-
+import {
+  configurePathCaseSemanticsForRoot,
+  pathIdentityKey,
+  type PathCaseSemantics,
+} from './pathIdentity';
 export interface ExifData {
   make?: string;
   model?: string;
@@ -60,33 +65,437 @@ export interface AuthorizedImageRecord {
 
 export interface FolderSessionSnapshot {
   session_id: string;
+  session_instance_id?: string;
   canonical_folder: string;
+  path_case_semantics?: PathCaseSemantics;
   images: AuthorizedImageRecord[];
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+export interface FileSessionSnapshot {
+  session_id: string;
+  session_instance_id?: string;
+  requested_image_id: string;
+  canonical_folder: string;
+  path_case_semantics?: PathCaseSemantics;
+  images: AuthorizedImageRecord[];
+}
+
+export type StartupSessionSelection =
+  | { mode: 'empty' }
+  | { mode: 'folder'; session: FolderSessionSnapshot }
+  | { mode: 'image'; session: FileSessionSnapshot };
+
+class SessionCoordinator {
+  private activeSessionId: string | null = null;
+  private currentGeneration = 0;
+  private winningGeneration = 0;
+  private folderSessions = new Map<
+    string,
+    { generation: number; session: FolderSessionSnapshot }
+  >();
+  private pendingFolderOpens = new Map<string, Promise<FolderSessionSnapshot>>();
+  private activeSessionImages = new Map<string, { sessionId: string; imageId: string }>();
+  private projectorGrantOnly = false;
+
+  public getActiveSessionId(): string | null {
+    return this.activeSessionId;
+  }
+
+  public allocateRequestGeneration(): number {
+    return ++this.currentGeneration;
+  }
+
+  private folderKey(folderPath: string): string {
+    return pathIdentityKey(folderPath);
+  }
+
+  public getSessionForFolder(folderPath: string): FolderSessionSnapshot | null {
+    return this.folderSessions.get(this.folderKey(folderPath))?.session ?? null;
+  }
+
+  public openFolder(
+    folderPath: string,
+    opener: () => Promise<FolderSessionSnapshot>
+  ): Promise<FolderSessionSnapshot> {
+    const requestedKey = this.folderKey(folderPath);
+    const pending = this.pendingFolderOpens.get(requestedKey);
+    if (pending) return pending;
+
+    const requestGen = this.allocateRequestGeneration();
+    const promise = opener()
+      .then((session) => {
+        const accepted = this.acceptSession(requestGen, session);
+        if (!accepted) {
+          throw new Error(
+            `Folder session request for '${folderPath}' was superseded by a newer request`
+          );
+        }
+        this.folderSessions.set(requestedKey, { generation: requestGen, session: accepted });
+        return accepted;
+      })
+      .finally(() => {
+        if (this.pendingFolderOpens.get(requestedKey) === promise) {
+          this.pendingFolderOpens.delete(requestedKey);
+        }
+      });
+    this.pendingFolderOpens.set(requestedKey, promise);
+    return promise;
+  }
+
+  public acceptSession(
+    requestGen: number,
+    session: FolderSessionSnapshot | null | undefined
+  ): FolderSessionSnapshot | null {
+    if (!session || !session.session_id) {
+      return null;
+    }
+
+    if (requestGen < this.winningGeneration) {
+      this.closeSessionUnlessActive(session);
+      return null;
+    }
+
+    this.winningGeneration = requestGen;
+    this.projectorGrantOnly = false;
+    if (session.path_case_semantics) {
+      configurePathCaseSemanticsForRoot(session.canonical_folder, session.path_case_semantics);
+    }
+    const key = this.folderKey(session.canonical_folder || '');
+    this.closeReplacedSessions(key, session.session_id);
+
+    this.activeSessionId = session.session_id;
+    this.folderSessions.set(key, { generation: requestGen, session });
+    this.indexSessionImages(session);
+
+    return session;
+  }
+
+  private closeSessionUnlessActive(session: FolderSessionSnapshot): void {
+    if (session.session_id !== this.activeSessionId) {
+      this.requestSessionClose(session);
+    }
+  }
+
+  private closeReplacedSessions(folderKey: string, sessionId: string): void {
+    const folderSession = this.folderSessions.get(folderKey)?.session;
+    if (folderSession && folderSession.session_id !== sessionId) {
+      this.requestSessionClose(folderSession);
+    }
+    if (this.activeSessionId && this.activeSessionId !== sessionId) {
+      const activeSession = this.findSession(this.activeSessionId);
+      if (activeSession) this.requestSessionClose(activeSession);
+    }
+  }
+
+  private findSession(sessionId: string): FolderSessionSnapshot | null {
+    for (const { session } of this.folderSessions.values()) {
+      if (session.session_id === sessionId) return session;
+    }
+    return null;
+  }
+
+  private requestSessionClose(session: FolderSessionSnapshot): void {
+    if (!session.session_instance_id) return;
+    void invoke('close_folder_session', {
+      sessionId: session.session_id,
+      sessionInstanceId: session.session_instance_id,
+    }).catch(() => {});
+  }
+
+  public getSessionInstanceId(sessionId: string): string | null {
+    return this.findSession(sessionId)?.session_instance_id ?? null;
+  }
+
+  public refreshSessionImages(sessionId: string, images: ImageFile[]): void {
+    const session = this.findSession(sessionId);
+    if (!session) return;
+    session.images = images.flatMap((image) =>
+      image.id
+        ? [
+            {
+              id: image.id,
+              path: image.path,
+              file_name: image.file_name,
+              extension: image.extension,
+              size_bytes: image.size_bytes,
+              modified_at: image.modified_at,
+              created_at: image.created_at,
+            },
+          ]
+        : []
+    );
+    if (this.activeSessionId === sessionId) this.indexSessionImages(session);
+  }
+
+  private indexSessionImages(session: FolderSessionSnapshot): void {
+    this.activeSessionImages.clear();
+    for (const image of session.images ?? []) {
+      if (!image?.path || !image.id) continue;
+      this.activeSessionImages.set(pathIdentityKey(image.path), {
+        sessionId: session.session_id,
+        imageId: image.id,
+      });
+    }
+  }
+
+  public getActiveSessionForPath(filePath: string): { sessionId: string; imageId: string } | null {
+    if (!filePath) return null;
+    const key = pathIdentityKey(filePath);
+    const entry = this.activeSessionImages.get(key);
+    if (entry && entry.sessionId === this.activeSessionId) {
+      return entry;
+    }
+    return null;
+  }
+
+  /** Adopt the backend-issued, single-image projector grant without opening or closing sessions. */
+  public adoptProjectorGrant(sessionId: string, image: { id?: string; path: string }): void {
+    this.projectorGrantOnly = true;
+    this.activeSessionId = sessionId;
+    this.activeSessionImages.clear();
+    if (sessionId && image.id && image.path) {
+      this.activeSessionImages.set(pathIdentityKey(image.path), {
+        sessionId,
+        imageId: image.id,
+      });
+    }
+  }
+
+  public isProjectorGrantOnly(): boolean {
+    return this.projectorGrantOnly;
+  }
+
+  public clearProjectorGrant(): void {
+    this.activeSessionId = null;
+    this.activeSessionImages.clear();
+    this.folderSessions.clear();
+    this.pendingFolderOpens.clear();
+    this.projectorGrantOnly = false;
+    this.winningGeneration = ++this.currentGeneration;
+  }
+
+  public clearActiveSession(sessionId: string): void {
+    if (this.activeSessionId === sessionId) {
+      this.activeSessionId = null;
+    }
+  }
+
+  public reset(): void {
+    if (this.activeSessionId) {
+      const previousSession = this.findSession(this.activeSessionId);
+      this.activeSessionId = null;
+      if (previousSession) this.requestSessionClose(previousSession);
+    }
+    this.winningGeneration = ++this.currentGeneration;
+    this.folderSessions.clear();
+    this.pendingFolderOpens.clear();
+    this.activeSessionImages.clear();
+    this.projectorGrantOnly = false;
+  }
+}
+
+export const sessionCoordinator = new SessionCoordinator();
+
+export function getActiveSessionForPath(
+  filePath: string
+): { sessionId: string; imageId: string } | null {
+  return sessionCoordinator.getActiveSessionForPath(filePath);
+}
+
+export function adoptProjectorGrant(sessionId: string, image: { id?: string; path: string }): void {
+  sessionCoordinator.adoptProjectorGrant(sessionId, image);
+}
+
+export function isProjectorGrantOnlySession(): boolean {
+  return sessionCoordinator.isProjectorGrantOnly();
+}
+
+export function clearAdoptedProjectorGrant(): void {
+  sessionCoordinator.clearProjectorGrant();
+}
+
 export async function openFolderSession(folderPath: string): Promise<FolderSessionSnapshot> {
-  return await invoke<FolderSessionSnapshot>('open_folder_session', { folderPath });
+  const existing = sessionCoordinator.getSessionForFolder(folderPath);
+  if (!existing) {
+    throw new Error(`No trusted native selection grant exists for folder '${folderPath}'`);
+  }
+  return existing;
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
-export async function openFileSession(filePath: string): Promise<FolderSessionSnapshot> {
-  return await invoke<FolderSessionSnapshot>('open_file_session', { filePath });
+export async function openRecentFolderSession(folderPath: string): Promise<FolderSessionSnapshot> {
+  const gen = sessionCoordinator.allocateRequestGeneration();
+  const session = await invoke<FolderSessionSnapshot>('open_recent_folder_session', { folderPath });
+  const accepted = sessionCoordinator.acceptSession(gen, session);
+  if (!accepted) throw new Error('Recent-folder session was superseded by a newer request');
+  return accepted;
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
+async function openFileSession(filePath: string): Promise<FileSessionSnapshot> {
+  const existingImage = sessionCoordinator.getActiveSessionForPath(filePath);
+  const existingFolder = sessionCoordinator.getSessionForFolder(getParentDirectory(filePath));
+  if (existingImage && existingFolder && existingImage.sessionId === existingFolder.session_id) {
+    return {
+      session_id: existingFolder.session_id,
+      session_instance_id: existingFolder.session_instance_id,
+      requested_image_id: existingImage.imageId,
+      canonical_folder: existingFolder.canonical_folder,
+      path_case_semantics: existingFolder.path_case_semantics,
+      images: existingFolder.images,
+    };
+  }
+  throw new Error(`No trusted native selection grant exists for file '${filePath}'`);
+}
+
+export async function selectFolderSession(): Promise<FolderSessionSnapshot | null> {
+  const gen = sessionCoordinator.allocateRequestGeneration();
+  const session = await invoke<FolderSessionSnapshot | null>('select_folder_session');
+  if (!session) return null;
+  const accepted = sessionCoordinator.acceptSession(gen, session);
+  if (!accepted) throw new Error('Folder selection was superseded by a newer request');
+  return accepted;
+}
+
+export async function consumeStartupSession(): Promise<StartupSessionSelection> {
+  const gen = sessionCoordinator.allocateRequestGeneration();
+  const selection = await invoke<StartupSessionSelection>('consume_startup_session');
+  if (selection.mode === 'empty') return selection;
+  const session = selection.session;
+  const accepted = sessionCoordinator.acceptSession(gen, {
+    session_id: session.session_id,
+    session_instance_id: session.session_instance_id,
+    canonical_folder: session.canonical_folder,
+    path_case_semantics: session.path_case_semantics,
+    images: session.images,
+  });
+  if (!accepted) throw new Error('Startup session was superseded by a newer request');
+  return selection;
+}
+
+export function adoptNativeSessionSelection(
+  selection: Exclude<StartupSessionSelection, { mode: 'empty' }>
+): StartupSessionSelection {
+  const session = selection.session;
+  const accepted = sessionCoordinator.acceptSession(
+    sessionCoordinator.allocateRequestGeneration(),
+    {
+      session_id: session.session_id,
+      session_instance_id: session.session_instance_id,
+      canonical_folder: session.canonical_folder,
+      path_case_semantics: session.path_case_semantics,
+      images: session.images,
+    }
+  );
+  if (!accepted) throw new Error('Native session selection was superseded by a newer request');
+  return selection;
+}
+
+export async function selectFileSession(): Promise<FileSessionSnapshot | null> {
+  const gen = sessionCoordinator.allocateRequestGeneration();
+  const session = await invoke<FileSessionSnapshot | null>('select_file_session');
+  if (!session) return null;
+  const accepted = sessionCoordinator.acceptSession(gen, {
+    session_id: session.session_id,
+    session_instance_id: session.session_instance_id,
+    canonical_folder: session.canonical_folder,
+    path_case_semantics: session.path_case_semantics,
+    images: session.images,
+  });
+  if (!accepted) {
+    throw new Error('File selection was superseded by a newer request');
+  }
+  return session;
+}
+
 export async function closeFolderSession(sessionId: string): Promise<void> {
-  await invoke('close_folder_session', { sessionId });
+  const sessionInstanceId = sessionCoordinator.getSessionInstanceId(sessionId);
+  if (!sessionInstanceId) return;
+  sessionCoordinator.clearActiveSession(sessionId);
+  await invoke('close_folder_session', { sessionId, sessionInstanceId });
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
-export async function grantDestination(folderPath: string): Promise<string> {
-  return await invoke<string>('grant_destination', { folderPath });
+export interface NativeDestinationSelection {
+  destinationGrantId: string;
+  relativeFileName: string;
+  selectedPath: string;
+  pathCaseSemantics?: PathCaseSemantics;
+}
+const destinationGrantsByFolder = new Map<string, string>();
+const externalEditorGrantsByPath = new Map<string, string>();
+
+function normalizedAuthorityPath(path: string): string {
+  return pathIdentityKey(path);
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for folder session path authority
-export async function grantExternalEditor(applicationPath: string): Promise<string> {
-  return await invoke<string>('grant_external_editor', { applicationPath });
+export async function selectDestination(
+  suggestedFileName: string | undefined,
+  operation: 'diagnostics' | 'crop-copy' | 'scale-copy'
+): Promise<NativeDestinationSelection | null> {
+  const selection = await invoke<NativeDestinationSelection | null>('select_destination', {
+    suggestedFileName,
+    operation,
+  });
+  if (selection) {
+    if (selection.pathCaseSemantics) {
+      configurePathCaseSemanticsForRoot(
+        getParentDirectory(selection.selectedPath),
+        selection.pathCaseSemantics
+      );
+    }
+    destinationGrantsByFolder.set(
+      normalizedAuthorityPath(getParentDirectory(selection.selectedPath)),
+      selection.destinationGrantId
+    );
+  }
+  return selection;
+}
+
+export interface NativeDestinationFolderSelection {
+  destinationGrantId: string;
+  selectedPath: string;
+  pathCaseSemantics?: PathCaseSemantics;
+}
+
+export async function selectDestinationFolder(): Promise<NativeDestinationFolderSelection | null> {
+  const selection = await invoke<NativeDestinationFolderSelection | null>(
+    'select_destination_folder'
+  );
+  if (selection) {
+    if (selection.pathCaseSemantics) {
+      configurePathCaseSemanticsForRoot(selection.selectedPath, selection.pathCaseSemantics);
+    }
+    destinationGrantsByFolder.set(
+      normalizedAuthorityPath(selection.selectedPath),
+      selection.destinationGrantId
+    );
+  }
+  return selection;
+}
+
+function requireDestinationGrant(folderPath: string): string {
+  const grant = destinationGrantsByFolder.get(normalizedAuthorityPath(folderPath));
+  if (!grant) throw new Error('Destination requires a trusted native selection');
+  return grant;
+}
+
+export interface NativeExternalEditorSelection {
+  editorGrantId: string;
+  selectedPath: string;
+  pathCaseSemantics: PathCaseSemantics;
+}
+
+export async function selectExternalEditor(): Promise<NativeExternalEditorSelection | null> {
+  const selection = await invoke<NativeExternalEditorSelection | null>('select_external_editor');
+  if (selection) {
+    configurePathCaseSemanticsForRoot(
+      getParentDirectory(selection.selectedPath),
+      selection.pathCaseSemantics
+    );
+    externalEditorGrantsByPath.set(
+      normalizedAuthorityPath(selection.selectedPath),
+      selection.editorGrantId
+    );
+  }
+  return selection;
 }
 
 export interface ExecutorTelemetry {
@@ -97,12 +506,10 @@ export interface ExecutorTelemetry {
   coalesced_jobs: number;
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for bounded native media executor
 export async function cancelMediaRequest(requestId: string): Promise<boolean> {
   return await invoke<boolean>('cancel_media_request', { requestId });
 }
 
-// fallow-ignore-next-line unused-export -- established IPC facade for bounded native media executor
 export async function getMediaExecutorTelemetry(): Promise<ExecutorTelemetry> {
   return await invoke<ExecutorTelemetry>('get_media_executor_telemetry');
 }
@@ -175,14 +582,20 @@ export interface ImageCurationUpdate {
   rating: number;
 }
 
-interface ImageTransferSuccess {
+export interface ImageTransferSuccess {
   sourcePath: string;
   targetPath: string;
+  warning?: string;
+  sourceRemoved?: boolean;
+  committed: boolean;
 }
 
 interface ImageTransferFailure {
   sourcePath: string;
   error: string;
+  committed: boolean;
+  sourceRemoved: boolean;
+  warning?: string;
 }
 
 interface ImageTransferResult {
@@ -200,7 +613,9 @@ export interface FolderWatcherChange {
 }
 
 export interface FolderWatcherPayload {
+  sessionId: string;
   folderPath: string;
+  images: ImageFile[];
   changes: FolderWatcherChange[];
   requiresFullRefresh: boolean;
 }
@@ -218,63 +633,94 @@ export async function releaseSlideshowDisplayInhibition(): Promise<void> {
 }
 
 /** Refresh the Windows taskbar Jump List with recent folders. */
-export async function updateRecentFoldersJumpList(
-  recentFolders: Array<{ path: string; label: string; openedAt: number }>
-): Promise<string[]> {
-  return invoke<string[]>('update_recent_folders_jump_list', {
-    recentFolders: recentFolders.map((folder) => ({
-      path: folder.path,
-      label: folder.label,
-      opened_at: folder.openedAt,
-    })),
-  });
+export async function updateRecentFoldersJumpList(): Promise<string[]> {
+  return invoke<string[]>('update_recent_folders_jump_list');
 }
 
-/** Check if a path is a directory */
-export async function isDirectory(path: string): Promise<boolean> {
-  return invoke<boolean>('is_dir', { path });
+// fallow-ignore-next-line unused-export -- session-based IPC helper
+export async function watchFolderBySession(sessionId: string, watchId: string): Promise<void> {
+  return invoke('watch_folder_by_session', { sessionId, watchId });
 }
 
-/** Watch a folder and emit debounced change payloads */
 export async function watchFolder(folderPath: string, watchId: string): Promise<void> {
-  return invoke('watch_folder', { folderPath, watchId });
+  const session = await openFolderSession(folderPath);
+  return watchFolderBySession(session.session_id, watchId);
 }
 
-/** Stop watching the active folder */
+// fallow-ignore-next-line unused-export -- session-based IPC helper
+export async function unwatchFolderBySession(watchId?: string): Promise<void> {
+  return invoke('unwatch_folder_by_session', { watchId });
+}
+
 export async function unwatchFolder(watchId?: string): Promise<void> {
-  return invoke('unwatch_folder', { watchId });
+  return unwatchFolderBySession(watchId);
 }
 
 /** Listen for debounced active-folder watcher updates */
 export async function listenToFolderWatcherChanges(
   onChange: (payload: FolderWatcherPayload) => void
 ): Promise<UnlistenFn> {
-  return listen<FolderWatcherPayload>(FOLDER_WATCHER_EVENT, (event) => onChange(event.payload));
+  return listen<FolderWatcherPayload>(FOLDER_WATCHER_EVENT, (event) => {
+    sessionCoordinator.refreshSessionImages(event.payload.sessionId, event.payload.images);
+    onChange(event.payload);
+  });
 }
 
-/** Scan a folder for supported image files, returned in natural sort order */
+/** Scan a folder for supported image files */
 export async function scanFolder(folderPath: string): Promise<ImageFile[]> {
-  return invoke<ImageFile[]>('scan_folder', { folderPath });
+  const session = sessionCoordinator.getSessionForFolder(folderPath);
+  if (!session) {
+    throw new Error(`No trusted native selection grant exists for folder '${folderPath}'`);
+  }
+  return readFolderIndexBySession(session.session_id);
 }
 
-/** Read cached folder contents from the persistent folder index */
+// fallow-ignore-next-line unused-export -- session-based IPC helper
+export async function readFolderIndexBySession(sessionId: string): Promise<ImageFile[]> {
+  const records = await invoke<ImageFile[] | null>('read_folder_index_by_session', { sessionId });
+  const images = records ?? [];
+  sessionCoordinator.refreshSessionImages(sessionId, images);
+  return images;
+}
+
 export async function readFolderIndex(folderPath: string): Promise<ImageFile[]> {
-  return invoke<ImageFile[]>('read_folder_index', { folderPath });
+  const session =
+    sessionCoordinator.getSessionForFolder(folderPath) ?? (await openFolderSession(folderPath));
+  return readFolderIndexBySession(session.session_id);
 }
 
-/** Refresh a folder from disk and update the persistent folder index */
 export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[]> {
-  return invoke<ImageFile[]>('refresh_folder_index', { folderPath });
+  return readFolderIndex(folderPath);
 }
 
 /** Get metadata (dimensions, format, file size) for an image */
-export async function getImageMetadata(filePath: string): Promise<ImageMetadata> {
-  return invoke<ImageMetadata>('get_image_metadata', { filePath });
+export async function getImageMetadata(
+  filePath: string,
+  requestId?: string
+): Promise<ImageMetadata> {
+  const sessionInfo = getActiveSessionForPath(filePath);
+  if (sessionInfo) {
+    return getImageMetadataById(sessionInfo.sessionId, sessionInfo.imageId, requestId);
+  }
+  const session = await openFileSession(filePath);
+  return getImageMetadataById(session.session_id, session.requested_image_id, requestId);
 }
 
-/** Read a same-basename LoRA caption sidecar (`.txt`, then `.caption`) when present. */
+// fallow-ignore-next-line unused-export -- session-based IPC helper
+export async function getImageCaptionById(
+  sessionId: string,
+  imageId: string
+): Promise<ImageCaption | null> {
+  return invoke<ImageCaption | null>('get_image_caption_by_id', { sessionId, imageId });
+}
+
 export async function getImageCaption(filePath: string): Promise<ImageCaption | null> {
-  return invoke<ImageCaption | null>('get_image_caption', { filePath });
+  const sessionInfo = getActiveSessionForPath(filePath);
+  if (sessionInfo) {
+    return getImageCaptionById(sessionInfo.sessionId, sessionInfo.imageId);
+  }
+  const session = await openFileSession(filePath);
+  return getImageCaptionById(session.session_id, session.requested_image_id);
 }
 
 /** Read codec and generated-cache diagnostics */
@@ -295,39 +741,146 @@ export async function retryNativeCodecs(): Promise<number> {
 }
 
 /** Generate a downscaled preview image and return a cached file-backed asset */
-export async function getPreviewImage(
-  filePath: string,
+export async function getImageMetadataById(
+  sessionId: string,
+  imageId: string,
+  requestId?: string
+): Promise<ImageMetadata> {
+  return invoke<ImageMetadata>('get_image_metadata_by_id', { sessionId, imageId, requestId });
+}
+
+export async function getPreviewImageById(
+  sessionId: string,
+  imageId: string,
   maxDimension: number,
-  invalidationBust?: number
+  invalidationBust?: number,
+  requestId?: string
 ): Promise<GeneratedImageAsset> {
-  return invoke<GeneratedImageAsset>('get_preview_image', {
-    filePath,
+  return invoke<GeneratedImageAsset>('get_preview_image_by_id', {
+    sessionId,
+    imageId,
     maxDimension,
     invalidationBust,
+    requestId,
   });
 }
 
-/** Generate a cached native-resolution viewport tile for a large image */
-export async function getImageTile(
-  filePath: string,
+export async function getThumbnailById(
+  sessionId: string,
+  imageId: string,
+  sizeBytes?: number,
+  modifiedAt?: string,
+  requestId?: string
+): Promise<GeneratedImageAsset> {
+  return invoke<GeneratedImageAsset>('get_thumbnail_by_id', {
+    sessionId,
+    imageId,
+    sizeBytes,
+    modifiedAt,
+    requestId,
+  });
+}
+
+export async function getImageTileById(
+  sessionId: string,
+  imageId: string,
   sourceWidth: number,
   sourceHeight: number,
   tileSize: number,
   tileX: number,
-  tileY: number
+  tileY: number,
+  requestId?: string
 ): Promise<GeneratedImageAsset> {
-  return invoke<GeneratedImageAsset>('get_image_tile', {
-    filePath,
+  return invoke<GeneratedImageAsset>('get_image_tile_by_id', {
+    sessionId,
+    imageId,
     sourceWidth,
     sourceHeight,
     tileSize,
     tileX,
     tileY,
+    requestId,
   });
+}
+
+/** Get session-aware custom protocol asset URL for full-resolution rendering */
+export async function getSessionAssetUrl(sessionId: string, imageId: string): Promise<string> {
+  const deliveryId = await invoke<string>('create_asset_delivery', { sessionId, imageId });
+  return `lightframe-asset://${sessionId}/${imageId}?deliveryId=${deliveryId}`;
+}
+
+interface AssetDeliveryClose {
+  closed: boolean;
+  responseIds: string[];
+}
+
+const finalizedAssetDeliveries = new Set<string>();
+const finalizingAssetDeliveries = new Map<string, Promise<boolean>>();
+const acknowledgedAssetResponses = new Set<string>();
+const MAX_FINALIZED_ASSET_CAPABILITIES = 2_048;
+
+function rememberBounded(set: Set<string>, value: string): void {
+  set.add(value);
+  if (set.size <= MAX_FINALIZED_ASSET_CAPABILITIES) return;
+  const oldest = set.values().next().value;
+  if (oldest) set.delete(oldest);
+}
+
+async function finalizeSessionAssetDelivery(url: string): Promise<boolean> {
+  let deliveryId: string | null = null;
+  try {
+    deliveryId = new URL(url).searchParams.get('deliveryId');
+    if (!deliveryId || finalizedAssetDeliveries.has(deliveryId)) return false;
+    const current = finalizingAssetDeliveries.get(deliveryId);
+    if (current) return current;
+
+    const finalization = (async () => {
+      const closed = await invoke<AssetDeliveryClose>('release_asset_delivery', { deliveryId });
+      if (!closed.closed) return false;
+      for (const responseId of closed.responseIds) {
+        const capability = `${deliveryId}:${responseId}`;
+        if (acknowledgedAssetResponses.has(capability)) continue;
+        const acknowledged = await invoke<boolean>('acknowledge_asset_delivery_responses', {
+          deliveryId,
+          responseId,
+        });
+        if (acknowledged) rememberBounded(acknowledgedAssetResponses, capability);
+      }
+      rememberBounded(finalizedAssetDeliveries, deliveryId);
+      return true;
+    })();
+    finalizingAssetDeliveries.set(deliveryId, finalization);
+    try {
+      return await finalization;
+    } finally {
+      finalizingAssetDeliveries.delete(deliveryId);
+    }
+  } catch {
+    if (deliveryId) finalizingAssetDeliveries.delete(deliveryId);
+    return false;
+  }
+}
+
+export async function releaseSessionAssetDelivery(url: string): Promise<boolean> {
+  return finalizeSessionAssetDelivery(url);
+}
+
+export async function acknowledgeSessionAssetDeliveryResponses(url: string): Promise<boolean> {
+  return finalizeSessionAssetDelivery(url);
 }
 
 /** Read persisted application settings */
 export async function readSettings(): Promise<AppSettings> {
+  if (getCurrentWindow().label === 'secondary') {
+    const safe = await invoke<{ theme: string; performanceMode: string }>(
+      'read_projector_settings'
+    );
+    return settingsFromRust({
+      ...settingsToRust(DEFAULT_SETTINGS),
+      theme: safe.theme,
+      performance_mode: safe.performanceMode,
+    });
+  }
   const raw = await invoke<Record<string, unknown>>('read_settings');
   return settingsFromRust(raw);
 }
@@ -339,88 +892,480 @@ export async function writeSettings(settings: AppSettings): Promise<void> {
 
 /** Save a diagnostics snapshot JSON file */
 export async function saveDiagnosticsSnapshot(path: string, content: string): Promise<void> {
-  return invoke('save_diagnostics_snapshot', { path, content });
+  const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  const folder = lastSlash >= 0 ? path.slice(0, lastSlash) : '.';
+  const fileName = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
+  const destinationGrantId = requireDestinationGrant(folder);
+  return invoke('save_diagnostics_snapshot', {
+    destinationGrantId,
+    relativeFileName: fileName,
+    content,
+  });
 }
 
-/** Read persisted curation metadata (favorite + rating) for scanned images */
-export async function readCurationMetadata(): Promise<Record<string, ImageCuration>> {
-  return invoke<Record<string, ImageCuration>>('read_curation_metadata');
+export async function readCurationMetadataById(
+  sessionId: string,
+  imageId: string
+): Promise<ImageCuration | null> {
+  return invoke<ImageCuration | null>('read_curation_metadata_by_id', { sessionId, imageId });
 }
 
-/** Read curation metadata only for the supplied active-folder or startup paths. */
+export async function readCurationMetadataForIds(
+  sessionId: string,
+  imageIds: string[]
+): Promise<Record<string, ImageCuration>> {
+  return invoke<Record<string, ImageCuration>>('read_curation_metadata_for_ids', {
+    sessionId,
+    imageIds,
+  });
+}
+
+export async function writeImageCurationById(
+  sessionId: string,
+  imageId: string,
+  favorite: boolean,
+  rating: number
+): Promise<void> {
+  return invoke('write_image_curation_by_id', { sessionId, imageId, favorite, rating });
+}
+
+export interface ImageCurationUpdateById {
+  imageId: string;
+  favorite: boolean;
+  rating: number;
+}
+
+export async function writeImageCurationBatchById(
+  sessionId: string,
+  updates: ImageCurationUpdateById[]
+): Promise<void> {
+  if (updates.length === 0) {
+    return;
+  }
+  return invoke('write_image_curation_batch_by_id', { sessionId, updates });
+}
+
+export async function clearImageCurationById(sessionId: string, imageId: string): Promise<void> {
+  return invoke('clear_image_curation_by_id', { sessionId, imageId });
+}
+
+export interface TrashCommitOutcome {
+  committed: boolean;
+  warning?: string;
+}
+
+export async function trashImageById(
+  sessionId: string,
+  imageId: string
+): Promise<TrashCommitOutcome> {
+  return invoke('trash_image_by_id', { sessionId, imageId });
+}
+
+export async function copyImageById(
+  sessionId: string,
+  imageId: string,
+  destinationGrantId: string
+): Promise<string> {
+  return invoke<string>('copy_image_by_id', { sessionId, imageId, destinationGrantId });
+}
+
+export async function moveImageById(
+  sessionId: string,
+  imageId: string,
+  destinationGrantId: string
+): Promise<ImageTransferSuccess> {
+  return invoke<ImageTransferSuccess>('move_image_by_id', {
+    sessionId,
+    imageId,
+    destinationGrantId,
+  });
+}
+
+export async function transferImagesById(
+  sessionId: string,
+  imageIds: string[],
+  destinationGrantId: string,
+  mode: 'copy' | 'move'
+): Promise<ImageTransferResult> {
+  return invoke<ImageTransferResult>('transfer_images_by_id', {
+    sessionId,
+    imageIds,
+    destinationGrantId,
+    mode,
+  });
+}
+
+export async function copyImageByIdToClipboard(sessionId: string, imageId: string): Promise<void> {
+  return invoke('copy_image_by_id_to_clipboard', { sessionId, imageId });
+}
+
+export async function launchExternalEditorById(
+  sessionId: string,
+  imageId: string,
+  editorGrantId: string
+): Promise<void> {
+  return invoke('launch_external_editor_by_id', { sessionId, imageId, editorGrantId });
+}
+
+export async function getExifMetadataById(sessionId: string, imageId: string): Promise<ExifData> {
+  return invoke<ExifData>('get_exif_metadata_by_id', { sessionId, imageId });
+}
+
+export async function rotateImageById(
+  sessionId: string,
+  imageId: string,
+  rotationDegrees: number,
+  requestId?: string
+): Promise<void> {
+  return invoke('rotate_image_by_id', { sessionId, imageId, rotationDegrees, requestId });
+}
+
+export async function saveCroppedCopyById(
+  sessionId: string,
+  imageId: string,
+  cropRect: CropRect,
+  destinationGrantId: string,
+  relativeFileName: string,
+  rotationDegrees?: number,
+  requestId?: string
+): Promise<void> {
+  return invoke('save_cropped_copy_by_id', {
+    sessionId,
+    imageId,
+    cropRect,
+    destinationGrantId,
+    relativeFileName,
+    rotationDegrees,
+    requestId,
+  });
+}
+
+export async function saveScaledCopyById(
+  sessionId: string,
+  imageId: string,
+  destinationGrantId: string,
+  relativeFileName: string,
+  width: number,
+  height: number,
+  smoothing: number,
+  sharpening: number,
+  requestId?: string
+): Promise<void> {
+  return invoke('save_scaled_copy_by_id', {
+    sessionId,
+    imageId,
+    destinationGrantId,
+    relativeFileName,
+    width,
+    height,
+    smoothing,
+    sharpening,
+    requestId,
+  });
+}
+
+export async function overwriteWithCropById(
+  sessionId: string,
+  imageId: string,
+  cropRect: CropRect,
+  rotationDegrees?: number,
+  requestId?: string
+): Promise<void> {
+  return invoke('overwrite_with_crop_by_id', {
+    sessionId,
+    imageId,
+    cropRect,
+    rotationDegrees,
+    requestId,
+  });
+}
+
+// fallow-ignore-next-line unused-export -- established helper facade
+export function getParentDirectory(filePath: string): string {
+  const parts = filePath.replace(/\\/g, '/').split('/');
+  parts.pop();
+  return parts.join('/') || '.';
+}
+
+export async function getPreviewImage(
+  filePath: string,
+  maxDimension: number,
+  invalidationBust?: number,
+  requestId?: string
+): Promise<GeneratedImageAsset> {
+  const sessionInfo = getActiveSessionForPath(filePath);
+  if (sessionInfo) {
+    return getPreviewImageById(
+      sessionInfo.sessionId,
+      sessionInfo.imageId,
+      maxDimension,
+      invalidationBust,
+      requestId
+    );
+  }
+  const session = await openFileSession(filePath);
+  return getPreviewImageById(
+    session.session_id,
+    session.requested_image_id,
+    maxDimension,
+    invalidationBust,
+    requestId
+  );
+}
+
+export async function getThumbnail(
+  filePath: string,
+  sizeBytes?: number,
+  modifiedAt?: string,
+  requestId?: string
+): Promise<GeneratedImageAsset> {
+  const sessionInfo = getActiveSessionForPath(filePath);
+  if (sessionInfo) {
+    return getThumbnailById(
+      sessionInfo.sessionId,
+      sessionInfo.imageId,
+      sizeBytes,
+      modifiedAt,
+      requestId
+    );
+  }
+  const session = await openFileSession(filePath);
+  return getThumbnailById(
+    session.session_id,
+    session.requested_image_id,
+    sizeBytes,
+    modifiedAt,
+    requestId
+  );
+}
+
+export async function readCurationMetadata(
+  filePath?: string
+): Promise<Record<string, ImageCuration>> {
+  if (!filePath) {
+    return {};
+  }
+  const sessionInfo = getActiveSessionForPath(filePath);
+  if (sessionInfo) {
+    const curation = await readCurationMetadataById(sessionInfo.sessionId, sessionInfo.imageId);
+    return curation ? { [filePath]: curation } : {};
+  }
+  const session = await openFileSession(filePath);
+  const curation = await readCurationMetadataById(session.session_id, session.requested_image_id);
+  return curation ? { [filePath]: curation } : {};
+}
+
+async function resolveSessionAndImageIdsForPaths(
+  paths: string[]
+): Promise<{ sessionId: string; imageIds: string[] }> {
+  const session = await openFileSession(paths[0]!);
+  const pathToId = new Map<string, string>();
+  for (const img of session.images) {
+    pathToId.set(pathIdentityKey(img.path), img.id);
+  }
+
+  const imageIds: string[] = [];
+  for (const path of paths) {
+    const key = pathIdentityKey(path);
+    const imageId = pathToId.get(key);
+    if (!imageId) {
+      throw new Error(
+        `Requested path '${path}' is not authorized in session '${session.session_id}'`
+      );
+    }
+    imageIds.push(imageId);
+  }
+  return { sessionId: session.session_id, imageIds };
+}
+
 export async function readCurationMetadataForPaths(
   filePaths: string[]
 ): Promise<Record<string, ImageCuration>> {
-  return invoke<Record<string, ImageCuration>>('read_curation_metadata_for_paths', { filePaths });
+  if (filePaths.length === 0) {
+    return {};
+  }
+  const byFolder = new Map<string, string[]>();
+  for (const path of filePaths) {
+    const parent = getParentDirectory(path);
+    const existing = byFolder.get(parent) ?? [];
+    existing.push(path);
+    byFolder.set(parent, existing);
+  }
+
+  const combined: Record<string, ImageCuration> = {};
+  for (const paths of byFolder.values()) {
+    const { sessionId, imageIds } = await resolveSessionAndImageIdsForPaths(paths);
+    const res = await readCurationMetadataForIds(sessionId, imageIds);
+    Object.assign(combined, res);
+  }
+  return combined;
 }
 
-/** Write favorite/rating metadata for a single image path */
 export async function writeImageCuration(
   filePath: string,
   favorite: boolean,
   rating: number
 ): Promise<void> {
-  return invoke('write_image_curation', { filePath, favorite, rating });
+  const session = await openFileSession(filePath);
+  return writeImageCurationById(session.session_id, session.requested_image_id, favorite, rating);
 }
 
-/** Write favorite/rating metadata for multiple image paths in one backend pass */
 export async function writeImageCurationBatch(updates: ImageCurationUpdate[]): Promise<void> {
   if (updates.length === 0) {
     return;
   }
+  const byFolder = new Map<string, ImageCurationUpdate[]>();
+  for (const u of updates) {
+    const parent = getParentDirectory(u.filePath);
+    const existing = byFolder.get(parent) ?? [];
+    existing.push(u);
+    byFolder.set(parent, existing);
+  }
 
-  return invoke('write_image_curation_batch', { updates });
+  for (const group of byFolder.values()) {
+    const session = await openFileSession(group[0]!.filePath);
+    const pathToId = new Map<string, string>();
+    for (const img of session.images) {
+      pathToId.set(pathIdentityKey(img.path), img.id);
+    }
+
+    const byIdUpdates: { imageId: string; favorite: boolean; rating: number }[] = [];
+    for (const u of group) {
+      const key = pathIdentityKey(u.filePath);
+      const imageId = pathToId.get(key);
+      if (!imageId) {
+        throw new Error(
+          `Requested path '${u.filePath}' is not authorized in session '${session.session_id}'`
+        );
+      }
+      byIdUpdates.push({
+        imageId,
+        favorite: u.favorite,
+        rating: u.rating,
+      });
+    }
+    await writeImageCurationBatchById(session.session_id, byIdUpdates);
+  }
 }
 
-/** Remove curation metadata for a single image path */
 export async function clearImageCuration(filePath: string): Promise<void> {
-  return invoke('clear_image_curation', { filePath });
+  const session = await openFileSession(filePath);
+  return clearImageCurationById(session.session_id, session.requested_image_id);
 }
 
-/** Move a file to the OS trash / recycle bin */
 export async function moveToTrash(filePath: string): Promise<void> {
-  return invoke('move_to_trash', { filePath });
+  const session = await openFileSession(filePath);
+  await trashImageById(session.session_id, session.requested_image_id);
 }
 
-/** Copy or move multiple image files into a destination folder in one backend task */
+export async function copyImageToClipboard(filePath: string): Promise<void> {
+  const session = await openFileSession(filePath);
+  return copyImageByIdToClipboard(session.session_id, session.requested_image_id);
+}
+
+// fallow-ignore-next-line unused-export -- established IPC facade
+export async function launchExternalEditor(
+  filePath: string,
+  applicationPath: string
+): Promise<void> {
+  const session = await openFileSession(filePath);
+  const editorGrantId = externalEditorGrantsByPath.get(normalizedAuthorityPath(applicationPath));
+  if (!editorGrantId) throw new Error('External editor requires a trusted native selection');
+  return launchExternalEditorById(session.session_id, session.requested_image_id, editorGrantId);
+}
+
+export async function openInExternalApplication(
+  filePath: string,
+  applicationPath: string
+): Promise<void> {
+  return launchExternalEditor(filePath, applicationPath);
+}
+
 export async function transferImagesToFolder(
   filePaths: string[],
   destinationFolder: string,
   mode: 'copy' | 'move'
 ): Promise<ImageTransferResult> {
-  return invoke<ImageTransferResult>('transfer_images_to_folder', {
-    filePaths,
-    destinationFolder,
-    mode,
-  });
+  if (filePaths.length === 0) {
+    return { successes: [], failures: [] };
+  }
+  const destGrantId = requireDestinationGrant(destinationFolder);
+
+  const byFolder = new Map<string, string[]>();
+  for (const path of filePaths) {
+    const parent = getParentDirectory(path);
+    const existing = byFolder.get(parent) ?? [];
+    existing.push(path);
+    byFolder.set(parent, existing);
+  }
+
+  const combinedResult: ImageTransferResult = { successes: [], failures: [] };
+  for (const paths of byFolder.values()) {
+    const { sessionId, imageIds } = await resolveSessionAndImageIdsForPaths(paths);
+    const res = await transferImagesById(sessionId, imageIds, destGrantId, mode);
+    combinedResult.successes.push(...res.successes);
+    combinedResult.failures.push(...res.failures);
+  }
+  return combinedResult;
 }
 
-/** Copy an image file to the OS clipboard */
-export async function copyImageToClipboard(filePath: string): Promise<void> {
-  return invoke('copy_image_to_clipboard', { filePath });
-}
-
-/** Extract EXIF metadata from an image file */
 export async function getExifMetadata(filePath: string): Promise<ExifData> {
-  return invoke<ExifData>('get_exif_metadata', { filePath });
+  const session = await openFileSession(filePath);
+  return getExifMetadataById(session.session_id, session.requested_image_id);
 }
 
-/** Rotate an image file on disk and save it */
 export async function saveRotatedImage(filePath: string, rotationDegrees: number): Promise<void> {
-  return invoke('save_rotated_image', { filePath, rotationDegrees });
+  const session = await openFileSession(filePath);
+  return rotateImageById(session.session_id, session.requested_image_id, rotationDegrees);
 }
 
-/** Save a cropped copy of an image without overwriting the original */
+async function prepareImageExportContext(
+  filePath: string,
+  outputPath: string
+): Promise<{ sessionId: string; imageId: string; destGrantId: string; fileName: string }> {
+  const session = await openFileSession(filePath);
+  const parentDir = getParentDirectory(outputPath);
+  const fileName = getFileName(outputPath);
+  const destGrantId = requireDestinationGrant(parentDir);
+  return {
+    sessionId: session.session_id,
+    imageId: session.requested_image_id,
+    destGrantId,
+    fileName,
+  };
+}
+
 export async function saveCroppedCopy(
   filePath: string,
   cropRect: CropRect,
   outputPath: string,
   rotationDegrees?: number
 ): Promise<void> {
-  return invoke('save_cropped_copy', { filePath, cropRect, outputPath, rotationDegrees });
+  const { sessionId, imageId, destGrantId, fileName } = await prepareImageExportContext(
+    filePath,
+    outputPath
+  );
+  return saveCroppedCopyById(sessionId, imageId, cropRect, destGrantId, fileName, rotationDegrees);
 }
 
-/** Save a high-quality scaled copy of an image without overwriting the original */
+export async function saveCroppedCopyWithGrant(
+  filePath: string,
+  cropRect: CropRect,
+  destinationGrantId: string,
+  relativeFileName: string,
+  rotationDegrees?: number
+): Promise<void> {
+  const session = await openFileSession(filePath);
+  return saveCroppedCopyById(
+    session.session_id,
+    session.requested_image_id,
+    cropRect,
+    destinationGrantId,
+    relativeFileName,
+    rotationDegrees
+  );
+}
+
 export async function saveScaledCopy(
   filePath: string,
   outputPath: string,
@@ -429,45 +1374,66 @@ export async function saveScaledCopy(
   smoothing: number,
   sharpening: number
 ): Promise<void> {
-  return invoke('save_scaled_copy', {
+  const { sessionId, imageId, destGrantId, fileName } = await prepareImageExportContext(
     filePath,
-    outputPath,
+    outputPath
+  );
+  return saveScaledCopyById(
+    sessionId,
+    imageId,
+    destGrantId,
+    fileName,
     width,
     height,
     smoothing,
-    sharpening,
-  });
+    sharpening
+  );
 }
 
-/** Overwrite an image with a cropped version after explicit confirmation */
+export async function saveScaledCopyWithGrant(
+  filePath: string,
+  destinationGrantId: string,
+  relativeFileName: string,
+  width: number,
+  height: number,
+  smoothing: number,
+  sharpening: number
+): Promise<void> {
+  const session = await openFileSession(filePath);
+  return saveScaledCopyById(
+    session.session_id,
+    session.requested_image_id,
+    destinationGrantId,
+    relativeFileName,
+    width,
+    height,
+    smoothing,
+    sharpening
+  );
+}
+
 export async function overwriteWithCrop(
   filePath: string,
   cropRect: CropRect,
   rotationDegrees?: number
 ): Promise<void> {
-  return invoke('overwrite_with_crop', { filePath, cropRect, rotationDegrees });
-}
-
-/** Get a small cached thumbnail asset for an image */
-export async function getThumbnail(
-  filePath: string,
-  sizeBytes?: number,
-  modifiedAt?: string
-): Promise<GeneratedImageAsset> {
-  return invoke<GeneratedImageAsset>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
+  const session = await openFileSession(filePath);
+  return overwriteWithCropById(
+    session.session_id,
+    session.requested_image_id,
+    cropRect,
+    rotationDegrees
+  );
 }
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
 export async function revealInExplorer(filePath: string): Promise<void> {
-  return revealItemInDir(filePath);
-}
-
-/** Open a file path in a specific external application */
-export async function openInExternalApplication(
-  filePath: string,
-  applicationPath: string
-): Promise<void> {
-  return invoke('open_in_external_application', { filePath, applicationPath });
+  const identity = getActiveSessionForPath(filePath);
+  if (!identity) throw new Error('Reveal requires an authorized image identity');
+  return invoke('reveal_image_by_id', {
+    sessionId: identity.sessionId,
+    imageId: identity.imageId,
+  });
 }
 
 function isSameMonitor(a: Monitor | null, b: Monitor): boolean {
@@ -560,19 +1526,45 @@ export async function closeSecondaryWindow(): Promise<void> {
   await webview.close();
 }
 
-export type StateSyncSource = 'main' | 'secondary';
-
 /** Emit a sync event to update another window */
-export async function emitStateSync(
-  imagePath: string | null,
-  source: StateSyncSource
-): Promise<void> {
-  return emit('state-sync', { imagePath, source });
+export async function emitStateSync(sessionId: string, imageId: string): Promise<void> {
+  if (sessionId && imageId) {
+    return invoke('emit_projector_sync_by_id', { sessionId, imageId });
+  }
+  throw new Error('Projector synchronization requires an authorized session and image ID');
+}
+
+export async function clearProjectorSync(): Promise<void> {
+  return invoke('clear_projector_sync');
+}
+
+export interface ProjectorDisplayRecord {
+  session_id: string;
+  image: ImageFile;
+  images: ImageFile[];
+  grant_epoch: number;
+  navigation_generation: number;
+}
+
+export async function readProjectorDisplayRecord(): Promise<ProjectorDisplayRecord> {
+  return invoke<ProjectorDisplayRecord>('read_projector_display_record');
+}
+
+export async function navigateProjectorImage(
+  imageId: string,
+  grantEpoch: number,
+  navigationGeneration: number
+): Promise<ProjectorDisplayRecord> {
+  return invoke<ProjectorDisplayRecord>('navigate_projector_image', {
+    imageId,
+    grantEpoch,
+    navigationGeneration,
+  });
 }
 
 /** Ask the main window to send its current state */
 export async function requestStateSync(): Promise<void> {
-  return emit('state-sync-request');
+  return invoke('request_projector_sync');
 }
 
 /** Open Windows Default Apps settings */
@@ -587,6 +1579,7 @@ export async function openUrlExternal(url: string): Promise<void> {
 }
 
 /** Convert a local file path to a Tauri asset protocol URL */
+// fallow-ignore-next-line unused-export -- asset protocol helper
 export function convertFileSrc(path: string): string {
   return tauriConvertFileSrc(path);
 }

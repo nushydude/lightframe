@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
-import { generatedImageAssetToUrl, getImageTile } from '../services/tauriCommands';
+import {
+  cancelMediaRequest,
+  generatedImageAssetToUrl,
+  getActiveSessionForPath,
+  getImageTileById,
+} from '../services/tauriCommands';
 import { IMAGE_WORK_PRIORITY, imageWorkScheduler } from '../services/imageWorkScheduler';
 import { measurePerformanceSpan } from '../services/performanceTelemetry';
 import type { ZoomMode } from '../state/viewerStore';
@@ -53,6 +58,7 @@ function sameSize(left: ElementSize, right: ElementSize): boolean {
 
 function tileWorkKey(
   filePath: string,
+  authorityKey: string,
   metadata: ImageMetadata,
   tileSize: number,
   request: TileRequest
@@ -60,6 +66,7 @@ function tileWorkKey(
   return [
     'tile',
     filePath,
+    authorityKey,
     metadata.file_size_bytes,
     metadata.width,
     metadata.height,
@@ -69,8 +76,8 @@ function tileWorkKey(
   ].join('::');
 }
 
-function tileSourceKey(filePath: string, metadata: ImageMetadata): string {
-  return `${filePath}::${metadata.file_size_bytes}::${metadata.width}::${metadata.height}`;
+function tileSourceKey(filePath: string, authorityKey: string, metadata: ImageMetadata): string {
+  return `${authorityKey}::${filePath}::${metadata.file_size_bytes}::${metadata.width}::${metadata.height}`;
 }
 
 function createAbortError(message: string): Error {
@@ -96,16 +103,23 @@ export function TiledImageRenderer({
   onPreviewError,
   onTileError,
 }: TiledImageRendererProps) {
+  const authority = getActiveSessionForPath(filePath);
+  const authoritySessionId = authority?.sessionId;
+  const authorityImageId = authority?.imageId;
+  const authorityKey =
+    authoritySessionId && authorityImageId
+      ? `${authoritySessionId}::${authorityImageId}`
+      : 'missing';
   const [containerSize, setContainerSize] = useState<ElementSize>(() =>
     measureElement(containerRef.current)
   );
   const [tileUrls, setTileUrls] = useState<Record<string, string>>({});
   const tileUrlsRef = useRef<Record<string, string>>({});
-  const activeSourceKeyRef = useRef<string | null>(tileSourceKey(filePath, metadata));
+  const activeSourceKeyRef = useRef<string | null>(tileSourceKey(filePath, authorityKey, metadata));
   const inFlightTileWorkRef = useRef<Map<string, TileWorkState>>(new Map());
   const tileRequestsRef = useRef<TileRequest[]>([]);
   const visibleTileKeysRef = useRef<Set<string>>(new Set());
-  const sourceKey = tileSourceKey(filePath, metadata);
+  const sourceKey = tileSourceKey(filePath, authorityKey, metadata);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -233,7 +247,7 @@ export function TiledImageRenderer({
         continue;
       }
 
-      const workKey = tileWorkKey(filePath, metadata, TILE_SIZE, request);
+      const workKey = tileWorkKey(filePath, authorityKey, metadata, TILE_SIZE, request);
       inFlightTileWorkRef.current.set(request.key, {
         sourceKey,
         workKey,
@@ -249,16 +263,30 @@ export function TiledImageRenderer({
               throw createAbortError('Tile work aborted before execution.');
             }
 
-            const asset = await measurePerformanceSpan('tileGeneration', () =>
-              getImageTile(
-                filePath,
-                sourceWidth,
-                sourceHeight,
-                TILE_SIZE,
-                request.tileX,
-                request.tileY
-              )
-            );
+            const requestId = `req_tile_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            const cancelBackend = () => {
+              void cancelMediaRequest(requestId).catch(() => {});
+            };
+            signal.addEventListener('abort', cancelBackend, { once: true });
+            let asset;
+            try {
+              asset = await measurePerformanceSpan('tileGeneration', () =>
+                authoritySessionId && authorityImageId
+                  ? getImageTileById(
+                      authoritySessionId,
+                      authorityImageId,
+                      sourceWidth,
+                      sourceHeight,
+                      TILE_SIZE,
+                      request.tileX,
+                      request.tileY,
+                      requestId
+                    )
+                  : Promise.reject(new Error('Tile request has no active image authority'))
+              );
+            } finally {
+              signal.removeEventListener('abort', cancelBackend);
+            }
             if (signal.aborted) {
               throw createAbortError('Tile work aborted after execution.');
             }
@@ -310,7 +338,18 @@ export function TiledImageRenderer({
           onTileError(error);
         });
     }
-  }, [filePath, metadata, metadata.height, metadata.width, onTileError, requestKey, sourceKey]);
+  }, [
+    authorityImageId,
+    authorityKey,
+    authoritySessionId,
+    filePath,
+    metadata,
+    metadata.height,
+    metadata.width,
+    onTileError,
+    requestKey,
+    sourceKey,
+  ]);
 
   if (!layout) {
     return null;

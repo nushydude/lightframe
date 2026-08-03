@@ -1,10 +1,11 @@
 import type { AppSettings, PersistedMarkedFolder } from '../types/settings';
+import { pathIdentityKey } from './pathIdentity';
 
 const MAX_PERSISTED_MARKED_FOLDERS = 12;
 const MAX_MARKED_PATHS_PER_FOLDER = 5000;
 
 function normalizePathKey(path: string): string {
-  return path.replace(/\\/g, '/').toLowerCase();
+  return pathIdentityKey(path);
 }
 
 function sanitizeMarkedPaths(paths: string[]): string[] {

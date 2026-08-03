@@ -4,7 +4,6 @@
   "description": "Restricted read-only capabilities for the secondary projector window",
   "windows": ["secondary"],
   "permissions": [
-    "core:event:allow-emit",
     "core:event:allow-listen",
     "core:window:allow-close",
     "core:window:allow-show",

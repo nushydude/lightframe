@@ -12,8 +12,7 @@ use std::io::Cursor;
 /// This function takes in the raw XMP information and removes EXIF attributes,
 /// while maintaining other XMP information so that the result can be 
 /// written back to the image data.
-pub(crate) fn
-remove_exif_from_xmp
+pub fn remove_exif_from_xmp
 (
     data: &[u8]
 )
@@ -28,6 +27,7 @@ remove_exif_from_xmp
     // Needed for skipping stuff like 
     // <exif:Description>Hi</exif:Description>\n
     let mut skip_depth   = 0u32;
+    let mut open_tag_depth = 0u32;
     let mut skip_next_nl = false;
 
     loop 
@@ -38,11 +38,16 @@ remove_exif_from_xmp
         match read_event
         {
             Ok(Event::Start(ref event)) => {
+                open_tag_depth += 1;
                 let event_name = String::from_utf8(event.name().0.to_vec())?;
 
-                if event_name.starts_with("exif:")
+                if skip_depth > 0
                 {
                     skip_depth += 1;
+                }
+                else if event_name.starts_with("exif:")
+                {
+                    skip_depth = 1;
                 }
                 else if skip_depth == 0
                 {
@@ -64,10 +69,15 @@ remove_exif_from_xmp
             }
 
             Ok(Event::End(ref event)) => {
+                if open_tag_depth > 0 {
+                    open_tag_depth -= 1;
+                }
                 if skip_depth > 0 
                 {
                     skip_depth  -= 1;
-                    skip_next_nl = true;
+                    if skip_depth == 0 {
+                        skip_next_nl = true;
+                    }
                 } 
                 else 
                 {
@@ -76,9 +86,17 @@ remove_exif_from_xmp
             }
 
             Ok(Event::Eof) => {
-                assert_eq!(skip_depth, 0);
+                if skip_depth != 0 || open_tag_depth != 0 {
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Malformed XMP XML: unclosed elements at EOF",
+                    )));
+                }
                 break;
             }
+
+
+
 
             Ok(Event::Text(ref event)) => {
                 let event_string = String::from_utf8(event.to_vec())?;
@@ -101,49 +119,91 @@ remove_exif_from_xmp
                 if skip_depth == 0 { writer.write_event(other_event)?; }
             }
 
-            Err(error_message) => {
-                log::error!(
-                    "Error at position {}: {:?}", 
-                    reader.buffer_position(), 
-                    error_message
-                );
-                break;
+            Err(error) => {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("XMP parse error at position {}: {}", reader.buffer_position(), error),
+                )));
             }
         };
 
         read_buffer.clear();
     }
 
+
     return Ok(writer.into_inner().into_inner());
 }
 
-fn
-get_exif_filtered_event<'a>
-(
-    event: &'a BytesStart<'a>
-)
--> Result<BytesStart<'a>, Box<dyn std::error::Error>>
-{
-    let mut new_event = BytesStart::new(
-        std::str::from_utf8(event.name().0)?
-    );
+fn get_exif_filtered_event<'a>(
+    event: &'a BytesStart<'a>,
+) -> Result<BytesStart<'a>, Box<dyn std::error::Error>> {
+    let mut new_event = BytesStart::new(std::str::from_utf8(event.name().0)?);
 
-    new_event.extend_attributes(
-        event.attributes()
-            .filter_map(Result::ok)
-            .filter(|attribute| 
-                {
-                    if let Ok(key) = std::str::from_utf8(
-                        attribute.key.as_ref()
-                    ) 
-                    {
-                        !key.starts_with("exif:")
-                    } else {
-                        true
-                    }
-                }
-            ),
-    );
+    for attr_result in event.attributes() {
+        let attribute = attr_result?;
+        let key = std::str::from_utf8(attribute.key.as_ref())?;
+        if !key.starts_with("exif:") {
+            new_event.push_attribute(attribute);
+        }
+    }
 
-    return Ok(new_event);
+    Ok(new_event)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_exif_valid_xmp_preserves_non_exif() {
+        let valid_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:format="image/jpeg"/></rdf:RDF></x:xmpmeta>"#;
+        let result = remove_exif_from_xmp(valid_xmp.as_bytes()).unwrap();
+        let cleaned = String::from_utf8(result).unwrap();
+        assert!(cleaned.contains("dc:format"));
+    }
+
+    #[test]
+    fn test_remove_exif_truncated_xml_returns_error() {
+        let truncated_xml = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF>"#;
+        let result = remove_exif_from_xmp(truncated_xml.as_bytes());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_exif_malformed_xml_returns_error() {
+        let malformed_xml = r#"<x:xmpmeta><rdf:RDF><unclosed_tag></x:xmpmeta>"#;
+        let result = remove_exif_from_xmp(malformed_xml.as_bytes());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_exif_skips_complete_nested_subtrees_and_keeps_siblings() {
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><exif:Description><wrapper><nested/><deeper><leaf>secret</leaf></deeper></wrapper></exif:Description><dc:title>visible</dc:title><exif:Empty/><dc:format>image/jpeg</dc:format></x:xmpmeta>"#;
+        let result = remove_exif_from_xmp(xmp).unwrap();
+        let cleaned = String::from_utf8(result.clone()).unwrap();
+
+        assert!(!cleaned.contains("exif:Description"));
+        assert!(!cleaned.contains("secret"));
+        assert!(!cleaned.contains("exif:Empty"));
+        assert!(cleaned.contains("dc:title>visible"));
+        assert!(cleaned.contains("dc:format>image/jpeg"));
+
+        let mut reader = Reader::from_reader(result.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Eof => break,
+                _ => buffer.clear(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_remove_exif_nested_namespace_elements_do_not_end_skip_early() {
+        let xmp = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:exif="http://ns.adobe.com/exif/1.0/"><exif:IFD><rdf:Description><rdf:Seq><rdf:li>hidden</rdf:li></rdf:Seq></rdf:Description></exif:IFD><rdf:Description><rdf:value>kept</rdf:value></rdf:Description></rdf:RDF>"#;
+        let cleaned = String::from_utf8(remove_exif_from_xmp(xmp).unwrap()).unwrap();
+        assert!(!cleaned.contains("hidden"));
+        assert!(cleaned.contains("kept"));
+    }
 }

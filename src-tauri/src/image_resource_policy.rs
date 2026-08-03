@@ -185,6 +185,19 @@ pub fn validate_file_size(
     Ok(size)
 }
 
+pub fn validate_file_size_bytes(
+    size: u64,
+    limits: &PolicyLimits,
+) -> Result<u64, ResourcePolicyError> {
+    if size > limits.max_file_size_bytes {
+        return Err(ResourcePolicyError::FileSizeExceedsLimit {
+            file_size_bytes: size,
+            max: limits.max_file_size_bytes,
+        });
+    }
+    Ok(size)
+}
+
 /// Calculate estimated memory using checked arithmetic
 pub fn calculate_checked_buffer_bytes(
     width: u32,
@@ -220,6 +233,22 @@ pub fn validate_memory_footprint(
 }
 
 /// Pre-flight validate decode for an image operation
+pub fn validate_default_dimensions(width: u32, height: u32) -> Result<u64, ResourcePolicyError> {
+    let limits = PolicyLimits::for_operation(OperationClass::Preview);
+    validate_dimensions(width, height, &limits)
+}
+
+pub fn validate_working_memory_bytes(bytes: usize) -> Result<(), ResourcePolicyError> {
+    let limits = PolicyLimits::for_operation(OperationClass::Preview);
+    if bytes as u64 > limits.max_working_memory_bytes {
+        return Err(ResourcePolicyError::EstimatedMemoryExceedsLimit {
+            estimated_bytes: bytes as u64,
+            max: limits.max_working_memory_bytes,
+        });
+    }
+    Ok(())
+}
+
 pub fn validate_decode(
     file_path: &Path,
     width: u32,

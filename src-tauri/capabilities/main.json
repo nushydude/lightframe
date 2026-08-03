@@ -5,7 +5,6 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:allow-reveal-item-in-dir",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -14,8 +13,9 @@
         { "url": "https://www.microsoft.com/store/*" }
       ]
     },
-    "dialog:default",
-    "cli:default",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "dialog:allow-ask",
     "core:window:allow-close",
     "core:window:allow-show",
     "core:window:allow-set-focus",

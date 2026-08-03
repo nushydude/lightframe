@@ -1,4 +1,10 @@
-import { generatedImageAssetToUrl, getThumbnail, type GeneratedImageAsset } from './tauriCommands';
+import {
+  cancelMediaRequest,
+  generatedImageAssetToUrl,
+  getThumbnail,
+  getThumbnailById,
+  type GeneratedImageAsset,
+} from './tauriCommands';
 import { imageWorkScheduler } from './imageWorkScheduler';
 import {
   recordThumbnailCacheHit,
@@ -34,6 +40,8 @@ type PreloadThumbnailOptions = {
 
 export type ThumbnailRequest = {
   path: string;
+  sessionId?: string;
+  imageId?: string;
   sizeBytes?: number;
   modifiedAt?: string | null;
 };
@@ -133,7 +141,7 @@ function normalizeModifiedAt(value: string | null | undefined): string | undefin
 }
 
 function metadataToken(request: ThumbnailRequest): string {
-  return `${request.sizeBytes ?? ''}|${normalizeModifiedAt(request.modifiedAt) ?? ''}`;
+  return `${request.sessionId ?? 'legacy'}|${request.imageId ?? 'legacy'}|${request.sizeBytes ?? ''}|${normalizeModifiedAt(request.modifiedAt) ?? ''}`;
 }
 
 function requestKey(path: string, token: string): string {
@@ -273,7 +281,7 @@ function loadThumbnailWithPriority(
     return entry.inFlightPromise;
   }
 
-  requestMetadataByPath.set(path, { path, sizeBytes, modifiedAt });
+  requestMetadataByPath.set(path, normalized);
   entry.inFlightPromise = imageWorkScheduler
     .schedule({
       key: requestKey(path, token),
@@ -290,7 +298,26 @@ function loadThumbnailWithPriority(
           throw createAbortError('Thumbnail request became stale before execution.');
         }
 
-        const asset = await getThumbnail(path, sizeBytes, modifiedAt ?? undefined);
+        const requestId = `req_thumb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const cancelBackend = () => {
+          void cancelMediaRequest(requestId).catch(() => {});
+        };
+        signal.addEventListener('abort', cancelBackend, { once: true });
+        let asset;
+        try {
+          asset =
+            normalized.sessionId && normalized.imageId
+              ? await getThumbnailById(
+                  normalized.sessionId,
+                  normalized.imageId,
+                  sizeBytes,
+                  modifiedAt ?? undefined,
+                  requestId
+                )
+              : await getThumbnail(path, sizeBytes, modifiedAt ?? undefined, requestId);
+        } finally {
+          signal.removeEventListener('abort', cancelBackend);
+        }
         if (signal.aborted) {
           throw createAbortError('Thumbnail work aborted after execution.');
         }

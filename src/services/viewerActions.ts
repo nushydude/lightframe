@@ -1,4 +1,4 @@
-import { confirm, open } from '@tauri-apps/plugin-dialog';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import {
   copyImageToClipboard,
   getFileName,
@@ -6,6 +6,7 @@ import {
   openInExternalApplication,
   revealInExplorer,
   transferImagesToFolder,
+  selectDestinationFolder,
 } from './tauriCommands';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
@@ -44,6 +45,8 @@ export function canSaveRotationForPath(filePath: string | null): boolean {
 export interface QuickTransferSuccess {
   sourcePath: string;
   targetPath: string;
+  warning?: string;
+  sourceRemoved?: boolean;
 }
 
 export interface QuickTransferFailure {
@@ -89,12 +92,24 @@ export function showTransferResultMessage(
   const verb = mode === 'copy' ? 'Copied' : 'Moved';
   const noun = result.successes.length === 1 ? 'image' : 'images';
   const pushToast = useToastStore.getState().pushToast;
+  const firstWarning = result.successes.find((success) => success.warning)?.warning;
 
-  if (result.failureCount === 0) {
+  if (result.failureCount === 0 && !firstWarning) {
     pushToast({
       title: mode === 'copy' ? 'Copy complete' : 'Move complete',
       kind: 'success',
       message: `${verb} ${result.successes.length} ${noun} to ${destination.label}.`,
+    });
+    return;
+  }
+
+  if (result.failureCount === 0 && firstWarning) {
+    pushToast({
+      title: mode === 'copy' ? 'Copy completed with a warning' : 'Move completed with a warning',
+      kind: 'warning',
+      message: `${verb} ${result.successes.length} ${noun} to ${destination.label}.`,
+      detail: firstWarning,
+      duration: 9000,
     });
     return;
   }
@@ -248,12 +263,8 @@ export async function copyCurrentImageFileName(currentImagePath: string | null):
 }
 
 export async function chooseQuickDestinationFolder(): Promise<QuickDestination | null> {
-  const selected = await open({ directory: true, multiple: false });
-  if (!selected || typeof selected !== 'string') {
-    return null;
-  }
-
-  const normalizedPath = selected.trim();
+  const selected = await selectDestinationFolder();
+  const normalizedPath = selected?.selectedPath.trim() ?? '';
   if (!normalizedPath) {
     return null;
   }

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { getMatches } from '@tauri-apps/plugin-cli';
 import type { Window } from '@tauri-apps/api/window';
 import { useSettingsStore } from '../state/settingsStore';
 import { CurationPersistenceError } from '../state/curationStore';
 import { useViewerStore } from '../state/viewerStore';
-import { resolveStartupDecision } from '../services/startup';
+import { consumeStartupSession } from '../services/tauriCommands';
 import {
   recordStartupCliResolveTelemetry,
   recordStartupInitialImageOpenTelemetry,
@@ -73,15 +72,18 @@ async function openStartupTarget({
   if (!isMainWindow) return;
 
   const cliResolveStartedAt = performance.now();
-  const matches = await getMatches();
-  const startupDecision = resolveStartupDecision(matches.args.file, matches.args.folder);
+  const startupDecision = await consumeStartupSession();
   recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
-  if (startupDecision.mode === 'open-folder' && startupDecision.folderPath) {
-    await openFolder(startupDecision.folderPath);
-  } else if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
+  if (startupDecision.mode === 'folder') {
+    await openFolder(startupDecision.session.canonical_folder);
+  } else if (startupDecision.mode === 'image') {
+    const image = startupDecision.session.images.find(
+      (candidate) => candidate.id === startupDecision.session.requested_image_id
+    );
+    if (!image) throw new Error('Startup image is missing from its authorized session');
     const startupImageOpenStartedAt = performance.now();
-    await openImageForStartup(startupDecision.filePath);
+    await openImageForStartup(image.path);
     recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
   }
 }

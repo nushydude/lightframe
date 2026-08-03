@@ -4,7 +4,11 @@ import type { Window } from '@tauri-apps/api/window';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { CurationFilter } from '../services/curationFilter';
 import { createViewerCommands, type ViewerCommand } from '../services/commandRegistry';
-import { closeSecondaryWindow, openSecondaryWindow } from '../services/tauriCommands';
+import {
+  closeSecondaryWindow,
+  openRecentFolderSession,
+  openSecondaryWindow,
+} from '../services/tauriCommands';
 import {
   resetPerformanceTelemetry,
   setPerformanceTelemetryEnabled,
@@ -167,6 +171,7 @@ export function useAppViewerActions({
 
   const handleOpenRecentFolder = useCallback(
     async (folderPath: string, filter: CurationFilter = 'all') => {
+      await openRecentFolderSession(folderPath);
       await openFolder(folderPath, { curationFilter: filter });
     },
     [openFolder]

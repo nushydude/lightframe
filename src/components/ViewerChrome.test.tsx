@@ -63,6 +63,15 @@ describe('ViewerChrome', () => {
       format: 'JPEG',
     });
     vi.spyOn(tauriCommands, 'getImageCaption').mockResolvedValue(null);
+    vi.spyOn(tauriCommands, 'selectDestination').mockImplementation(async (suggestedFileName) => {
+      const selectedPath = await save({ defaultPath: suggestedFileName });
+      if (typeof selectedPath !== 'string') return null;
+      return {
+        destinationGrantId: 'dest_test',
+        relativeFileName: selectedPath.replace(/\\/g, '/').split('/').pop() ?? selectedPath,
+        selectedPath,
+      };
+    });
     useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
@@ -1761,6 +1770,9 @@ describe('ViewerChrome', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/other.jpg',
       outputPath: 'C:/Images/photo-scaled.jpg',
+      destinationGrantId: 'dest_existing',
+      relativeFileName: 'photo-scaled.jpg',
+      destinationOperation: 'scale-copy',
       width: 600,
       height: 400,
       smoothing: 0,
@@ -1895,7 +1907,7 @@ describe('ViewerChrome', () => {
     expect(scaleSpy).not.toHaveBeenCalled();
   });
 
-  it('defaults AVIF scaled exports to JPEG and restricts the save dialog filters', async () => {
+  it('defaults AVIF scaled exports to JPEG through the trusted native destination picker', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.avif',
       images: [
@@ -1927,14 +1939,9 @@ describe('ViewerChrome', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     });
 
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultPath: 'C:/Images/photo-scaled-1200x800.jpg',
-        filters: expect.arrayContaining([
-          expect.objectContaining({ name: 'JPEG image', extensions: ['jpg', 'jpeg'] }),
-          expect.objectContaining({ name: 'PNG image', extensions: ['png'] }),
-        ]),
-      })
+    expect(tauriCommands.selectDestination).toHaveBeenCalledWith(
+      'photo-scaled-1200x800.jpg',
+      'scale-copy'
     );
   });
 

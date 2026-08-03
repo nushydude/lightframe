@@ -4,8 +4,9 @@
 Vendored locally to remediate security advisories RUSTSEC-2026-0194 and RUSTSEC-2026-0195 caused by the vulnerable dependency `quick-xml 0.37.5`.
 
 ## Provenance
-- Source: `little_exif 0.6.23` from crates.io
-- Upstream: https://github.com/dignifiedquire/little_exif
+- Upstream: https://github.com/TechnikTobi/little_exif
+
+
 
 ## Local Deltas
 - Updated `quick-xml` dependency requirement in `Cargo.toml` and `Cargo.lock` from `0.37.5` to `0.41.0`.

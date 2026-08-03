@@ -5,16 +5,21 @@ import { imageWorkScheduler } from '../services/imageWorkScheduler';
 import type { ImageMetadata } from '../types/image';
 import { TiledImageRenderer } from './TiledImageRenderer';
 
-const { getImageTileMock, generatedImageAssetToUrlMock } = vi.hoisted(() => ({
-  getImageTileMock: vi.fn(),
-  generatedImageAssetToUrlMock: vi.fn(
-    (asset: { file_path: string; cache_key: string }) =>
-      `asset://localhost/${asset.file_path}?v=${asset.cache_key}`
-  ),
-}));
+const { cancelMediaRequestMock, getImageTileMock, generatedImageAssetToUrlMock } = vi.hoisted(
+  () => ({
+    cancelMediaRequestMock: vi.fn().mockResolvedValue(false),
+    getImageTileMock: vi.fn(),
+    generatedImageAssetToUrlMock: vi.fn(
+      (asset: { file_path: string; cache_key: string }) =>
+        `asset://localhost/${asset.file_path}?v=${asset.cache_key}`
+    ),
+  })
+);
 
 vi.mock('../services/tauriCommands', () => ({
-  getImageTile: getImageTileMock,
+  cancelMediaRequest: cancelMediaRequestMock,
+  getActiveSessionForPath: () => ({ sessionId: 'sess_1', imageId: 'img_1' }),
+  getImageTileById: getImageTileMock,
   generatedImageAssetToUrl: generatedImageAssetToUrlMock,
 }));
 

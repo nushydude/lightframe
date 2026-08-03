@@ -8,6 +8,8 @@ import { useProjectorSyncLifecycle } from './useProjectorSyncLifecycle';
 import { useAppLifecycleEffects } from './useAppLifecycleEffects';
 import { useAppViewerActions } from './useAppViewerActions';
 import { useSettingsStore } from '../state/settingsStore';
+import { useViewerStore } from '../state/viewerStore';
+
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings, PerformanceMode, RecentFolder } from '../types/settings';
 
@@ -95,13 +97,21 @@ export function useAppRuntimeLifecycle({
   const isMainWindowRef = useRef(appWindowRef.current.label === 'main');
   const settingsRef = useRef(useSettingsStore.getState().settings);
   const settingsLoadedRef = useRef(isLoaded);
+  const activeSessionId = useViewerStore((s) => s.activeSessionId);
+  const activeImageId = useViewerStore((s) => s.images[s.currentIndex]?.id ?? null);
+  const openImageById = useViewerStore((s) => s.openImageById);
+
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const isProjectorWindow = appWindowRef.current.label === 'secondary';
   const isSecondary = useProjectorSyncLifecycle({
     appWindow: appWindowRef.current,
     currentImagePath,
+    activeSessionId,
+    activeImageId,
     openImage,
+    onSyncImageId: openImageById,
   });
+
   const handleMouseMove = useAppLifecycleEffects({
     appWindow: appWindowRef.current,
     isMainWindow: isMainWindowRef.current,

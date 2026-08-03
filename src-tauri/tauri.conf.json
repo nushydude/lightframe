@@ -24,13 +24,14 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://asset.localhost http://tauri.localhost https://tauri.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com",
+      "csp": "default-src 'self'; img-src 'self' data: asset: lightframe-asset: http://asset.localhost https://asset.localhost http://tauri.localhost https://tauri.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com",
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$TEMP/lightframe-generated-assets/**/*",
-          "$APPCACHE/lightframe/**/*",
-          "$APPDATA/lightframe/**/*"
+          "$APPCACHE/previews/**/*",
+          "$APPCACHE/thumbnails/**/*",
+          "$APPCACHE/tiles/**/*",
+          "$TEMP/lightframe-generated-assets/**/*"
         ]
       }
     }
@@ -81,20 +82,6 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
-    "cli": {
-      "args": [
-        {
-          "name": "file",
-          "index": 1,
-          "takesValue": true
-        },
-        {
-          "name": "folder",
-          "short": "f",
-          "takesValue": true
-        }
-      ]
-    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUwMUEwMzRDQjEyQkE3ODMKUldTRHB5dXhUQU1hVUNobGRKcWcrQStRd05teWtBSFVVRVdDRXhQWkpuVkthV1l2d3YwUFZMUWIK",
       "endpoints": ["https://github.com/nushydude/lightframe/releases/latest/download/latest.json"]

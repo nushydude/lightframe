@@ -1,6 +1,11 @@
 import '@testing-library/jest-dom';
 import { afterEach, vi } from 'vitest';
 import { useToastStore } from '../state/toastStore';
+import { configurePathCaseSemantics } from '../services/pathIdentity';
+
+// The desktop test matrix executes Windows-oriented fixtures by default. Individual Linux/path
+// semantics tests explicitly override this through the same runtime injection point.
+configurePathCaseSemantics('case-insensitive');
 
 // Mock Tauri Core APIs
 vi.mock('@tauri-apps/api/core', () => ({

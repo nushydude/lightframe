@@ -214,6 +214,33 @@ describe('viewerActions', () => {
     );
   });
 
+  it('surfaces a committed move warning even when no transfer failed', () => {
+    showTransferResultMessage(
+      {
+        successes: [
+          {
+            sourcePath: 'c:/images/one.jpg',
+            targetPath: 'd:/favorites/one.jpg',
+            sourceRemoved: false,
+            warning: 'Destination committed; source remains.',
+          },
+        ],
+        failures: [],
+        failureCount: 0,
+      },
+      { id: 'fav', label: 'Favorites', path: 'd:/favorites' },
+      'move'
+    );
+
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Move completed with a warning',
+        kind: 'warning',
+        detail: 'Destination committed; source remains.',
+      })
+    );
+  });
+
   it('expands thrown bulk transfer failures across the full selection', async () => {
     transferImagesToFolderMock.mockRejectedValue(new Error('share offline'));
 

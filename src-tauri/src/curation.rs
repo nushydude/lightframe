@@ -1,4 +1,5 @@
 use crate::atomic_file::{build_unique_sibling_path, write_text_file_atomically};
+use crate::path_normalization::{normalize_path_text_for_key_with_semantics, PathCaseSemantics};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -29,6 +30,8 @@ pub(crate) struct ImageCurationUpdate {
 #[derive(Debug, Serialize, Deserialize)]
 struct CurationJournal {
     updated_at: u64,
+    #[serde(default = "crate::path_normalization::runtime_path_case_semantics")]
+    path_case_semantics: PathCaseSemantics,
     updates: Vec<ImageCurationUpdate>,
 }
 
@@ -71,6 +74,7 @@ fn shard_path(config_dir: &Path, id: u8) -> PathBuf {
     store_directory(config_dir).join(format!("{id:02x}.json"))
 }
 
+#[allow(dead_code)]
 fn parse_shard_id(path: &Path) -> Option<u8> {
     let file_name = path.file_name()?.to_str()?;
     let hex = file_name.strip_suffix(".json")?;
@@ -83,11 +87,15 @@ fn parse_shard_id(path: &Path) -> Option<u8> {
 fn normalize_metadata(metadata: HashMap<String, ImageCuration>) -> HashMap<String, ImageCuration> {
     let mut normalized = HashMap::new();
     for (key, mut value) in metadata {
-        let normalized_path = if value.path.trim().is_empty() {
+        let raw_path = if value.path.trim().is_empty() {
             key.trim().to_string()
         } else {
             value.path.trim().to_string()
         };
+        // Persisted entries retain their original case. Insensitive matching is applied using the
+        // authority root's explicit semantics at read/update time.
+        let normalized_path =
+            normalize_path_text_for_key_with_semantics(&raw_path, PathCaseSemantics::Sensitive);
         if normalized_path.is_empty() {
             continue;
         }
@@ -435,11 +443,14 @@ fn migrate_legacy_store(config_dir: &Path) -> Result<(), String> {
     })
 }
 
-fn normalize_updates(updates: Vec<ImageCurationUpdate>) -> Vec<ImageCurationUpdate> {
+fn normalize_updates(
+    updates: Vec<ImageCurationUpdate>,
+    semantics: PathCaseSemantics,
+) -> Vec<ImageCurationUpdate> {
     updates
         .into_iter()
         .filter_map(|mut update| {
-            update.file_path = update.file_path.trim().to_string();
+            update.file_path = normalize_lookup_path_with_semantics(&update.file_path, semantics);
             (!update.file_path.is_empty()).then_some(update)
         })
         .collect()
@@ -449,10 +460,17 @@ fn apply_update(
     metadata: &mut HashMap<String, ImageCuration>,
     update: &ImageCurationUpdate,
     updated_at: u64,
+    semantics: PathCaseSemantics,
 ) {
     let rating = update.rating.clamp(0, 5) as u8;
+    let identity = normalize_lookup_path_with_semantics(&update.file_path, semantics);
+    metadata.retain(|key, value| {
+        normalize_lookup_path_with_semantics(
+            if value.path.trim().is_empty() { key } else { &value.path },
+            semantics,
+        ) != identity
+    });
     if !update.favorite && rating == 0 {
-        metadata.remove(&update.file_path);
         return;
     }
     metadata.insert(
@@ -469,14 +487,20 @@ fn apply_update(
 fn apply_updates(config_dir: &Path, journal: &CurationJournal) -> Result<(), String> {
     let mut grouped = HashMap::<u8, Vec<&ImageCurationUpdate>>::new();
     for update in &journal.updates {
-        grouped.entry(shard_id(&update.file_path)).or_default().push(update);
+        grouped
+            .entry(shard_id(&normalize_lookup_path_with_semantics(
+                &update.file_path,
+                journal.path_case_semantics,
+            )))
+            .or_default()
+            .push(update);
     }
 
     for (id, updates) in grouped {
         let path = shard_path(config_dir, id);
         let mut shard = read_shard_metadata_file(&path)?;
         for update in updates {
-            apply_update(&mut shard, update, journal.updated_at);
+            apply_update(&mut shard, update, journal.updated_at, journal.path_case_semantics);
         }
 
         if shard.is_empty() {
@@ -516,18 +540,44 @@ fn prepare_store(config_dir: &Path) -> Result<(), String> {
     recover_pending_journal(config_dir)
 }
 
+#[allow(dead_code)]
 pub(crate) fn read_curation_metadata(
     config_dir: &Path,
 ) -> Result<HashMap<String, ImageCuration>, String> {
     let _store_lock = acquire_store_lock(config_dir)?;
-    read_curation_metadata_locked(config_dir)
+    Ok(read_curation_metadata_locked(config_dir)?
+        .into_iter()
+        .map(|(key, value)| {
+            let source = if value.path.trim().is_empty() { key.as_str() } else { &value.path };
+            (
+                normalize_path_text_for_key_with_semantics(
+                    source,
+                    crate::path_normalization::runtime_path_case_semantics(),
+                ),
+                value,
+            )
+        })
+        .collect())
 }
 
 /// Read only the shards addressed by the active folder or startup file list. Stored paths are
 /// normalized only for matching; the original spelling remains the persisted key for legacy data.
+#[allow(dead_code)]
 pub(crate) fn read_curation_metadata_for_paths(
     config_dir: &Path,
     file_paths: &[String],
+) -> Result<HashMap<String, ImageCuration>, String> {
+    read_curation_metadata_for_paths_with_semantics(
+        config_dir,
+        file_paths,
+        crate::path_normalization::runtime_path_case_semantics(),
+    )
+}
+
+pub(crate) fn read_curation_metadata_for_paths_with_semantics(
+    config_dir: &Path,
+    file_paths: &[String],
+    semantics: PathCaseSemantics,
 ) -> Result<HashMap<String, ImageCuration>, String> {
     let _store_lock = acquire_store_lock(config_dir)?;
     prepare_store(config_dir)?;
@@ -535,22 +585,24 @@ pub(crate) fn read_curation_metadata_for_paths(
         .iter()
         .map(|path| path.trim())
         .filter(|path| !path.is_empty())
-        .map(normalize_lookup_path)
+        .map(|path| normalize_lookup_path_with_semantics(path, semantics))
         .collect::<HashSet<_>>();
     let shard_ids = file_paths
         .iter()
-        .flat_map(|path| [path.clone(), path.replace('\\', "/"), path.to_lowercase()])
+        .flat_map(|path| {
+            let trimmed = path.trim().to_string();
+            let identity = normalize_lookup_path_with_semantics(path, semantics);
+            [trimmed, identity]
+        })
         .map(|path| shard_id(path.trim()))
         .collect::<HashSet<_>>();
     let mut metadata = HashMap::new();
     for id in shard_ids {
         let path = shard_path(config_dir, id);
         match read_shard_metadata_file(&path) {
-            Ok(shard) => metadata.extend(
-                shard
-                    .into_iter()
-                    .filter(|(_, value)| requested.contains(&normalize_lookup_path(&value.path))),
-            ),
+            Ok(shard) => metadata.extend(shard.into_iter().filter(|(_, value)| {
+                requested.contains(&normalize_lookup_path_with_semantics(&value.path, semantics))
+            })),
             Err(error) => {
                 eprintln!("{error}. Skipping this shard while loading healthy curation data.")
             }
@@ -559,10 +611,19 @@ pub(crate) fn read_curation_metadata_for_paths(
     Ok(metadata)
 }
 
+#[allow(dead_code)]
 fn normalize_lookup_path(path: &str) -> String {
-    path.trim().replace('\\', "/").to_lowercase()
+    normalize_path_text_for_key_with_semantics(
+        path,
+        crate::path_normalization::runtime_path_case_semantics(),
+    )
 }
 
+fn normalize_lookup_path_with_semantics(path: &str, semantics: PathCaseSemantics) -> String {
+    normalize_path_text_for_key_with_semantics(path, semantics)
+}
+
+#[allow(dead_code)]
 fn read_curation_metadata_locked(
     config_dir: &Path,
 ) -> Result<HashMap<String, ImageCuration>, String> {
@@ -586,19 +647,34 @@ fn read_curation_metadata_locked(
     Ok(metadata)
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_curation_updates(
     config_dir: &Path,
     updates: Vec<ImageCurationUpdate>,
     updated_at: u64,
 ) -> Result<(), String> {
-    let updates = normalize_updates(updates);
+    write_curation_updates_with_semantics(
+        config_dir,
+        updates,
+        updated_at,
+        crate::path_normalization::runtime_path_case_semantics(),
+    )
+}
+
+pub(crate) fn write_curation_updates_with_semantics(
+    config_dir: &Path,
+    updates: Vec<ImageCurationUpdate>,
+    updated_at: u64,
+    semantics: PathCaseSemantics,
+) -> Result<(), String> {
+    let updates = normalize_updates(updates, semantics);
     if updates.is_empty() {
         return Ok(());
     }
 
     let _store_lock = acquire_store_lock(config_dir)?;
     prepare_store(config_dir)?;
-    let journal = CurationJournal { updated_at, updates };
+    let journal = CurationJournal { updated_at, path_case_semantics: semantics, updates };
     let journal_content = serde_json::to_string(&journal)
         .map_err(|error| format!("Failed to serialize curation journal: {error}"))?;
     let path = journal_path(config_dir);
@@ -617,17 +693,88 @@ mod tests {
         ImageCurationUpdate { file_path: path.to_string(), favorite, rating }
     }
 
+    fn key(path: &str) -> String {
+        normalize_lookup_path(path)
+    }
+
     #[test]
     fn applies_updates_and_removes_default_entries() {
         let dir = tempdir().unwrap();
         write_curation_updates(dir.path(), vec![update("C:/images/photo.jpg", true, 9)], 42)
             .unwrap();
         let metadata = read_curation_metadata(dir.path()).unwrap();
-        assert_eq!(metadata["C:/images/photo.jpg"].rating, 5);
-        assert_eq!(metadata["C:/images/photo.jpg"].updated_at, 42);
+        let key = normalize_lookup_path("C:/images/photo.jpg");
+        assert_eq!(metadata[&key].rating, 5);
+        assert_eq!(metadata[&key].updated_at, 42);
 
         write_curation_updates(dir.path(), vec![update("C:/images/photo.jpg", false, 0)], 44)
             .unwrap();
+        assert!(read_curation_metadata(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn explicit_case_sensitive_semantics_keep_case_distinct_curation_records() {
+        let dir = tempdir().unwrap();
+        write_curation_updates_with_semantics(
+            dir.path(),
+            vec![update("C:/Sensitive/A.jpg", true, 1), update("C:/Sensitive/a.jpg", true, 5)],
+            42,
+            PathCaseSemantics::Sensitive,
+        )
+        .unwrap();
+
+        let records = read_curation_metadata_for_paths_with_semantics(
+            dir.path(),
+            &["C:/Sensitive/A.jpg".into(), "C:/Sensitive/a.jpg".into()],
+            PathCaseSemantics::Sensitive,
+        )
+        .unwrap();
+        assert_eq!(records.len(), 2);
+        let ratings = records.values().map(|record| record.rating).collect::<HashSet<_>>();
+        assert_eq!(ratings, HashSet::from([1, 5]));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_case_distinct_paths_round_trip_and_clear_independently() {
+        let dir = tempdir().unwrap();
+        let upper = "/photos/A.jpg";
+        let lower = "/photos/a.jpg";
+        write_curation_updates(
+            dir.path(),
+            vec![update(upper, true, 1), update(lower, false, 4)],
+            10,
+        )
+        .unwrap();
+
+        let both =
+            read_curation_metadata_for_paths(dir.path(), &[upper.to_string(), lower.to_string()])
+                .unwrap();
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[upper].rating, 1);
+        assert_eq!(both[lower].rating, 4);
+
+        write_curation_updates(dir.path(), vec![update(upper, false, 0)], 11).unwrap();
+        let remaining = read_curation_metadata(dir.path()).unwrap();
+        assert!(!remaining.contains_key(upper));
+        assert_eq!(remaining[lower].rating, 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_case_variants_share_one_curation_identity() {
+        let dir = tempdir().unwrap();
+        write_curation_updates(
+            dir.path(),
+            vec![update("C:/Photos/A.jpg", true, 1), update("c:/photos/a.jpg", false, 4)],
+            10,
+        )
+        .unwrap();
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata.values().next().unwrap().rating, 4);
+
+        write_curation_updates(dir.path(), vec![update("C:/PHOTOS/A.JPG", false, 0)], 11).unwrap();
         assert!(read_curation_metadata(dir.path()).unwrap().is_empty());
     }
 
@@ -644,10 +791,15 @@ mod tests {
         let metadata = read_curation_metadata(dir.path()).unwrap();
 
         assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata["C:/images/one.jpg"].rating, 5);
+        let key = normalize_lookup_path("C:/images/one.jpg");
+        assert_eq!(metadata[&key].rating, 5);
         assert!(!legacy_path.exists());
         assert!(dir.path().join("curation.v1.migrated.json").exists());
-        assert!(shard_path(dir.path(), shard_id("C:/images/one.jpg")).exists());
+        let migrated_storage_key = normalize_path_text_for_key_with_semantics(
+            "C:/images/one.jpg",
+            PathCaseSemantics::Sensitive,
+        );
+        assert!(shard_path(dir.path(), shard_id(&migrated_storage_key)).exists());
     }
 
     #[test]
@@ -657,7 +809,11 @@ mod tests {
         let updates = (0..100)
             .map(|index| update(&format!("C:/images/{index}.jpg"), true, index % 6))
             .collect();
-        let journal = CurationJournal { updated_at: 88, updates };
+        let journal = CurationJournal {
+            updated_at: 88,
+            path_case_semantics: crate::path_normalization::runtime_path_case_semantics(),
+            updates,
+        };
         let content = serde_json::to_string(&journal).unwrap();
         write_curation_updates(dir.path(), journal.updates.iter().take(50).cloned().collect(), 77)
             .unwrap();
@@ -674,10 +830,10 @@ mod tests {
     fn restores_a_staged_shard_backup_before_replaying_the_journal() {
         let dir = tempdir().unwrap();
         let updated_path = "C:/images/updated.jpg";
-        let shard = shard_id(updated_path);
+        let shard = shard_id(&key(updated_path));
         let unrelated_path = (0..10_000)
             .map(|index| format!("C:/images/unrelated-{index}.jpg"))
-            .find(|path| shard_id(path) == shard && path != updated_path)
+            .find(|path| shard_id(&key(path)) == shard && path != updated_path)
             .unwrap();
         let backup_path = store_directory(dir.path())
             .join(format!("{shard:02x}.lightframe-replace-backup-123456789-0.json"));
@@ -688,15 +844,18 @@ mod tests {
         )
         .unwrap();
         fs::rename(shard_path(dir.path(), shard), &backup_path).unwrap();
-        let journal =
-            CurationJournal { updated_at: 2, updates: vec![update(updated_path, true, 5)] };
+        let journal = CurationJournal {
+            updated_at: 2,
+            path_case_semantics: crate::path_normalization::runtime_path_case_semantics(),
+            updates: vec![update(updated_path, true, 5)],
+        };
         fs::write(journal_path(dir.path()), serde_json::to_string(&journal).unwrap()).unwrap();
 
         let metadata = read_curation_metadata(dir.path()).unwrap();
 
         assert_eq!(metadata.len(), 2);
-        assert_eq!(metadata[&unrelated_path].rating, 4);
-        assert_eq!(metadata[updated_path].rating, 5);
+        assert_eq!(metadata[&key(&unrelated_path)].rating, 4);
+        assert_eq!(metadata[&key(updated_path)].rating, 5);
         assert!(!backup_path.exists());
         assert!(!journal_path(dir.path()).exists());
     }
@@ -705,7 +864,7 @@ mod tests {
     fn never_restores_a_staged_backup_over_a_live_shard() {
         let dir = tempdir().unwrap();
         let live_path = "C:/images/live.jpg";
-        let shard = shard_id(live_path);
+        let shard = shard_id(&key(live_path));
         fs::create_dir_all(store_directory(dir.path())).unwrap();
         let live_entry =
             ImageCuration { path: live_path.to_string(), favorite: true, rating: 5, updated_at: 2 };
@@ -732,7 +891,7 @@ mod tests {
         let metadata = read_curation_metadata(dir.path()).unwrap();
 
         assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[live_path].rating, 5);
+        assert_eq!(metadata[&key(live_path)].rating, 5);
         assert!(!backup_path.exists());
     }
 
@@ -740,10 +899,10 @@ mod tests {
     fn malformed_shard_is_quarantined_without_hiding_healthy_shards() {
         let dir = tempdir().unwrap();
         let damaged_path = "C:/images/damaged.jpg";
-        let damaged_shard = shard_id(damaged_path);
+        let damaged_shard = shard_id(&key(damaged_path));
         let healthy_path = (0..1_000)
             .map(|index| format!("C:/images/healthy-{index}.jpg"))
-            .find(|path| shard_id(path) != damaged_shard)
+            .find(|path| shard_id(&key(path)) != damaged_shard)
             .unwrap();
         write_curation_updates(
             dir.path(),
@@ -756,8 +915,8 @@ mod tests {
         let metadata = read_curation_metadata(dir.path()).unwrap();
 
         assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[&healthy_path].rating, 4);
-        assert!(!metadata.contains_key(damaged_path));
+        assert_eq!(metadata[&key(&healthy_path)].rating, 4);
+        assert!(!metadata.contains_key(&key(damaged_path)));
         assert!(fs::read_dir(store_directory(dir.path())).unwrap().filter_map(Result::ok).any(
             |entry| entry
                 .file_name()
@@ -770,7 +929,7 @@ mod tests {
     fn read_curation_metadata_auto_recovers_staged_replace_backups() {
         let dir = tempdir().unwrap();
         let path = "C:/photos/cat.jpg";
-        let target_shard = shard_id(path);
+        let target_shard = shard_id(&key(path));
         let shard_file = shard_path(dir.path(), target_shard);
         fs::create_dir_all(store_directory(dir.path())).unwrap();
 
@@ -786,7 +945,7 @@ mod tests {
         fs::write(&shard_file, "{corrupt-json-truncated").unwrap();
 
         let metadata = read_curation_metadata(dir.path()).unwrap();
-        assert_eq!(metadata.get(path).map(|c| c.rating), Some(5));
+        assert_eq!(metadata.get(&key(path)).map(|c| c.rating), Some(5));
         assert!(shard_file.exists());
     }
 
@@ -811,7 +970,7 @@ mod tests {
         let updates = paths.iter().map(|path| update(path, true, 3)).collect();
         write_curation_updates(dir.path(), updates, 1).unwrap();
         let target = &paths[4_321];
-        let target_shard = shard_id(target);
+        let target_shard = shard_id(&key(target));
         let untouched: HashMap<u8, Vec<u8>> = fs::read_dir(store_directory(dir.path()))
             .unwrap()
             .filter_map(Result::ok)
@@ -826,7 +985,7 @@ mod tests {
         for (id, bytes) in untouched {
             assert_eq!(fs::read(shard_path(dir.path(), id)).unwrap(), bytes);
         }
-        assert_eq!(read_curation_metadata(dir.path()).unwrap()[target].updated_at, 2);
+        assert_eq!(read_curation_metadata(dir.path()).unwrap()[&key(target)].updated_at, 2);
     }
 
     #[test]
@@ -837,17 +996,19 @@ mod tests {
             let mut grouped = HashMap::<u8, HashMap<String, ImageCuration>>::new();
             for index in 0..count {
                 let path = format!("C:/library/unrelated/{index}.jpg");
-                grouped.entry(shard_id(&path)).or_default().insert(
-                    path.clone(),
-                    ImageCuration { path, favorite: true, rating: 3, updated_at: 1 },
+                let identity = key(&path);
+                grouped.entry(shard_id(&identity)).or_default().insert(
+                    identity.clone(),
+                    ImageCuration { path: identity, favorite: true, rating: 3, updated_at: 1 },
                 );
             }
             let requested =
                 ["C:/library/active/one.jpg".to_string(), "C:/library/active/two.jpg".to_string()];
             for path in &requested {
-                grouped.entry(shard_id(path)).or_default().insert(
-                    path.clone(),
-                    ImageCuration { path: path.clone(), favorite: true, rating: 5, updated_at: 2 },
+                let identity = key(path);
+                grouped.entry(shard_id(&identity)).or_default().insert(
+                    identity.clone(),
+                    ImageCuration { path: identity, favorite: true, rating: 5, updated_at: 2 },
                 );
             }
             for (id, shard) in grouped {
@@ -856,7 +1017,7 @@ mod tests {
 
             let metadata = read_curation_metadata_for_paths(dir.path(), &requested).unwrap();
             assert_eq!(metadata.len(), requested.len());
-            assert!(metadata.keys().all(|path| path.starts_with("C:/library/active/")));
+            assert!(metadata.keys().all(|path| path.starts_with(&key("C:/library/active/"))));
         }
     }
 
@@ -890,7 +1051,7 @@ mod tests {
     fn read_curation_metadata_recovers_from_valid_older_backup_when_newest_is_malformed() {
         let dir = tempdir().unwrap();
         let path = "C:/photos/dog.jpg";
-        let target_shard = shard_id(path);
+        let target_shard = shard_id(&key(path));
         let shard_file = shard_path(dir.path(), target_shard);
         fs::create_dir_all(store_directory(dir.path())).unwrap();
 
@@ -912,7 +1073,7 @@ mod tests {
         fs::write(&shard_file, "{corrupt-destination-shard").unwrap();
 
         let metadata = read_curation_metadata(dir.path()).unwrap();
-        assert_eq!(metadata.get(path).map(|c| c.rating), Some(4));
+        assert_eq!(metadata.get(&key(path)).map(|c| c.rating), Some(4));
         assert!(shard_file.exists());
     }
 
@@ -920,7 +1081,7 @@ mod tests {
     fn read_shard_metadata_file_propagates_rename_failure_and_preserves_newest_backup() {
         let dir = tempdir().unwrap();
         let path = "C:/photos/cat.jpg";
-        let target_shard = shard_id(path);
+        let target_shard = shard_id(&key(path));
         let shard_file = shard_path(dir.path(), target_shard);
         fs::create_dir_all(store_directory(dir.path())).unwrap();
 
@@ -967,7 +1128,7 @@ mod tests {
         fs::write(&shard_file, "{corrupt-shard-retry").unwrap();
 
         let recovered = read_shard_metadata_file(&shard_file).unwrap();
-        assert_eq!(recovered.get(path).map(|c| c.rating), Some(5));
+        assert_eq!(recovered.values().find(|entry| entry.path == path).map(|c| c.rating), Some(5));
         assert!(!newer_valid_backup.exists());
     }
 }
