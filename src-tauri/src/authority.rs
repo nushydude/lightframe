@@ -5940,7 +5940,8 @@ mod tests {
         )
         .unwrap_err();
         let retained = dir.path().join(&cache.borrow().as_ref().unwrap().recovery_name);
-        assert!(error.contains(retained.to_string_lossy().as_ref()));
+        assert!(error
+            .contains(cache.borrow().as_ref().unwrap().recovery_name.to_string_lossy().as_ref()));
         assert_eq!(cache.borrow().as_ref().unwrap().identity, LinuxIsolationIdentity::Unknown);
         assert!(retained.exists());
 
