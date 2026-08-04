@@ -238,7 +238,7 @@ fn linux_rename_noreplace(
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct LinuxHandoffAliasIsolation {
     recovery_name: std::ffi::OsString,
     identity: LinuxIsolationIdentity,
@@ -5979,7 +5979,7 @@ mod tests {
         let recovery_attempts = Rc::new(RefCell::new(0_usize));
         let reported_path = {
             let isolation = Rc::clone(&isolation);
-            let artifacts = Rc::clone(&artifacts);
+            let recovery_artifacts = Rc::clone(&artifacts);
             let fail_once = Rc::clone(&fail_once);
             let recovery_attempts = Rc::clone(&recovery_attempts);
             let mut recovery = SourceReplacementRecovery::new(move |_| {
@@ -5995,7 +5995,7 @@ mod tests {
                 )?;
                 let path = directory_path.join(&outcome.recovery_name);
                 linux_record_preserved_recovery_artifact(
-                    &artifacts,
+                    &recovery_artifacts,
                     path.clone(),
                     "exact handoff alias",
                 );
