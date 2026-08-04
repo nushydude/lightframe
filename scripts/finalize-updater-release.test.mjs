@@ -3,7 +3,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { finalizeUpdaterRelease, finalUpdaterManifest } from './finalize-updater-release.mjs';
+import {
+  finalizeUpdaterRelease,
+  finalUpdaterManifest,
+  signUpdaterArtifact,
+} from './finalize-updater-release.mjs';
 
 const msi = 'LightFrame_8.7.6_x64_en-US.msi';
 const nsis = 'LightFrame_8.7.6_x64-setup.nsis.zip';
@@ -69,4 +73,20 @@ test('finalizer replaces stale signatures and invokes an injectable signer with 
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+});
+
+test('updater signer launches the local Tauri CLI through Node without a command shim', async () => {
+  const calls = [];
+  const executable = 'C:\\Program Files\\nodejs\\node.exe';
+  const artifact = 'C:\\release artifacts\\LightFrame.nsis.zip';
+  await signUpdaterArtifact(artifact, {
+    executable,
+    runCommand: async (...args) => calls.push(args),
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], executable);
+  assert.equal(path.basename(calls[0][1][0]), 'tauri.js');
+  await fs.access(calls[0][1][0]);
+  assert.deepEqual(calls[0][1].slice(1), ['signer', 'sign', artifact]);
+  assert.deepEqual(calls[0][2], { windowsHide: true });
 });
