@@ -1445,6 +1445,8 @@ fn create_destination_staging_file(
     temp_path: &Path,
 ) -> Result<fs::File, String> {
     #[cfg(target_os = "linux")]
+    let _ = temp_path;
+    #[cfg(target_os = "linux")]
     {
         use std::ffi::CString;
         use std::os::fd::{AsRawFd, FromRawFd};
@@ -1557,6 +1559,8 @@ fn publish_destination_staging_file(
     mode: DestinationPublicationMode,
 ) -> Result<(), String> {
     lease.revalidate()?;
+    #[cfg(target_os = "linux")]
+    let _ = (temp_path, target_path);
     #[cfg(target_os = "linux")]
     {
         use std::ffi::CString;
@@ -2037,6 +2041,8 @@ fn remove_destination_staging_file(
     temp_path: &Path,
 ) {
     #[cfg(unix)]
+    let _ = temp_path;
+    #[cfg(unix)]
     {
         use std::ffi::CString;
         use std::os::fd::AsRawFd;
@@ -2212,6 +2218,8 @@ where
                 return Err(format!("Failed to query staging file handle metadata: {}", err));
             }
         };
+        #[cfg(not(windows))]
+        let _ = &staging_meta;
 
         let publish_res = (|| -> Result<(), String> {
             ensure_active()?;

@@ -1,8 +1,8 @@
-use std::io::Read;
+use std::{env, fs::File, io::Read, path::PathBuf, process::ExitCode};
 
 use minisign_verify::{PublicKey, Signature};
 
-pub fn public_key_from_tauri_config(value: &str) -> Result<PublicKey, String> {
+fn public_key_from_tauri_config(value: &str) -> Result<PublicKey, String> {
     let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value.trim())
         .map_err(|_| "Tauri updater public key is not valid base64".to_string())?;
     let key = String::from_utf8(decoded)
@@ -10,7 +10,7 @@ pub fn public_key_from_tauri_config(value: &str) -> Result<PublicKey, String> {
     PublicKey::decode(&key).map_err(|error| format!("Tauri updater public key is invalid: {error}"))
 }
 
-pub fn verify_stream<R: Read>(
+fn verify_stream<R: Read>(
     public_key: &PublicKey,
     signature: &Signature,
     reader: &mut R,
@@ -29,6 +29,36 @@ pub fn verify_stream<R: Read>(
         verifier.update(&buffer[..read]);
     }
     verifier.finalize().map_err(|error| format!("Updater signature verification failed: {error}"))
+}
+
+fn argument(name: &str) -> Result<String, String> {
+    let mut arguments = env::args().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == name {
+            return arguments.next().ok_or_else(|| format!("{name} requires a value"));
+        }
+    }
+    Err(format!("{name} is required"))
+}
+
+fn run() -> Result<(), String> {
+    let artifact = PathBuf::from(argument("--artifact")?);
+    let signature_path = PathBuf::from(argument("--signature")?);
+    let config_path = PathBuf::from(argument("--tauri-config")?);
+    let config: serde_json::Value = serde_json::from_reader(
+        File::open(&config_path).map_err(|error| format!("Cannot open Tauri config: {error}"))?,
+    )
+    .map_err(|error| format!("Cannot parse Tauri config: {error}"))?;
+    let encoded_key = config
+        .pointer("/plugins/updater/pubkey")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Tauri updater public key is missing".to_string())?;
+    let public_key = public_key_from_tauri_config(encoded_key)?;
+    let signature = Signature::from_file(&signature_path)
+        .map_err(|error| format!("Cannot read updater signature: {error}"))?;
+    let mut file =
+        File::open(&artifact).map_err(|error| format!("Cannot open updater artifact: {error}"))?;
+    verify_stream(&public_key, &signature, &mut file)
 }
 
 #[cfg(test)]
@@ -72,5 +102,15 @@ mod tests {
             .expect("modified key remains structurally valid");
         let (_, signature) = fixture();
         assert!(verify_stream(&wrong_key, &signature, &mut Cursor::new(b"test")).is_err());
+    }
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
     }
 }

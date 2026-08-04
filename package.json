@@ -35,7 +35,7 @@
     "ci:frontend": "pnpm run quality:discovery && pnpm run format:check && pnpm run lint && pnpm run test:e2e-helper && pnpm run test:version && pnpm run test:release-supply-chain && pnpm run test:run && pnpm run build && pnpm run quality:secondary-chunks && pnpm run quality:version && pnpm run quality:fallow-directives && pnpm run quality:audit:ci",
     "commit:gate": "node ./scripts/run-commit-gate.mjs",
     "commit:message:check": "node ./scripts/check-commit-message.mjs",
-    "ci:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
+    "ci:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml && cargo fmt --manifest-path tools/updater-signature-verifier/Cargo.toml -- --check && cargo clippy --locked --manifest-path tools/updater-signature-verifier/Cargo.toml -- -D warnings && cargo test --locked --manifest-path tools/updater-signature-verifier/Cargo.toml",
     "smoke:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke/windows-launch-smoke.ps1",
     "e2e:windows": "node scripts/e2e/windows-tauri-e2e.mjs",
     "test:e2e-helper": "node --test scripts/e2e/cdp-client.test.mjs scripts/e2e/windows-tauri-e2e.test.mjs",
@@ -76,7 +76,10 @@
   },
   "pnpm": {
     "overrides": {
-      "esbuild": "0.28.1"
+      "esbuild": "0.28.1",
+      "brace-expansion": "5.0.9",
+      "postcss": "8.5.25",
+      "undici": "7.29.0"
     },
     "onlyBuiltDependencies": [
       "esbuild",

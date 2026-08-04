@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+/tools/updater-signature-verifier/target/
 /artifacts/windows-e2e/
 *.local
 *.tsbuildinfo

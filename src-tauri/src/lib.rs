@@ -13,7 +13,6 @@ mod native_codecs;
 mod path_normalization;
 mod thumbnails;
 mod update_channels;
-pub mod updater_signature;
 mod windows_jump_list;
 mod windows_shortcuts;
 

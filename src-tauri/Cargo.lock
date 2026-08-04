@@ -2476,7 +2476,6 @@ dependencies = [
  "libc",
  "libjpeg-turbo-rs",
  "little_exif",
- "minisign-verify",
  "natord",
  "notify",
  "percent-encoding",

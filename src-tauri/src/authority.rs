@@ -1226,6 +1226,7 @@ impl ImageAuthorityLease {
                 Err("Injected quarantined source reopen failure".to_string())
             } else {
                 linux_open_named_nofollow(directory_fd, &backup_name)
+                    .map_err(|error| error.to_string())
             } {
                 Ok(handle) => handle,
                 Err(error) => {
@@ -1702,7 +1703,8 @@ impl ImageAuthorityLease {
                     format!("{reason}; failed to restore exact trash source: {error}")
                 })?;
                 let restored =
-                    linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &source)?;
+                    linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &source)
+                        .map_err(|error| error.to_string())?;
                 let restored_metadata = restored.metadata().map_err(|error| error.to_string())?;
                 if restored_metadata.dev() != pinned.dev()
                     || restored_metadata.ino() != pinned.ino()
@@ -1730,7 +1732,8 @@ impl ImageAuthorityLease {
                 trash_transaction.mutate("Failed to quarantine trash source", || {
                     rename(&source, &quarantine).map_err(|error| error.to_string())?;
                     let quarantine_handle =
-                        linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &quarantine)?;
+                        linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &quarantine)
+                            .map_err(|error| error.to_string())?;
                     let quarantined =
                         quarantine_handle.metadata().map_err(|error| error.to_string())?;
                     if pinned.dev() != quarantined.dev() || pinned.ino() != quarantined.ino() {
@@ -1752,7 +1755,8 @@ impl ImageAuthorityLease {
                         ));
                     }
                     let handoff =
-                        linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &source)?;
+                        linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &source)
+                            .map_err(|error| error.to_string())?;
                     let handoff_metadata = handoff.metadata().map_err(|error| error.to_string())?;
                     if handoff_metadata.dev() != pinned.dev()
                         || handoff_metadata.ino() != pinned.ino()
@@ -1945,8 +1949,11 @@ impl ImageAuthorityLease {
         let mut snapshot =
             AuthorizedSourceSnapshot { path: directory.join("source.pending"), directory };
         #[cfg(unix)]
-        fs::set_permissions(&snapshot.directory, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("Failed to secure authorized input directory: {error}"))?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&snapshot.directory, fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("Failed to secure authorized input directory: {error}"))?;
+        }
 
         let extension = self
             .canonical_path
@@ -2242,7 +2249,8 @@ impl ImageAuthorityLease {
                 )
                 .map_err(|error| format!("{context}; exact source restore failed: {error}"))?;
                 let restored =
-                    linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &source)?;
+                    linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &source)
+                        .map_err(|error| error.to_string())?;
                 if !linux_same_file(&self.file_handle, &restored)? {
                     return Err(format!("{context}; restored source identity mismatch"));
                 }
@@ -2606,6 +2614,7 @@ impl ImageAuthorityLease {
                                 destination_fd,
                                 &target,
                             )
+                            .map_err(|error| error.to_string())
                             .and_then(|file| {
                                 let metadata = file.metadata().map_err(|error| error.to_string())?;
                                 if metadata.dev() == expected_output_metadata.dev()

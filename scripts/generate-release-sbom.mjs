@@ -44,8 +44,8 @@ function packagePurl(name, version, source) {
   return `pkg:${ecosystem}/${encodedName}@${encodeURIComponent(version)}`;
 }
 
-export function createSpdxDocument({ version, cargoLock, pnpmLock }) {
-  const dependencies = [...cargoPackages(cargoLock), ...pnpmPackages(pnpmLock)];
+export function createSpdxDocument({ version, cargoLocks, pnpmLock }) {
+  const dependencies = [...cargoLocks.flatMap(cargoPackages), ...pnpmPackages(pnpmLock)];
   const unique = new Map();
   for (const dependency of dependencies)
     unique.set(`${dependency.source}:${dependency.name}@${dependency.version}`, dependency);
@@ -101,13 +101,18 @@ async function main() {
   const output = argument('--output');
   if (!output) throw new Error('Usage: generate-release-sbom.mjs --output <file>');
   const root = path.resolve(import.meta.dirname, '..');
-  const [manifest, cargoLock, pnpmLock] = await Promise.all([
+  const [manifest, appCargoLock, verifierCargoLock, pnpmLock] = await Promise.all([
     fs.readFile(path.join(root, 'package.json'), 'utf8'),
     fs.readFile(path.join(root, 'src-tauri', 'Cargo.lock'), 'utf8'),
+    fs.readFile(path.join(root, 'tools', 'updater-signature-verifier', 'Cargo.lock'), 'utf8'),
     fs.readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8'),
   ]);
   const { version } = JSON.parse(manifest);
-  const document = createSpdxDocument({ version, cargoLock, pnpmLock });
+  const document = createSpdxDocument({
+    version,
+    cargoLocks: [appCargoLock, verifierCargoLock],
+    pnpmLock,
+  });
   await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
   await fs.writeFile(output, `${JSON.stringify(document, null, 2)}\n`);
   console.log(`generated SPDX SBOM with ${document.packages.length - 1} locked dependencies`);

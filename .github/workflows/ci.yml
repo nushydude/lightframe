@@ -47,6 +47,13 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ./src-tauri
 
+      - name: Audit updater verifier Cargo.lock against RustSec
+        # v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: ./tools/updater-signature-verifier
+
   frontend-quality:
     name: Frontend Quality Gate
     runs-on: ubuntu-latest
@@ -138,6 +145,18 @@ jobs:
       - name: Run Rust tests
         run: cargo test
         working-directory: ./src-tauri
+
+      - name: Check updater verifier formatting
+        run: cargo fmt -- --check
+        working-directory: ./tools/updater-signature-verifier
+
+      - name: Lint updater verifier with locked Clippy
+        run: cargo clippy --locked -- -D warnings
+        working-directory: ./tools/updater-signature-verifier
+
+      - name: Run locked updater verifier tests
+        run: cargo test --locked
+        working-directory: ./tools/updater-signature-verifier
 
   windows-packaged-startup-smoke:
     name: Windows Packaged Startup Smoke
