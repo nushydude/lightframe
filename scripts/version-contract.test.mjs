@@ -390,6 +390,12 @@ test('release workflow uses the local same-SHA quality workflow before drafting 
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /security-events: write/);
   assert.match(workflow, /group: release-\$\{\{ github\.ref \}\}/);
+  assert.ok(
+    workflow.includes(`run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          printf 'value=%s\\n' "$VERSION" >> "$GITHUB_OUTPUT"`)
+  );
+  assert.doesNotMatch(workflow, /node -p \\"/);
   assert.match(workflow, /releaseDraft: true/);
   assert.match(workflow, /releaseCommitish: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /release-draft-guard\.mjs pre/);
