@@ -28,8 +28,9 @@ async function finalEvidenceFixture() {
   const config = path.join(configDirectory, 'tauri.conf.json');
   const latest = path.join(directory, 'latest.json');
   const sbom = path.join(directory, 'lightframe-8.7.6.spdx.json');
+  const tauriSignature = Buffer.from(signature).toString('base64');
   await fs.writeFile(artifact, 'test');
-  await fs.writeFile(`${artifact}.sig`, signature);
+  await fs.writeFile(`${artifact}.sig`, tauriSignature);
   await fs.writeFile(
     config,
     JSON.stringify({
@@ -44,7 +45,7 @@ async function finalEvidenceFixture() {
     latest,
     JSON.stringify({
       version: '8.7.6',
-      platforms: { 'windows-x86_64': { signature } },
+      platforms: { 'windows-x86_64': { signature: tauriSignature } },
     })
   );
   await fs.writeFile(

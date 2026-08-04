@@ -1,4 +1,4 @@
-use std::{env, fs::File, io::Read, path::PathBuf, process::ExitCode};
+use std::{env, fs, fs::File, io::Read, path::PathBuf, process::ExitCode};
 
 use minisign_verify::{PublicKey, Signature};
 
@@ -8,6 +8,19 @@ fn public_key_from_tauri_config(value: &str) -> Result<PublicKey, String> {
     let key = String::from_utf8(decoded)
         .map_err(|_| "Tauri updater public key is not UTF-8".to_string())?;
     PublicKey::decode(&key).map_err(|error| format!("Tauri updater public key is invalid: {error}"))
+}
+
+fn signature_from_tauri_data(value: &str) -> Result<Signature, String> {
+    let value = value.trim();
+    if let Ok(signature) = Signature::decode(value) {
+        return Ok(signature);
+    }
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
+        .map_err(|_| "Updater signature is neither minisign text nor valid base64".to_string())?;
+    let minisign = String::from_utf8(decoded)
+        .map_err(|_| "Base64 updater signature does not contain UTF-8 minisign text".to_string())?;
+    Signature::decode(&minisign)
+        .map_err(|error| format!("Decoded updater signature is invalid: {error}"))
 }
 
 fn verify_stream<R: Read>(
@@ -54,8 +67,9 @@ fn run() -> Result<(), String> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "Tauri updater public key is missing".to_string())?;
     let public_key = public_key_from_tauri_config(encoded_key)?;
-    let signature = Signature::from_file(&signature_path)
+    let signature_data = fs::read_to_string(&signature_path)
         .map_err(|error| format!("Cannot read updater signature: {error}"))?;
+    let signature = signature_from_tauri_data(&signature_data)?;
     let mut file =
         File::open(&artifact).map_err(|error| format!("Cannot open updater artifact: {error}"))?;
     verify_stream(&public_key, &signature, &mut file)
@@ -65,9 +79,10 @@ fn run() -> Result<(), String> {
 mod tests {
     use std::io::Cursor;
 
+    use base64::Engine;
     use minisign_verify::{PublicKey, Signature};
 
-    use super::verify_stream;
+    use super::{signature_from_tauri_data, verify_stream};
 
     const PUBLIC_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
     const SIGNATURE: &str = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1556193335\tfile:test\ny/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
@@ -83,6 +98,25 @@ mod tests {
     fn accepts_the_final_bytes_with_their_signature() {
         let (key, signature) = fixture();
         assert!(verify_stream(&key, &signature, &mut Cursor::new(b"test")).is_ok());
+    }
+
+    #[test]
+    fn accepts_tauri_base64_wrapped_and_raw_minisign_signatures() {
+        let key = PublicKey::from_base64(PUBLIC_KEY).expect("fixture key");
+        let wrapped = base64::engine::general_purpose::STANDARD.encode(SIGNATURE);
+        for encoded in [SIGNATURE, wrapped.as_str()] {
+            let signature = signature_from_tauri_data(encoded).expect("valid signature encoding");
+            assert!(verify_stream(&key, &signature, &mut Cursor::new(b"test")).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_tauri_signature_encodings() {
+        assert!(signature_from_tauri_data("not a minisign signature or base64").is_err());
+        let invalid_utf8 = base64::engine::general_purpose::STANDARD.encode([0xff, 0xfe]);
+        assert!(signature_from_tauri_data(&invalid_utf8).is_err());
+        let malformed = base64::engine::general_purpose::STANDARD.encode("not minisign text");
+        assert!(signature_from_tauri_data(&malformed).is_err());
     }
 
     #[test]
