@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
 const argument = (name) => {
@@ -10,6 +11,10 @@ const argument = (name) => {
   return index === -1 ? undefined : process.argv.at(index + 1);
 };
 const updaterPattern = /(?:\.nsis\.zip|\.msi|\.exe)$/i;
+const tauriCliPath = path.join(
+  path.dirname(fileURLToPath(import.meta.resolve('@tauri-apps/cli'))),
+  'tauri.js'
+);
 
 function safeLeafName(name) {
   assert.match(name, /^[^\\/]+$/, `Unsafe release artifact name: ${name}`);
@@ -75,6 +80,15 @@ export function finalUpdaterManifest({ version, tag, files, signatures }) {
   };
 }
 
+export async function signUpdaterArtifact(
+  artifact,
+  { runCommand = run, executable = process.execPath, cliPath = tauriCliPath } = {}
+) {
+  await runCommand(executable, [cliPath, 'signer', 'sign', artifact], {
+    windowsHide: true,
+  });
+}
+
 export async function finalizeUpdaterRelease({
   artifactDirectory,
   version,
@@ -83,16 +97,7 @@ export async function finalizeUpdaterRelease({
   removeFile = fs.rm,
   readFile = fs.readFile,
   writeFile = fs.writeFile,
-  signArtifact = async (artifact) => {
-    await run(
-      process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
-      ['tauri', 'signer', 'sign', artifact],
-      {
-        env: process.env,
-        windowsHide: true,
-      }
-    );
-  },
+  signArtifact = signUpdaterArtifact,
 }) {
   assert.ok(artifactDirectory, 'artifactDirectory is required');
   const directory = path.resolve(artifactDirectory);

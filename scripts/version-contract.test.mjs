@@ -319,6 +319,58 @@ test('cleanup deletes only the exact Tauri-created same-SHA draft and tag', asyn
   );
 });
 
+test('cleanup succeeds when deleting the draft also removes its lightweight tag', async () => {
+  const sha = 'a'.repeat(40);
+  const deleted = [];
+  let releaseDeleted = false;
+  await runDraftCleanup({
+    tag: 'app-v8.7.5',
+    expectedSha: sha,
+    releaseId: '77',
+    apiGet: async (pathname) => {
+      if (pathname.startsWith('/git/ref/')) {
+        return releaseDeleted ? undefined : { object: { type: 'commit', sha } };
+      }
+      if (pathname === '/releases/77') {
+        return { id: 77, tag_name: 'app-v8.7.5', draft: true, target_commitish: sha };
+      }
+      throw new Error(`Unexpected API request: ${pathname}`);
+    },
+    apiDelete: async (pathname) => {
+      deleted.push(pathname);
+      if (pathname === '/releases/77') releaseDeleted = true;
+    },
+  });
+  assert.deepEqual(deleted, ['/releases/77']);
+});
+
+test('cleanup refuses tag deletion if the tag changes after draft deletion', async () => {
+  const sha = 'a'.repeat(40);
+  const changedSha = 'b'.repeat(40);
+  const deleted = [];
+  let tagReads = 0;
+  await assert.rejects(
+    runDraftCleanup({
+      tag: 'app-v8.7.5',
+      expectedSha: sha,
+      releaseId: '77',
+      apiGet: async (pathname) => {
+        if (pathname.startsWith('/git/ref/')) {
+          tagReads += 1;
+          return { object: { type: 'commit', sha: tagReads === 1 ? sha : changedSha } };
+        }
+        if (pathname === '/releases/77') {
+          return { id: 77, tag_name: 'app-v8.7.5', draft: true, target_commitish: sha };
+        }
+        throw new Error(`Unexpected API request: ${pathname}`);
+      },
+      apiDelete: async (pathname) => deleted.push(pathname),
+    }),
+    /Release tag changed before cleanup deletion/
+  );
+  assert.deepEqual(deleted, ['/releases/77']);
+});
+
 test('verifies existing, versioned Tauri Action installer outputs', async () => {
   assert.deepEqual(parseArtifactPaths('["a.msi","b.exe"]'), ['a.msi', 'b.exe']);
   assert.deepEqual(parseArtifactPaths('a.msi\nb.exe'), ['a.msi', 'b.exe']);

@@ -139,8 +139,9 @@ export async function runDraftCleanup({ apiGet, apiDelete, tag, expectedSha, rel
   );
   await apiDelete(`/releases/${releaseId}`);
   const refBeforeTagDelete = await apiGet(`/git/ref/tags/${encodeURIComponent(tag)}`);
+  if (!refBeforeTagDelete) return;
   const commitBeforeTagDelete = await resolveGitObjectCommit(
-    refBeforeTagDelete?.object,
+    refBeforeTagDelete.object,
     async (sha) => {
       const tagObject = await apiGet(`/git/tags/${sha}`);
       assert.ok(tagObject, `Annotated tag object ${sha} was not found`);
