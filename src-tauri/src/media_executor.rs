@@ -557,7 +557,7 @@ impl MediaExecutor {
             }
         }
 
-        for (_, job) in inner.running_jobs.iter() {
+        for job in inner.running_jobs.values() {
             job.cancel_token.cancel();
         }
 

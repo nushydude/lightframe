@@ -1222,7 +1222,7 @@ impl ImageAuthorityLease {
                     .sync_all()
                     .map_err(|error| format!("Failed to sync quarantined source: {error}"))
             })?;
-            let backup_handle = match if failure == ReplacementFailurePoint::DuringBackupReopen {
+            let _backup_handle = match if failure == ReplacementFailurePoint::DuringBackupReopen {
                 Err("Injected quarantined source reopen failure".to_string())
             } else {
                 linux_open_named_nofollow(directory_fd, &backup_name)
@@ -1387,6 +1387,7 @@ impl ImageAuthorityLease {
             uuid::Uuid::new_v4(),
             original_name.to_string_lossy()
         );
+        #[cfg(windows)]
         let quarantine_path = self.canonical_folder.join(&quarantine_name);
 
         #[cfg(windows)]
