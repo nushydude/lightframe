@@ -148,7 +148,7 @@ jobs:
       - name: Sign final artifacts with Azure Trusted Signing when configured
         if: vars.WINDOWS_SIGNING_PROVIDER == 'azure-trusted-signing'
         # v0.5.9
-        uses: azure/trusted-signing-action@bb15ca63eb5548cc306f4f335c5617bb414abcad
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
