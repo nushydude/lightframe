@@ -38,7 +38,9 @@ jobs:
       - id: version
         name: Export verified version
         shell: bash
-        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          printf 'value=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
   quality-gates:
     name: Required Quality Gates
