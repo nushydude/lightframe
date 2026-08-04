@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { relaunch } from '@tauri-apps/plugin-process';
+import { getRuntime } from '../services/runtime/runtime';
 import { useSettingsStore } from '../state/settingsStore';
 import { checkUpdateChannel, updateChannelLabel } from '../services/updateService';
 import type { UpdateChannel } from '../types/settings';
@@ -70,10 +70,10 @@ async function downloadAndInstallChannelUpdate(
   await update.downloadAndInstall((event) => {
     switch (event.event) {
       case 'Started':
-        contentLength = event.data.contentLength || 0;
+        contentLength = event.data?.contentLength || 0;
         break;
       case 'Progress':
-        downloaded += event.data.chunkLength;
+        downloaded += event.data?.chunkLength ?? 0;
         if (contentLength > 0) {
           onProgress(Math.round((downloaded / contentLength) * 100));
         }
@@ -81,7 +81,7 @@ async function downloadAndInstallChannelUpdate(
     }
   });
 
-  await relaunch();
+  await getRuntime().relaunch();
   return true;
 }
 

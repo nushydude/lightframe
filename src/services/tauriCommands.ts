@@ -1,19 +1,10 @@
-import { convertFileSrc as tauriConvertFileSrc, invoke } from '@tauri-apps/api/core';
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import {
-  availableMonitors,
-  currentMonitor,
-  PhysicalPosition,
-  PhysicalSize,
-  type Monitor,
-} from '@tauri-apps/api/window';
-import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
+import { invoke } from '@tauri-apps/api/core';
+import { getRuntime } from './runtime/runtime';
+import type { RuntimeUnlisten } from './runtime/types';
 import type { ImageFile, ImageMetadata } from '../types/image';
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
 import { settingsFromRust, settingsToRust } from '../types/settings';
-import { projectorWindowTitle } from './windowTitle';
 
 export interface ExifData {
   make?: string;
@@ -189,8 +180,8 @@ export async function unwatchFolder(watchId?: string): Promise<void> {
 /** Listen for debounced active-folder watcher updates */
 export async function listenToFolderWatcherChanges(
   onChange: (payload: FolderWatcherPayload) => void
-): Promise<UnlistenFn> {
-  return listen<FolderWatcherPayload>(FOLDER_WATCHER_EVENT, (event) => onChange(event.payload));
+): Promise<RuntimeUnlisten> {
+  return getRuntime().listen<FolderWatcherPayload>(FOLDER_WATCHER_EVENT, onChange);
 }
 
 /** Scan a folder for supported image files, returned in natural sort order */
@@ -400,7 +391,7 @@ export async function getThumbnail(
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
 export async function revealInExplorer(filePath: string): Promise<void> {
-  return revealItemInDir(filePath);
+  return getRuntime().revealItem(filePath);
 }
 
 /** Open a file path in a specific external application */
@@ -411,94 +402,17 @@ export async function openInExternalApplication(
   return invoke('open_in_external_application', { filePath, applicationPath });
 }
 
-function isSameMonitor(a: Monitor | null, b: Monitor): boolean {
-  return (
-    a?.name === b.name &&
-    a.position.x === b.position.x &&
-    a.position.y === b.position.y &&
-    a.size.width === b.size.width &&
-    a.size.height === b.size.height
-  );
-}
-
-async function getProjectorMonitor(): Promise<Monitor | null> {
-  const monitors = await availableMonitors();
-  if (monitors.length === 0) {
-    return null;
-  }
-
-  if (monitors.length === 1) {
-    return monitors[0] ?? null;
-  }
-
-  const activeMonitor = await currentMonitor();
-  return monitors.find((monitor) => !isSameMonitor(activeMonitor, monitor)) ?? monitors[0] ?? null;
-}
-
-async function positionProjectorWindow(webview: WebviewWindow): Promise<void> {
-  const monitor = await getProjectorMonitor();
-  if (monitor) {
-    await webview.setPosition(new PhysicalPosition(monitor.position.x, monitor.position.y));
-    await webview.setSize(new PhysicalSize(monitor.size.width, monitor.size.height));
-  }
-
-  await webview.show();
-  await webview.setFocus();
-  await webview.setFullscreen(true);
-}
-
-function waitForProjectorCreation(webview: WebviewWindow): Promise<void> {
-  return new Promise((resolve, reject) => {
-    void webview.once('tauri://created', () => resolve());
-    void webview.once('tauri://error', (event) => {
-      reject(event.payload instanceof Error ? event.payload : new Error(String(event.payload)));
-    });
-  });
-}
-
 /** Open a secondary window for Projector Mode */
 export async function openSecondaryWindow(): Promise<void> {
-  const label = 'secondary';
-  try {
-    const existingWebview = await WebviewWindow.getByLabel(label);
-    if (existingWebview) {
-      await positionProjectorWindow(existingWebview);
-      return;
-    }
-
-    const webview = new WebviewWindow(label, {
-      title: projectorWindowTitle(),
-      width: 800,
-      height: 600,
-      visible: false,
-      focus: true,
-    });
-
-    await waitForProjectorCreation(webview);
-    await positionProjectorWindow(webview);
-  } catch (err) {
-    console.error('Secondary window error:', err);
-    throw err;
-  }
+  return getRuntime().openSecondaryWindow();
 }
 
 export async function isSecondaryWindowOpen(): Promise<boolean> {
-  return (await WebviewWindow.getByLabel('secondary')) !== null;
+  return getRuntime().isSecondaryWindowOpen();
 }
 
 export async function closeSecondaryWindow(): Promise<void> {
-  const webview = await WebviewWindow.getByLabel('secondary');
-  if (!webview) {
-    return;
-  }
-
-  try {
-    await webview.setFullscreen(false);
-  } catch (err) {
-    console.warn('Failed to exit fullscreen before closing projector window:', err);
-  }
-
-  await webview.close();
+  return getRuntime().closeSecondaryWindow();
 }
 
 export type StateSyncSource = 'main' | 'secondary';
@@ -508,28 +422,28 @@ export async function emitStateSync(
   imagePath: string | null,
   source: StateSyncSource
 ): Promise<void> {
-  return emit('state-sync', { imagePath, source });
+  return getRuntime().emit('state-sync', { imagePath, source });
 }
 
 /** Ask the main window to send its current state */
 export async function requestStateSync(): Promise<void> {
-  return emit('state-sync-request');
+  return getRuntime().emit('state-sync-request');
 }
 
 /** Open Windows Default Apps settings */
 export async function openSettings(): Promise<void> {
   // On Windows, ms-settings:defaultapps is the most reliable way to let users change defaults
-  return openUrl('ms-settings:defaultapps');
+  return getRuntime().openExternal('ms-settings:defaultapps');
 }
 
 /** Open a URL in the system's default browser */
 export async function openUrlExternal(url: string): Promise<void> {
-  return openUrl(url);
+  return getRuntime().openExternal(url);
 }
 
 /** Convert a local file path to a Tauri asset protocol URL */
 export function convertFileSrc(path: string): string {
-  return tauriConvertFileSrc(path);
+  return getRuntime().assetUrl(path);
 }
 
 /** Convert a generated cached image asset into a URL with a stable cache-busting token */

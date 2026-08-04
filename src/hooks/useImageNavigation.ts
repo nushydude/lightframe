@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
 import type { ImageFile } from '../types/image';
 import {
   getParentFolder,
@@ -186,7 +185,7 @@ export function useImageNavigation() {
       autoRefreshFolder: state.settings.autoRefreshFolder,
     }))
   );
-  const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
+  const isMainWindowRef = useRef(getRuntime().window.label === 'main');
   const randomOrderRef = useRef<string[] | null>(null);
   const randomSortKeyRef = useRef<string | null>(null);
   const randomFolderRef = useRef<string | null>(null);
@@ -365,7 +364,7 @@ export function useImageNavigation() {
   );
 
   const setFolderWindowTitle = useCallback(async (nextFolderPath: string) => {
-    const appWindow = getCurrentWindow();
+    const appWindow = getRuntime().window;
     const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
     await appWindow.setTitle(mainWindowTitle(`[Folder] ${folderName}`));
   }, []);
@@ -507,7 +506,7 @@ export function useImageNavigation() {
         setCurrentImage(filePath, 0);
         setViewMode('viewer');
 
-        const appWindow = getCurrentWindow();
+        const appWindow = getRuntime().window;
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
         await appWindow.setTitle(mainWindowTitle(fileName));
         if (!isCurrentGeneration(loadGeneration)) return;
@@ -555,14 +554,9 @@ export function useImageNavigation() {
   /** Open a file picker dialog */
   const openFilePicker = useCallback(async () => {
     try {
-      const selected = await open({
+      const selected = await getRuntime().openFileOrFolder({
         multiple: false,
-        filters: [
-          {
-            name: 'Images',
-            extensions: [...SUPPORTED_IMAGE_EXTENSIONS],
-          },
-        ],
+        filters: [{ name: 'Images', extensions: [...SUPPORTED_IMAGE_EXTENSIONS] }],
       });
 
       if (selected) {
@@ -657,10 +651,7 @@ export function useImageNavigation() {
   /** Open a folder picker dialog */
   const openFolderPicker = useCallback(async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
+      const selected = await getRuntime().openFolder();
 
       if (selected) {
         await openFolder(selected as string);

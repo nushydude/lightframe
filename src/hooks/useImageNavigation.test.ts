@@ -13,8 +13,9 @@ import {
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { mainWindowTitle } from '../services/windowTitle';
-import { open } from '@tauri-apps/plugin-dialog';
 import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 
@@ -31,16 +32,7 @@ vi.mock('../services/tauriCommands', () => ({
   getParentFolder: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: vi.fn(() => ({
-    label: 'main',
-    setTitle: mockSetTitle,
-  })),
-}));
+const open = vi.fn();
 
 vi.mock('../services/thumbnailCache', () => ({
   invalidateThumbnail: vi.fn(),
@@ -74,6 +66,12 @@ const mockAudioContext = {
 
 describe('useImageNavigation', () => {
   beforeEach(() => {
+    initializeRuntime(
+      createTestRuntimeAdapter({
+        window: { ...createTestRuntimeAdapter().window, label: 'main', setTitle: mockSetTitle },
+        openFileOrFolder: open,
+      })
+    );
     useViewerStore.getState().reset();
     useSettingsStore.setState({
       settings: {

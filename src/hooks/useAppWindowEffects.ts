@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { isDirectory, updateRecentFoldersJumpList } from '../services/tauriCommands';
 import { applyThemePreference } from '../services/themePreference';
 import { configureImageAssetCache } from '../services/imageAssetCache';
@@ -14,6 +13,7 @@ import { mainWindowTitle } from '../services/windowTitle';
 import { useSettingsStore } from '../state/settingsStore';
 import type { PerformanceMode } from '../types/settings';
 import type { ImageCuration } from '../types/curation';
+import { getRuntime } from '../services/runtime/runtime';
 
 type PendingMarkedSelectionSnapshot = {
   folderPath: string | null;
@@ -74,21 +74,24 @@ export function useDragAndDrop({
   setIsDragOver: (value: boolean) => void;
 }) {
   useEffect(() => {
-    const unlistenDrag = listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
-      setIsDragOver(false);
-      const paths = event.payload.paths;
-      if (!paths || paths.length === 0) return;
+    const unlistenDrag = getRuntime().listen<{ paths: string[] }>(
+      'tauri://drag-drop',
+      async (payload) => {
+        setIsDragOver(false);
+        const paths = payload.paths;
+        if (!paths || paths.length === 0) return;
 
-      try {
-        if (await isDirectory(paths[0])) await openFolder(paths[0]);
-        else await openImage(paths[0]);
-      } catch (error) {
-        console.error('Failed to stat dragged file:', error);
-        await openImage(paths[0]);
+        try {
+          if (await isDirectory(paths[0])) await openFolder(paths[0]);
+          else await openImage(paths[0]);
+        } catch (error) {
+          console.error('Failed to stat dragged file:', error);
+          await openImage(paths[0]);
+        }
       }
-    });
-    const unlistenDragEnter = listen('tauri://drag-enter', () => setIsDragOver(true));
-    const unlistenDragLeave = listen('tauri://drag-leave', () => setIsDragOver(false));
+    );
+    const unlistenDragEnter = getRuntime().listen('tauri://drag-enter', () => setIsDragOver(true));
+    const unlistenDragLeave = getRuntime().listen('tauri://drag-leave', () => setIsDragOver(false));
 
     return () => {
       void unlistenDrag.then((fn) => fn());

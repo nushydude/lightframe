@@ -1,5 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
-import { save } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from '../services/runtime/runtime';
 import { getFileName, getImageMetadata, saveScaledCopy } from '../services/tauriCommands';
 import { useEditQueueStore } from '../state/editQueueStore';
 import { useToastStore } from '../state/toastStore';
@@ -31,7 +31,6 @@ const SAVE_FILTERS = [
   { name: 'BMP image', extensions: ['bmp'] },
   { name: 'GIF image', extensions: ['gif'] },
 ];
-
 interface PreparedScaledCopy {
   outputPath: string;
   width: number;
@@ -234,10 +233,10 @@ export function QualityExportMenu({
       return null;
     }
 
-    const outputPath = await save({
-      filters: SAVE_FILTERS,
-      defaultPath: defaultOutputPath(currentImagePath, parsedWidth, parsedHeight),
-    });
+    const outputPath = await getRuntime().saveFile(
+      defaultOutputPath(currentImagePath, parsedWidth, parsedHeight),
+      { filters: SAVE_FILTERS }
+    );
     if (!outputPath) return null;
     if (!OUTPUT_EXTENSIONS.has(pathExtension(outputPath))) {
       pushToast({ title: 'Scale Copy', kind: 'error', message: OUTPUT_MESSAGE });

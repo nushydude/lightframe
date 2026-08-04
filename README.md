@@ -76,7 +76,7 @@ Prerequisites:
 - Rust stable
 - Tauri desktop prerequisites for your operating system
 
-Install and run the app locally:
+Run native desktop behavior locally:
 
 ```bash
 pnpm install
@@ -88,6 +88,11 @@ Run the frontend-only dev server:
 ```bash
 pnpm dev
 ```
+
+`pnpm dev` is a safe UI-development surface. It displays a deterministic synthetic catalog and
+labels itself as demo mode; it cannot read files, use drag/drop, run updates, restart the process,
+reveal files, or perform destructive actions. Use `pnpm tauri dev` whenever native behavior is
+needed.
 
 Build the frontend:
 
@@ -107,6 +112,16 @@ Run the Windows packaged-startup smoke test after building an unpackaged release
 pnpm tauri build --no-bundle --ci
 pnpm run smoke:windows
 ```
+
+Run the automated Windows Tauri CDP harness (Windows, WebView2 remote debugging support, and a built `lightframe.exe` required):
+
+```powershell
+pnpm run e2e:windows
+```
+
+The harness isolates its profile and temporary image fixtures, then exercises home startup, folder
+startup, navigation/grid, curation persistence after restart, and Settings/Command Palette shortcuts.
+Failures write logs, CDP diagnostics, and artifacts under `artifacts/windows-e2e/`.
 
 ## Quality Gates
 

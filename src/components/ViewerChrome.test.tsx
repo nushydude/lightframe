@@ -7,8 +7,8 @@ import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, save } from '@tauri-apps/plugin-dialog';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 import * as tauriCommands from '../services/tauriCommands';
 import * as viewerActions from '../services/viewerActions';
 import { useToastStore } from '../state/toastStore';
@@ -17,6 +17,12 @@ const projectorState = vi.hoisted(() => ({
   isProjectorOpen: false,
   refreshProjectorState: vi.fn(),
 }));
+const confirm = vi.fn();
+const save = vi.fn();
+const mockWindow = {
+  ...createTestRuntimeAdapter().window,
+  setFullscreen: vi.fn().mockResolvedValue(undefined),
+};
 
 vi.mock('../hooks/useProjectorState', () => ({
   useProjectorState: () => ({
@@ -56,6 +62,7 @@ describe('ViewerChrome', () => {
     projectorState.isProjectorOpen = false;
     projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
+    initializeRuntime(createTestRuntimeAdapter({ window: mockWindow, confirm, saveFile: save }));
     vi.spyOn(tauriCommands, 'getImageMetadata').mockResolvedValue({
       width: 1200,
       height: 800,
@@ -782,7 +789,6 @@ describe('ViewerChrome', () => {
 
   it('should toggle fullscreen when button is clicked', async () => {
     useViewerStore.setState({ currentImagePath: 'C:/photo.jpg' });
-    const mockWindow = getCurrentWindow();
 
     render(<ViewerChrome {...defaultProps} />);
 
@@ -1927,15 +1933,16 @@ describe('ViewerChrome', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     });
 
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultPath: 'C:/Images/photo-scaled-1200x800.jpg',
-        filters: expect.arrayContaining([
-          expect.objectContaining({ name: 'JPEG image', extensions: ['jpg', 'jpeg'] }),
-          expect.objectContaining({ name: 'PNG image', extensions: ['png'] }),
-        ]),
-      })
-    );
+    expect(save).toHaveBeenCalledWith('C:/Images/photo-scaled-1200x800.jpg', {
+      filters: [
+        { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
+        { name: 'PNG image', extensions: ['png'] },
+        { name: 'WebP image', extensions: ['webp'] },
+        { name: 'TIFF image', extensions: ['tif', 'tiff'] },
+        { name: 'BMP image', extensions: ['bmp'] },
+        { name: 'GIF image', extensions: ['gif'] },
+      ],
+    });
   });
 
   it('rejects unsupported scaled export output extensions from the save dialog', async () => {
@@ -2048,13 +2055,10 @@ describe('ViewerChrome', () => {
     });
 
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining('photo.jpg'),
-      expect.objectContaining({
-        title: 'Overwrite Cropped Image',
-        kind: 'warning',
-      })
-    );
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('photo.jpg'), {
+      title: 'Overwrite Cropped Image',
+      kind: 'warning',
+    });
     expect(vi.mocked(confirm).mock.calls[0]?.[0]).toContain('This modifies the source file.');
     expect(overwriteSpy).not.toHaveBeenCalled();
   });
@@ -2235,13 +2239,10 @@ describe('ViewerChrome', () => {
       fireEvent.click(screen.getByLabelText('Save pending edits'));
     });
 
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining('photo.jpg'),
-      expect.objectContaining({
-        title: 'Overwrite Cropped Image',
-        kind: 'warning',
-      })
-    );
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('photo.jpg'), {
+      title: 'Overwrite Cropped Image',
+      kind: 'warning',
+    });
     expect(overwriteSpy).not.toHaveBeenCalled();
     expect(useViewerStore.getState().pendingEditsByPath['C:/Images/photo.jpg']).toBeDefined();
   });

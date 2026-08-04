@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import type { Window } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
+import type { RuntimeWindow } from '../services/runtime/types';
 import { useViewerStore } from '../state/viewerStore';
 import { emitStateSync, requestStateSync } from '../services/tauriCommands';
 
 type ProjectorSyncLifecycleOptions = {
-  appWindow: Window;
+  appWindow: RuntimeWindow;
   currentImagePath: string | null;
   openImage: (imagePath: string) => Promise<unknown>;
 };
@@ -25,20 +25,20 @@ export function useProjectorSyncLifecycle({
   useEffect(() => {
     if (!isSecondary) return;
 
-    const unlisten = listen<{ imagePath: string | null; source: 'main' | 'secondary' }>(
-      'state-sync',
-      (event) => {
-        if (event.payload.source !== 'main' || !event.payload.imagePath) return;
+    const unlisten = getRuntime().listen<{
+      imagePath: string | null;
+      source: 'main' | 'secondary';
+    }>('state-sync', (payload) => {
+      if (payload.source !== 'main' || !payload.imagePath) return;
 
-        const state = useViewerStore.getState();
-        const nextIndex = state.images.findIndex((image) => image.path === event.payload.imagePath);
-        if (nextIndex >= 0) {
-          state.setCurrentIndex(nextIndex, { zoomMode: 'fit' });
-          return;
-        }
-        void openImage(event.payload.imagePath);
+      const state = useViewerStore.getState();
+      const nextIndex = state.images.findIndex((image) => image.path === payload.imagePath);
+      if (nextIndex >= 0) {
+        state.setCurrentIndex(nextIndex, { zoomMode: 'fit' });
+        return;
       }
-    );
+      void openImage(payload.imagePath);
+    });
     requestStateSync().catch((error) => console.error('Failed to request projector state:', error));
 
     return () => {
@@ -57,23 +57,23 @@ export function useProjectorSyncLifecycle({
   useEffect(() => {
     if (isSecondary) return;
 
-    const unlisten = listen<{ imagePath: string | null; source: 'main' | 'secondary' }>(
-      'state-sync',
-      (event) => {
-        if (event.payload.source !== 'secondary') return;
+    const unlisten = getRuntime().listen<{
+      imagePath: string | null;
+      source: 'main' | 'secondary';
+    }>('state-sync', (payload) => {
+      if (payload.source !== 'secondary') return;
 
-        const nextPath = event.payload.imagePath;
-        if (!nextPath || nextPath === useViewerStore.getState().currentImagePath) return;
+      const nextPath = payload.imagePath;
+      if (!nextPath || nextPath === useViewerStore.getState().currentImagePath) return;
 
-        const state = useViewerStore.getState();
-        const nextIndex = state.images.findIndex((image) => image.path === nextPath);
-        if (nextIndex >= 0) {
-          state.setCurrentIndex(nextIndex);
-          return;
-        }
-        void openImage(nextPath);
+      const state = useViewerStore.getState();
+      const nextIndex = state.images.findIndex((image) => image.path === nextPath);
+      if (nextIndex >= 0) {
+        state.setCurrentIndex(nextIndex);
+        return;
       }
-    );
+      void openImage(nextPath);
+    });
 
     return () => {
       void unlisten.then((fn) => fn());
@@ -83,7 +83,7 @@ export function useProjectorSyncLifecycle({
   useEffect(() => {
     if (isSecondary) return;
 
-    const unlisten = listen('state-sync-request', () => {
+    const unlisten = getRuntime().listen('state-sync-request', () => {
       if (currentImagePath) {
         emitStateSync(currentImagePath, 'main').catch((error) =>
           console.error('Failed to sync projector state:', error)

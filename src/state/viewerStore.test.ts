@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useViewerStore } from './viewerStore';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const {
   confirmMock,
@@ -15,10 +17,6 @@ const {
   overwriteWithCropMock: vi.fn(),
   invalidateImageAssetMock: vi.fn(),
   invalidateThumbnailMock: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  confirm: confirmMock,
 }));
 
 vi.mock('../services/tauriCommands', () => ({
@@ -37,6 +35,7 @@ vi.mock('../services/thumbnailCache', () => ({
 
 describe('viewerStore', () => {
   beforeEach(() => {
+    initializeRuntime(createTestRuntimeAdapter({ confirm: confirmMock }));
     useViewerStore.getState().reset();
     useViewerStore.getState().setDefaultZoomMode('fit');
     vi.clearAllMocks();

@@ -1,7 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { getMatches } from '@tauri-apps/plugin-cli';
-import type { Window } from '@tauri-apps/api/window';
 import { useSettingsStore } from '../state/settingsStore';
 import { CurationPersistenceError } from '../state/curationStore';
 import { useViewerStore } from '../state/viewerStore';
@@ -13,12 +10,14 @@ import {
 } from '../services/performanceTelemetry';
 import { restoreMainWindowBounds } from '../services/mainWindowRestore';
 import { waitForWindowRestoreBeforeShow } from '../services/windowBounds';
+import { getRuntime } from '../services/runtime/runtime';
+import type { RuntimeWindow } from '../services/runtime/types';
 
 const STARTUP_WINDOW_RESTORE_TIMEOUT_MS = 750;
 const STARTUP_WINDOW_SHOW_WATCHDOG_MS = 2000;
 
 type StartupLifecycleOptions = {
-  appWindow: Window;
+  appWindow: RuntimeWindow;
   isMainWindow: boolean;
   isProjectorWindow: boolean;
   loadSettings: () => Promise<unknown>;
@@ -73,8 +72,11 @@ async function openStartupTarget({
   if (!isMainWindow) return;
 
   const cliResolveStartedAt = performance.now();
-  const matches = await getMatches();
-  const startupDecision = resolveStartupDecision(matches.args.file, matches.args.folder);
+  const matches = await getRuntime().startupArguments();
+  const startupDecision = resolveStartupDecision(
+    { value: matches.file },
+    { value: matches.folder }
+  );
   recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
   if (startupDecision.mode === 'open-folder' && startupDecision.folderPath) {
@@ -101,6 +103,7 @@ export function useAppStartupLifecycle({
   const [hasStartupResolved, setHasStartupResolved] = useState(false);
   const [startupShowAttempted, setStartupShowAttempted] = useState(false);
   const startupShowAttemptedRef = useRef(false);
+  const startupStartedRef = useRef(false);
 
   const showMainWindowOnce = useCallback(async () => {
     if (!isMainWindow || startupShowAttemptedRef.current) return;
@@ -148,14 +151,20 @@ export function useAppStartupLifecycle({
       }
     }
 
-    void init();
+    queueMicrotask(() => {
+      if (isCancelled || startupStartedRef.current) return;
+      startupStartedRef.current = true;
+      void init();
+    });
 
     if (isMainWindow) {
-      void listen<string>('open-file', async (event) => {
-        await openImage(event.payload);
-      })
+      void getRuntime()
+        .listen<string>('open-file', async (path) => {
+          await openImage(path);
+        })
         .then((fn) => {
-          unlisten = fn;
+          if (isCancelled) fn();
+          else unlisten = fn;
         })
         .catch((error) => console.error('Failed to listen for open-file:', error));
     }

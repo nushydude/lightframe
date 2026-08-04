@@ -5,6 +5,8 @@ import { SettingsPanel } from './SettingsPanel';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import { DEFAULT_SETTINGS } from '../types/settings';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 describe('SettingsPanel', () => {
   beforeEach(() => {
@@ -60,6 +62,30 @@ describe('SettingsPanel', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Format Support')).toBeInTheDocument();
+    });
+  });
+
+  it('preserves application and JSON filters through the runtime dialog boundary', async () => {
+    const openFileOrFolder = vi.fn().mockResolvedValue(null);
+    const saveFile = vi.fn().mockResolvedValue(null);
+    initializeRuntime(createTestRuntimeAdapter({ openFileOrFolder, saveFile }));
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose app' }));
+    expect(openFileOrFolder).toHaveBeenCalledWith({
+      directory: false,
+      multiple: false,
+      filters: [{ name: 'Applications', extensions: ['exe', 'bat', 'cmd', 'com'] }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save JSON' }));
+    await waitFor(() => {
+      expect(saveFile).toHaveBeenCalledWith(
+        expect.stringMatching(/^lightframe-diagnostics-.*\.json$/),
+        {
+          filters: [{ name: 'JSON', extensions: ['json'] }],
+        }
+      );
     });
   });
 

@@ -74,6 +74,9 @@ jobs:
       - name: Lint TypeScript and React
         run: pnpm run lint
 
+      - name: Run E2E helper tests
+        run: pnpm run test:e2e-helper
+
       - name: Run Vitest suite
         run: pnpm run test:run
 

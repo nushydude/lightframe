@@ -121,6 +121,7 @@ export function CommandPalette({ commands, isOpen, onClose }: CommandPaletteProp
     <div className="command-palette-overlay" onClick={onClose}>
       <div
         className="command-palette"
+        data-testid="command-palette-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="command-palette-title"

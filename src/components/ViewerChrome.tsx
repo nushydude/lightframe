@@ -8,8 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, save } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from '../services/runtime/runtime';
 import { ExifPanel } from './ExifPanel';
 import { ImageCaptionOverlay } from './ImageCaptionOverlay';
 import {
@@ -187,7 +186,13 @@ function RatingControls({
   className?: string;
 }) {
   return (
-    <div className={`rating-controls ${className}`.trim()} role="group" aria-label="Image rating">
+    <div
+      className={`rating-controls ${className}`.trim()}
+      role="group"
+      aria-label="Image rating"
+      data-testid="viewer-rating"
+      data-rating={currentRating}
+    >
       {RATING_VALUES.map((value) => (
         <button
           key={value}
@@ -534,7 +539,7 @@ export function ViewerChrome({
   };
   const toggleFullscreen = async () => {
     try {
-      const appWindow = getCurrentWindow();
+      const appWindow = getRuntime().window;
       const nextFullscreen = !isFullscreen;
       await appWindow.setFullscreen(nextFullscreen);
       setFullscreen(nextFullscreen);
@@ -759,9 +764,9 @@ export function ViewerChrome({
     const dotIndex = originalName.lastIndexOf('.');
     const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
     const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
-    const outputPath = await save({
-      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),
-    });
+    const outputPath = await getRuntime().saveFile(
+      currentImagePath.replace(originalName, `${baseName}-cropped${extension}`)
+    );
 
     if (!outputPath) {
       return null;
@@ -843,12 +848,9 @@ export function ViewerChrome({
 
     const { width: imageWidth, height: imageHeight } = dimensions;
 
-    const confirmed = await confirm(
+    const confirmed = await getRuntime().confirm(
       `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
-      {
-        title: 'Overwrite Cropped Image',
-        kind: 'warning',
-      }
+      { title: 'Overwrite Cropped Image', kind: 'warning' }
     );
 
     if (!confirmed) {
@@ -1424,16 +1426,25 @@ export function ViewerChrome({
     <>
       <div className="top-bar" role="toolbar" aria-label="Image information" ref={chromeRootRef}>
         <div className="top-bar-left">
-          <span className="file-name" title={fileName}>
+          <span className="file-name" title={fileName} data-testid="viewer-filename">
             {fileName}
           </span>
           {images.length > 0 && (
-            <span className="image-counter">
+            <span
+              className="image-counter"
+              data-testid="viewer-index"
+              data-index={currentIndex + 1}
+              data-total={images.length}
+            >
               {currentIndex + 1} / {images.length}
               {isFolderScanning && ' …'}
             </span>
           )}
-          {isFavorite && <span className="image-counter">★</span>}
+          {isFavorite && (
+            <span className="image-counter" data-testid="viewer-favorite" data-favorite="true">
+              ★
+            </span>
+          )}
           {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>

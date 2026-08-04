@@ -1,6 +1,5 @@
 import React from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from '../services/runtime/runtime';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
@@ -140,7 +139,7 @@ export function SettingsPanel() {
   };
 
   const handleAddQuickDestination = async () => {
-    const selected = await open({ directory: true, multiple: false });
+    const selected = await getRuntime().openFolder();
     if (!selected || typeof selected !== 'string') {
       return;
     }
@@ -175,7 +174,7 @@ export function SettingsPanel() {
   };
 
   const handleChooseExternalEditor = async () => {
-    const selected = await open({
+    const selected = await getRuntime().openFileOrFolder({
       directory: false,
       multiple: false,
       filters: [{ name: 'Applications', extensions: ['exe', 'bat', 'cmd', 'com'] }],
@@ -206,7 +205,12 @@ export function SettingsPanel() {
 
   return (
     <div className="settings-overlay" onClick={handleOverlayClick}>
-      <div className="settings-panel" role="dialog" aria-label="Settings">
+      <div
+        className="settings-panel"
+        role="dialog"
+        aria-label="Settings"
+        data-testid="settings-dialog"
+      >
         <div className="settings-header">
           <h2>Settings</h2>
           <button
@@ -821,7 +825,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
       telemetry: getPerformanceTelemetrySnapshot(),
       currentImageMetadata,
       probeErrors,
-      windowLabel: getCurrentWindow().label,
+      windowLabel: getRuntime().window.label,
     });
 
     return serializeDiagnosticsSnapshot(snapshot);
@@ -860,8 +864,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
     setIsBusy(true);
     setStatus(null);
     try {
-      const outputPath = await save({
-        defaultPath: buildDiagnosticsFileName(),
+      const outputPath = await getRuntime().saveFile(buildDiagnosticsFileName(), {
         filters: [{ name: 'JSON', extensions: ['json'] }],
       });
       if (!outputPath) {
