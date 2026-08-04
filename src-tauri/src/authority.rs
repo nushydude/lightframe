@@ -804,6 +804,7 @@ pub struct TrashCommitOutcome {
 }
 
 impl TrashCommitOutcome {
+    #[cfg(windows)]
     fn durable() -> Self {
         Self { committed: true, warning: None }
     }
@@ -1999,13 +2000,13 @@ impl ImageAuthorityLease {
                         .map_err(|error| format!("Failed to sync trash recovery link: {error}"))?;
                     Ok(handoff)
                 })
-                .map_err(|error| report_preserved_recovery_artifacts(error))?;
+                .map_err(&report_preserved_recovery_artifacts)?;
             let retained_handoff = match handoff_handle.try_clone() {
                 Ok(handle) => handle,
                 Err(error) => {
                     return trash_transaction
                         .fail(format!("Failed to retain trash handoff proof: {error}"))
-                        .map_err(|error| report_preserved_recovery_artifacts(error))
+                        .map_err(&report_preserved_recovery_artifacts)
                 }
             };
             *trash_handoff_handle.borrow_mut() = Some(retained_handoff);
@@ -2120,10 +2121,10 @@ impl ImageAuthorityLease {
                         "Trash handoff did not produce authoritative trash metadata for the exact object"
                             .into(),
                     )
-                    .map_err(|error| report_preserved_recovery_artifacts(error)),
+                    .map_err(&report_preserved_recovery_artifacts),
                 Err(error) => trash_transaction
                     .fail(error)
-                    .map_err(|error| report_preserved_recovery_artifacts(error)),
+                    .map_err(report_preserved_recovery_artifacts),
             }
         }
 
