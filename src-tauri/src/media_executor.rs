@@ -813,12 +813,19 @@ mod tests {
             move |_| Ok("queued_done"),
         );
 
-        // 3. Coalesced job with two consumers
+        // 3. Coalesced job with two consumers. Hold the shared work open until the first
+        // subscriber has been canceled so the assertion cannot race an immediate completion.
+        let (coalesced_started_tx, coalesced_started_rx) = std::sync::mpsc::channel();
+        let (coalesced_release_tx, coalesced_release_rx) = std::sync::mpsc::channel();
         let (_tok_co1, rx_co1) = executor.spawn_with_channel(
             "sub_co1".to_string(),
             PriorityClass::BackgroundPreload,
             "job_coalesced".to_string(),
-            move |_| Ok("coalesced_result"),
+            move |_| {
+                coalesced_started_tx.send(()).unwrap();
+                coalesced_release_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                Ok("coalesced_result")
+            },
         );
         let (_tok_co2, rx_co2) = executor.spawn_with_channel(
             "sub_co2".to_string(),
@@ -839,7 +846,9 @@ mod tests {
         assert_eq!(res_queue.unwrap_err(), "Operation canceled");
 
         // Cancel one consumer of coalesced job, second consumer receives result
+        coalesced_started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(executor.cancel_consumer_request("sub_co1", None));
+        coalesced_release_tx.send(()).unwrap();
         assert_eq!(
             rx_co1.recv_timeout(Duration::from_secs(1)).unwrap().unwrap_err(),
             "Operation canceled"
