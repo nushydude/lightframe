@@ -11,6 +11,8 @@ import {
 } from './viewerActions';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
+import { initializeRuntime } from './runtime/runtime';
+import { createTestRuntimeAdapter } from './runtime/testAdapter';
 
 const {
   confirmMock,
@@ -28,10 +30,6 @@ const {
   transferImagesToFolderMock: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  confirm: confirmMock,
-}));
-
 vi.mock('./tauriCommands', () => ({
   copyImageToClipboard: copyImageToClipboardMock,
   moveToTrash: moveToTrashMock,
@@ -44,6 +42,7 @@ describe('viewerActions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
+    initializeRuntime(createTestRuntimeAdapter({ confirm: confirmMock }));
     moveToTrashMock.mockResolvedValue(undefined);
     useToastStore.getState().clearToasts();
     useSettingsStore.getState().updateSettings = vi.fn().mockResolvedValue(undefined);

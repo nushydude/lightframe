@@ -154,4 +154,3 @@ this task does not introduce new high-complexity findings.
 - Confirm action context is not captured in stale closures.
 - Confirm Zustand selectors remain narrow.
 - Confirm destructive operations retain confirmation and data-safety behavior.
-

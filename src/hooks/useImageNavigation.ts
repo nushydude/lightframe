@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
 import type { ImageFile } from '../types/image';
 import {
   getParentFolder,
@@ -187,7 +187,7 @@ export function useImageNavigation() {
       autoRefreshFolder: state.settings.autoRefreshFolder,
     }))
   );
-  const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
+  const isMainWindowRef = useRef(getRuntime().window.label === 'main');
   const randomOrderRef = useRef<string[] | null>(null);
   const randomSortKeyRef = useRef<string | null>(null);
   const randomFolderRef = useRef<string | null>(null);
@@ -366,7 +366,7 @@ export function useImageNavigation() {
   );
 
   const setFolderWindowTitle = useCallback(async (nextFolderPath: string) => {
-    const appWindow = getCurrentWindow();
+    const appWindow = getRuntime().window;
     const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
     await appWindow.setTitle(mainWindowTitle(`[Folder] ${folderName}`));
   }, []);
@@ -508,7 +508,7 @@ export function useImageNavigation() {
         setCurrentImage(filePath, 0);
         setViewMode('viewer');
 
-        const appWindow = getCurrentWindow();
+        const appWindow = getRuntime().window;
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
         await appWindow.setTitle(mainWindowTitle(fileName));
         if (!isCurrentGeneration(loadGeneration)) return;

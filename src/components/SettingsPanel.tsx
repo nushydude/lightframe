@@ -1,5 +1,5 @@
 import React from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
@@ -812,7 +812,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
       telemetry: getPerformanceTelemetrySnapshot(),
       currentImageMetadata,
       probeErrors,
-      windowLabel: getCurrentWindow().label,
+      windowLabel: getRuntime().window.label,
     });
 
     return serializeDiagnosticsSnapshot(snapshot);

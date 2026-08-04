@@ -115,4 +115,3 @@ pnpm run ci:local
 - Reject manual dual-maintenance disguised as generation.
 - Check module boundaries for cycles and hidden cross-domain mutation.
 - Confirm the task remains behavior-preserving.
-

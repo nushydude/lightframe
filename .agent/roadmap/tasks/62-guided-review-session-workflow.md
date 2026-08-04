@@ -172,4 +172,3 @@ pnpm tauri dev
 - Confirm no file mutation occurs merely by reviewing.
 - Confirm destructive actions remain secondary and confirmed.
 - Review undo invalidation and stale async acknowledgement handling.
-

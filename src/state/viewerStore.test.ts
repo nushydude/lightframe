@@ -5,6 +5,8 @@ import {
   useViewerStore,
 } from './viewerStore';
 import { configurePathCaseSemantics } from '../services/pathIdentity';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const {
   confirmMock,
@@ -42,6 +44,7 @@ vi.mock('../services/thumbnailCache', () => ({
 
 describe('viewerStore', () => {
   beforeEach(() => {
+    initializeRuntime(createTestRuntimeAdapter({ confirm: confirmMock }));
     useViewerStore.getState().reset();
     useViewerStore.getState().setDefaultZoomMode('fit');
     vi.clearAllMocks();

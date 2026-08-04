@@ -158,4 +158,3 @@ pnpm tauri dev
 - Reject visual-only tabs without correct keyboard semantics.
 - Confirm search metadata cannot drift silently from rendered settings.
 - Confirm no duplicate settings state was introduced.
-

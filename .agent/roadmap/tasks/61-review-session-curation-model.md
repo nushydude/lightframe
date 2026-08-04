@@ -150,4 +150,3 @@ pnpm run ci:local
 - Check filtered navigation at first, middle, last, and final remaining items.
 - Reject path-list diagnostics.
 - Review multi-shard recovery and immutable frontend updates.
-

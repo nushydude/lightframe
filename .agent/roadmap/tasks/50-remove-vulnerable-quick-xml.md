@@ -130,4 +130,3 @@ check after delivery.
 - Inspect original-file and temporary-file handling for every new metadata error path.
 - Confirm tests exercise actual dependency behavior rather than a mocked parser.
 - Confirm README and CI claims match the final graph.
-

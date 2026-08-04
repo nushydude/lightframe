@@ -159,4 +159,3 @@ pnpm tauri dev
 - Verify claims about signatures/provenance match actual checks.
 - Kill the app at edit queue transition boundaries.
 - Reject any automatic overwrite resume or authority bypass.
-

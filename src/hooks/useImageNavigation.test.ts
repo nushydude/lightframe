@@ -15,6 +15,8 @@ import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { mainWindowTitle } from '../services/windowTitle';
 import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 
@@ -71,6 +73,11 @@ const mockAudioContext = {
 
 describe('useImageNavigation', () => {
   beforeEach(() => {
+    initializeRuntime(
+      createTestRuntimeAdapter({
+        window: { ...createTestRuntimeAdapter().window, label: 'main', setTitle: mockSetTitle },
+      })
+    );
     useViewerStore.getState().reset();
     useSettingsStore.setState({
       settings: {

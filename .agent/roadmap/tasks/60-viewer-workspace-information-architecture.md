@@ -152,4 +152,3 @@ pnpm tauri dev
 - Reject hidden functionality with no discoverable replacement.
 - Confirm no product state resets solely because the layout changed.
 - Confirm local font/branding assets are licensed and bundled correctly.
-

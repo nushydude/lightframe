@@ -113,4 +113,3 @@ for stable, prerelease, mismatch, and invalid-tag cases.
 - Reject reliance on branch-level green status.
 - Confirm draft/prerelease and preview-channel behavior after workflow changes.
 - Confirm the repository is clean after running the documented version update command.
-

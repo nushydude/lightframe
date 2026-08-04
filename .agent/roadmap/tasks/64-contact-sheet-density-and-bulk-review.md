@@ -150,4 +150,3 @@ pnpm tauri dev
 - Test selection identity across sort/filter/density changes.
 - Reject bulk actions that use visible indexes instead of stable IDs.
 - Confirm dangerous actions stay separated and confirmed.
-

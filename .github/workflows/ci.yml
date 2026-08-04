@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_call:
   push:
     branches: ['main', 'codex/**', 'hotfix/**', 'release/**']
   pull_request:
@@ -15,7 +16,8 @@ env:
 jobs:
   javascript-advisory:
     name: JavaScript Dependency Advisory Gate
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8
+    # v2.3.8
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2
     with:
       scan-args: |-
         --lockfile=./pnpm-lock.yaml
@@ -35,10 +37,12 @@ jobs:
       checks: write
 
     steps:
-      - uses: actions/checkout@v7
+      # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Audit Cargo.lock against RustSec
-        uses: rustsec/audit-check@v2.0.0
+        # v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ./src-tauri
@@ -48,17 +52,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        # v6
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996
         with:
           version: 10.33.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        # v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
           cache: pnpm
@@ -72,11 +79,23 @@ jobs:
       - name: Lint TypeScript and React
         run: pnpm run lint
 
+      - name: Run E2E helper tests
+        run: pnpm run test:e2e-helper
+
+      - name: Run version contract tests
+        run: pnpm run test:version
+
+      - name: Run release supply-chain tests
+        run: pnpm run test:release-supply-chain
+
       - name: Run Vitest suite
         run: pnpm run test:run
 
       - name: Build frontend
         run: pnpm run build
+
+      - name: Verify version metadata and Cargo.lock
+        run: pnpm run quality:version
 
       - name: Fetch pull request base branch
         if: github.event_name == 'pull_request'
@@ -94,10 +113,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        # stable (resolved 2026-08-04)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: clippy, rustfmt
 
@@ -123,21 +144,25 @@ jobs:
     runs-on: windows-2025
 
     steps:
-      - uses: actions/checkout@v7
+      # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        # v6
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996
         with:
           version: 10.33.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        # v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
           cache: pnpm
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        # stable (resolved 2026-08-04)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile

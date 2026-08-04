@@ -144,4 +144,3 @@ pnpm run ci:local
 - Review locks for deadlocks and lock-held I/O.
 - Confirm cancellation cannot leave partial outputs or corrupt caches.
 - Confirm fairness prevents background starvation without delaying current-image work.
-

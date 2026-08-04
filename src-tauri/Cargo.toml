@@ -1,9 +1,10 @@
 [package]
 name = "lightframe"
-version = "8.7.5"
+version = "8.7.6"
 description = "A fast, minimal Windows-first image viewer"
 authors = ["you"]
 edition = "2021"
+default-run = "lightframe"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +14,10 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "lightframe_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "lightframe"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -29,6 +34,7 @@ trash = "5.2.6"
 arboard = "3.6.1"
 kamadak-exif = "0.6.1"
 base64 = "0.22"
+minisign-verify = "0.2.5"
 little_exif = "0.6.23"
 sha2 = "0.11"
 libjpeg-turbo-rs = "0.6"

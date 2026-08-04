@@ -12,6 +12,8 @@ import { confirm, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
 import * as viewerActions from '../services/viewerActions';
 import { useToastStore } from '../state/toastStore';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const projectorState = vi.hoisted(() => ({
   isProjectorOpen: false,
@@ -56,6 +58,13 @@ describe('ViewerChrome', () => {
     projectorState.isProjectorOpen = false;
     projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
+    initializeRuntime(
+      createTestRuntimeAdapter({
+        window: { ...createTestRuntimeAdapter().window, ...(getCurrentWindow() as object) },
+        confirm,
+        saveFile: (defaultPath, options) => save({ defaultPath, ...options }),
+      })
+    );
     vi.spyOn(tauriCommands, 'getImageMetadata').mockResolvedValue({
       width: 1200,
       height: 800,

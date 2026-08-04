@@ -145,4 +145,3 @@ pnpm run ci:local
 - Confirm E2E fixtures contain no user-specific paths or files.
 - Review startup/listener cleanup under React Strict Mode.
 - Verify the new harness fails when a required UI assertion is intentionally broken.
-

@@ -5,8 +5,9 @@ LightFrame is a fast, Windows-first desktop image viewer and photo review app bu
 startup, responsive keyboard navigation, large-folder review, and practical curation tools without
 turning the viewer into a full photo manager.
 
-The app version is maintained in `package.json` and synchronized with the native package and
-Tauri configuration by the frontend quality gate.
+`package.json` is the single declared app-version source. `pnpm run quality:version` verifies it
+against the native package, Tauri configuration, and the root `lightframe` package record in
+`src-tauri/Cargo.lock`.
 
 ## Current State
 
@@ -76,7 +77,7 @@ Prerequisites:
 - Rust stable
 - Tauri desktop prerequisites for your operating system
 
-Install and run the app locally:
+Run native desktop behavior locally:
 
 ```bash
 pnpm install
@@ -88,6 +89,11 @@ Run the frontend-only dev server:
 ```bash
 pnpm dev
 ```
+
+`pnpm dev` is a safe UI-development surface. It displays a deterministic synthetic catalog and
+labels itself as demo mode; it cannot read files, use drag/drop, run updates, restart the process,
+reveal files, or perform destructive actions. Use `pnpm tauri dev` whenever native behavior is
+needed.
 
 Build the frontend:
 
@@ -107,6 +113,16 @@ Run the Windows packaged-startup smoke test after building an unpackaged release
 pnpm tauri build --no-bundle --ci
 pnpm run smoke:windows
 ```
+
+Run the automated Windows Tauri CDP harness (Windows, WebView2 remote debugging support, and a built `lightframe.exe` required):
+
+```powershell
+pnpm run e2e:windows
+```
+
+The harness isolates its profile and temporary image fixtures, then exercises home startup, folder
+startup, navigation/grid, curation persistence after restart, and Settings/Command Palette shortcuts.
+Failures write logs, CDP diagnostics, and artifacts under `artifacts/windows-e2e/`.
 
 ## Quality Gates
 
@@ -148,13 +164,48 @@ The repository installs local git hooks with `pnpm install`. The pre-commit hook
 
 ## Release Channels
 
-Stable releases use tags such as `v8.2.2`. The release workflow creates a draft GitHub release and
-the app's Stable update channel reads GitHub's latest published stable updater manifest.
+Set a release version with one reproducible command; it updates the three declared manifests, asks
+Cargo to refresh its lockfile, and validates the result:
 
-Preview releases use semver prerelease tags such as `v8.3.0-beta.1`. They are created as prerelease
-drafts; when a maintainer publishes one, `.github/workflows/preview-channel.yml` copies its
+```bash
+pnpm run version:set -- 8.7.6
+pnpm run quality:version
+```
+
+Stable releases use tags such as `v8.2.2`. A `v<semver>` tag first checks that the tag exactly
+matches every version record, then calls the complete CI workflow from that same tagged commit
+(frontend and Rust quality, JavaScript and Rust advisory checks, and Windows packaged-startup
+smoke). Only after those jobs pass does the release workflow create the draft Windows release and
+verify Tauri's reported artifact version. The app's Stable update channel reads GitHub's latest
+published stable updater manifest.
+
+Preview releases use semver prerelease tags such as `v8.3.0-beta.1`. They use the same same-SHA
+gate and are created as prerelease drafts; when a maintainer publishes one,
+`.github/workflows/preview-channel.yml` copies its
 `latest.json` into the fixed `app-preview-channel` prerelease. Users who opt into Preview in
 Settings check that manifest instead of the stable `/latest` release.
+
+### Release verification and maintainer setup
+
+Release workflows run in the protected GitHub `release` Environment. Before enabling a public
+release, repository maintainers must require reviewers for that environment, restrict custom deployment
+branches/tags to the `v*` release-tag policy (with tag protection for `v*`), and store
+`TAURI_SIGNING_PRIVATE_KEY` (and its password) only there. Configure Azure
+Trusted Signing only when `WINDOWS_SIGNING_PROVIDER=azure-trusted-signing` and its environment-scoped
+Azure credentials and account variables are present. Set `REQUIRE_AUTHENTICODE_SIGNING=true` only
+after that provider is working: it fails the release evidence check unless every MSI/EXE reports
+`Valid`. Without that setting, the workflow reports the actual Authenticode status and does not
+represent an unsigned installer as signed; Tauri updater signatures remain required.
+
+Each draft includes `SHA256SUMS.txt`, an SPDX 2.3 SBOM, updater metadata, and GitHub build
+provenance. Verify downloaded artifacts before installing:
+
+```powershell
+Get-FileHash .\LightFrame_8.7.6_x64-setup.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\LightFrame_8.7.6_x64-setup.exe
+gh attestation verify .\LightFrame_8.7.6_x64-setup.exe --repo nushydude/lightframe
+pnpm run verify:release-artifacts -- --expected-version 8.7.6 --artifact-dir . --checksums .\SHA256SUMS.txt --sbom .\lightframe-8.7.6.spdx.json --require-authenticode true
+```
 
 ## Project Structure
 

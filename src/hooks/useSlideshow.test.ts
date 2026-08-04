@@ -1,7 +1,8 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import { useSlideshow } from './useSlideshow';
@@ -690,14 +691,17 @@ describe('useSlideshow', () => {
 
   it('returns to window mode when stopping a fullscreen slideshow', async () => {
     useViewerStore.setState({ isFullscreen: true, isSlideshowActive: true });
-    const mockWindow = getCurrentWindow();
+    const setFullscreen = vi.fn().mockResolvedValue(undefined);
+    initializeRuntime(
+      createTestRuntimeAdapter({ window: { ...createTestRuntimeAdapter().window, setFullscreen } })
+    );
     const { result } = renderHook(() => useSlideshow());
 
     await act(async () => {
       await result.current.stop();
     });
 
-    expect(mockWindow.setFullscreen).toHaveBeenCalledWith(false);
+    expect(setFullscreen).toHaveBeenCalledWith(false);
     expect(useViewerStore.getState()).toMatchObject({
       isSlideshowActive: false,
       isFullscreen: false,

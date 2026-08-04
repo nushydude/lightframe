@@ -1,10 +1,10 @@
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Window } from '@tauri-apps/api/window';
+import type { RuntimeWindow } from '../services/runtime/types';
 import { useProjectorSyncLifecycle } from './useProjectorSyncLifecycle';
 
 const mocks = vi.hoisted(() => ({
-  eventHandlers: new Map<string, (event: { payload: unknown }) => void>(),
+  eventHandlers: new Map<string, (payload: unknown) => void>(),
   order: [] as string[],
   setImages: vi.fn(),
   adoptProjectorGrant: vi.fn(),
@@ -18,11 +18,13 @@ const mocks = vi.hoisted(() => ({
   navigateProjectorImage: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async (event: string, handler: (event: { payload: unknown }) => void) => {
-    mocks.order.push(`listen:${event}`);
-    mocks.eventHandlers.set(event, handler);
-    return () => mocks.eventHandlers.delete(event);
+vi.mock('../services/runtime/runtime', () => ({
+  getRuntime: () => ({
+    listen: vi.fn(async (event: string, handler: (payload: unknown) => void) => {
+      mocks.order.push(`listen:${event}`);
+      mocks.eventHandlers.set(event, handler);
+      return () => mocks.eventHandlers.delete(event);
+    }),
   }),
 }));
 
@@ -49,7 +51,7 @@ vi.mock('../services/tauriCommands', () => ({
 
 function Harness() {
   useProjectorSyncLifecycle({
-    appWindow: { label: 'secondary' } as Window,
+    appWindow: { label: 'secondary' } as RuntimeWindow,
     currentImagePath: null,
     openImage: vi.fn(),
   });
@@ -58,7 +60,7 @@ function Harness() {
 
 function MainHarness({ imageId }: { imageId: string }) {
   useProjectorSyncLifecycle({
-    appWindow: { label: 'main' } as Window,
+    appWindow: { label: 'main' } as RuntimeWindow,
     currentImagePath: `C:/images/${imageId}.jpg`,
     activeSessionId: 'session-main',
     activeImageId: imageId,
@@ -119,7 +121,7 @@ describe('useProjectorSyncLifecycle', () => {
     expect(mocks.order.slice(0, 2)).toEqual(['listen:state-sync', 'request']);
 
     act(() => {
-      mocks.eventHandlers.get('state-sync')?.({ payload: { source: 'main' } });
+      mocks.eventHandlers.get('state-sync')?.({ source: 'main' });
     });
     expect(mocks.clearAdoptedProjectorGrant).toHaveBeenCalledOnce();
     expect(mocks.setImages).toHaveBeenCalledWith([]);

@@ -100,4 +100,3 @@ The script must not falsely pass an unsigned artifact when Authenticode is requi
 - Confirm attestations cover final artifacts, not an intermediate pre-signing build.
 - Confirm checksum generation happens after signing.
 - Confirm no secret or credential path is logged or committed.
-

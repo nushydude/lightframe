@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import type { Window } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
+import type { RuntimeWindow } from '../services/runtime/types';
 import {
   hydrateProjectorSelection,
   registerProjectorNavigationHandler,
@@ -25,7 +25,7 @@ type ProjectorSyncPayload = {
 };
 
 type ProjectorSyncLifecycleOptions = {
-  appWindow: Window;
+  appWindow: RuntimeWindow;
   currentImagePath: string | null;
   activeSessionId?: string | null;
   activeImageId?: string | null;
@@ -135,9 +135,9 @@ export function useProjectorSyncLifecycle({
     };
 
     const initialize = async () => {
-      unlistenSync = await listen<ProjectorSyncPayload>('state-sync', (event) => {
-        if (event.payload.source !== 'main') return;
-        const { sessionId, imageId } = event.payload;
+      unlistenSync = await getRuntime().listen<ProjectorSyncPayload>('state-sync', (payload) => {
+        if (payload.source !== 'main') return;
+        const { sessionId, imageId } = payload;
         if (sessionId && imageId) {
           void hydrateLatestRecord(sessionId, imageId).catch((error) =>
             console.error('Failed to refresh projector display record:', error)
@@ -203,9 +203,9 @@ export function useProjectorSyncLifecycle({
   useEffect(() => {
     if (isSecondary) return;
 
-    const unlisten = listen<ProjectorSyncPayload>('state-sync', (event) => {
-      if (event.payload.source !== 'secondary') return;
-      const { sessionId, imageId } = event.payload;
+    const unlisten = getRuntime().listen<ProjectorSyncPayload>('state-sync', (payload) => {
+      if (payload.source !== 'secondary') return;
+      const { sessionId, imageId } = payload;
       if (sessionId && imageId && onSyncImageId) {
         onSyncImageId(sessionId, imageId);
       }
@@ -219,7 +219,7 @@ export function useProjectorSyncLifecycle({
   useEffect(() => {
     if (isSecondary) return;
 
-    const unlisten = listen('state-sync-request', () => {
+    const unlisten = getRuntime().listen('state-sync-request', () => {
       if (activeSessionId && activeImageId) {
         enqueueMainSync(
           () => emitStateSync(activeSessionId, activeImageId),

@@ -121,4 +121,3 @@ pnpm run ci:local
 - Inspect WIC/libjpeg dimensions and integer conversions.
 - Confirm partial output cleanup and original-file preservation.
 - Confirm error messages are actionable and do not expose full paths in diagnostics.
-

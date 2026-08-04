@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "lightframe"
-version = "8.7.5"
+version = "8.7.6"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -2476,6 +2476,7 @@ dependencies = [
  "libc",
  "libjpeg-turbo-rs",
  "little_exif",
+ "minisign-verify",
  "natord",
  "notify",
  "percent-encoding",

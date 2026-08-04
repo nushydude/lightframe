@@ -189,4 +189,3 @@ pnpm tauri dev
 - Review canonicalization, symlink/reparse behavior, and not-yet-existing outputs.
 - Confirm session state cannot grow without bound; closed/replaced sessions must be evicted.
 - Confirm tests use real temporary directories and filesystem aliases where platform support exists.
-

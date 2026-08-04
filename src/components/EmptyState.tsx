@@ -12,7 +12,7 @@ export function EmptyState({ onOpenFile, onOpenFolder, onOpenRecentFolder }: Emp
   const savedViewPresets = useSettingsStore((state) => state.settings.savedViewPresets);
 
   return (
-    <div className="empty-state">
+    <div className="empty-state" data-testid="home-screen">
       <div className="empty-state-icon">🖼</div>
       <h1>LightFrame</h1>
       <p>

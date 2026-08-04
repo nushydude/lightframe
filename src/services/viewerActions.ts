@@ -1,4 +1,4 @@
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from './runtime/runtime';
 import {
   copyImageToClipboard,
   getFileName,
@@ -329,7 +329,7 @@ export async function deleteCurrentImage({
 
   try {
     const fileName = currentImagePath.replace(/\\/g, '/').split('/').pop() ?? currentImagePath;
-    const confirmed = await confirm(
+    const confirmed = await getRuntime().confirm(
       `Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`,
       {
         title: 'Delete Image',
@@ -379,7 +379,7 @@ function getDeleteConfirmationOptions(imagePaths: string[]): {
 
 async function confirmDeleteImages(imagePaths: string[]): Promise<boolean> {
   const { message, title } = getDeleteConfirmationOptions(imagePaths);
-  return confirm(message, {
+  return getRuntime().confirm(message, {
     title,
     kind: 'warning',
   });

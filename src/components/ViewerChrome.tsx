@@ -8,8 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from '../services/runtime/runtime';
 import { ExifPanel } from './ExifPanel';
 import { ImageCaptionOverlay } from './ImageCaptionOverlay';
 import {
@@ -538,7 +537,7 @@ export function ViewerChrome({
   };
   const toggleFullscreen = async () => {
     try {
-      const appWindow = getCurrentWindow();
+      const appWindow = getRuntime().window;
       const nextFullscreen = !isFullscreen;
       await appWindow.setFullscreen(nextFullscreen);
       setFullscreen(nextFullscreen);
@@ -856,7 +855,7 @@ export function ViewerChrome({
 
     const { width: imageWidth, height: imageHeight } = dimensions;
 
-    const confirmed = await confirm(
+    const confirmed = await getRuntime().confirm(
       `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
       {
         title: 'Overwrite Cropped Image',

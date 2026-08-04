@@ -135,4 +135,3 @@ pnpm run ci:local
 - Attempt representative denied calls from the projector.
 - Confirm fallback cache paths cannot silently require global scope.
 - Confirm CSP and asset scope agree and do not reintroduce remote script execution.
-

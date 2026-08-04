@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { getRuntime } from '../services/runtime/runtime';
 import {
   adoptNativeSessionSelection,
   updateRecentFoldersJumpList,
@@ -77,12 +77,12 @@ export function useDragAndDrop({
   setIsDragOver: (value: boolean) => void;
 }) {
   useEffect(() => {
-    const unlistenDrag = listen<Exclude<StartupSessionSelection, { mode: 'empty' }>>(
+    const unlistenDrag = getRuntime().listen<Exclude<StartupSessionSelection, { mode: 'empty' }>>(
       'trusted-native-drop-session',
-      async (event) => {
+      async (payload) => {
         setIsDragOver(false);
         try {
-          const selection = adoptNativeSessionSelection(event.payload);
+          const selection = adoptNativeSessionSelection(payload);
           if (selection.mode === 'folder') {
             await openFolder(selection.session.canonical_folder);
           } else if (selection.mode === 'image') {
@@ -97,8 +97,8 @@ export function useDragAndDrop({
         }
       }
     );
-    const unlistenDragEnter = listen('tauri://drag-enter', () => setIsDragOver(true));
-    const unlistenDragLeave = listen('tauri://drag-leave', () => setIsDragOver(false));
+    const unlistenDragEnter = getRuntime().listen('tauri://drag-enter', () => setIsDragOver(true));
+    const unlistenDragLeave = getRuntime().listen('tauri://drag-leave', () => setIsDragOver(false));
 
     return () => {
       void unlistenDrag.then((fn) => fn());

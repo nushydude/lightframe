@@ -165,4 +165,3 @@ Run the ignored/manual catalog benchmark and attach results to the PR.
 - Inspect eviction pinning and stale request handling.
 - Confirm no hidden full-catalog serialization occurs per page.
 - Review watcher changes at page boundaries and current-image preservation.
-

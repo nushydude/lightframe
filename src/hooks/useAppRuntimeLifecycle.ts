@@ -1,5 +1,4 @@
 import { useRef, useState } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useImageNavigation } from './useImageNavigation';
 import { useSlideshow } from './useSlideshow';
 import { useAppKeyboardShortcuts } from './useAppKeyboardShortcuts';
@@ -12,6 +11,7 @@ import { useViewerStore } from '../state/viewerStore';
 
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings, PerformanceMode, RecentFolder } from '../types/settings';
+import { getRuntime } from '../services/runtime/runtime';
 
 export function useAppRuntimeLifecycle({
   currentImagePath,
@@ -93,7 +93,7 @@ export function useAppRuntimeLifecycle({
     togglePause: toggleSlideshowPause,
   } = useSlideshow();
   const [isDragOver, setIsDragOver] = useState(false);
-  const appWindowRef = useRef(getCurrentWindow());
+  const appWindowRef = useRef(getRuntime().window);
   const isMainWindowRef = useRef(appWindowRef.current.label === 'main');
   const settingsRef = useRef(useSettingsStore.getState().settings);
   const settingsLoadedRef = useRef(isLoaded);

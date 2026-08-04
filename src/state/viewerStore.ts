@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from '../services/runtime/runtime';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
@@ -465,12 +465,9 @@ async function overwritePendingCrop(
   rotationDegrees: number
 ): Promise<boolean> {
   const fileName = targetPath.replace(/\\/g, '/').split('/').pop() || targetPath;
-  const confirmed = await confirm(
+  const confirmed = await getRuntime().confirm(
     `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
-    {
-      title: 'Overwrite Cropped Image',
-      kind: 'warning',
-    }
+    { title: 'Overwrite Cropped Image', kind: 'warning' }
   );
   if (!confirmed) return false;
 

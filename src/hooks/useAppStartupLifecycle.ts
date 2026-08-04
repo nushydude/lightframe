@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import type { Window } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
+import type { RuntimeWindow } from '../services/runtime/types';
 import { useSettingsStore } from '../state/settingsStore';
 import { CurationPersistenceError } from '../state/curationStore';
 import { useViewerStore } from '../state/viewerStore';
@@ -17,7 +17,7 @@ const STARTUP_WINDOW_RESTORE_TIMEOUT_MS = 750;
 const STARTUP_WINDOW_SHOW_WATCHDOG_MS = 2000;
 
 type StartupLifecycleOptions = {
-  appWindow: Window;
+  appWindow: RuntimeWindow;
   isMainWindow: boolean;
   isProjectorWindow: boolean;
   loadSettings: () => Promise<unknown>;
@@ -153,9 +153,10 @@ export function useAppStartupLifecycle({
     void init();
 
     if (isMainWindow) {
-      void listen<string>('open-file', async (event) => {
-        await openImage(event.payload);
-      })
+      void getRuntime()
+        .listen<string>('open-file', async (path) => {
+          await openImage(path);
+        })
         .then((fn) => {
           unlisten = fn;
         })
