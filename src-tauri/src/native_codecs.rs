@@ -121,6 +121,7 @@ pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, String> {
     platform::metadata_from_path(path)
 }
 
+#[allow(dead_code)]
 pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
     platform::generate_thumbnail_jpeg(path, max_dimension)
 }
@@ -229,6 +230,7 @@ mod platform {
         })
     }
 
+    #[allow(dead_code)]
     pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
         generate_scaled_jpeg(path, max_dimension, NativeScaledSourceKind::Thumbnail)
     }
@@ -238,6 +240,7 @@ mod platform {
     }
 
     #[derive(Clone, Copy)]
+    #[allow(dead_code)]
     enum NativeScaledSourceKind {
         Thumbnail,
         Preview,
@@ -577,12 +580,19 @@ mod platform {
         .map_err(windows_error)?;
 
         let (width, height) = bitmap_source_size(&converter)?;
+        crate::image_resource_policy::validate_default_dimensions(width, height)
+            .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+
         let stride = width
             .checked_mul(4)
             .ok_or_else(|| "Windows native image stride overflowed".to_string())?;
         let buffer_size = stride
             .checked_mul(height)
             .ok_or_else(|| "Windows native image buffer size overflowed".to_string())?;
+
+        crate::image_resource_policy::validate_working_memory_bytes(buffer_size as usize)
+            .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+
         let mut pixels = vec![0_u8; buffer_size as usize];
 
         unsafe { converter.CopyPixels(std::ptr::null(), stride, &mut pixels) }
@@ -640,6 +650,20 @@ mod platform {
         if region.width == 0 || region.height == 0 {
             return Err("Windows native tile region must be greater than zero".to_string());
         }
+
+        let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+            crate::image_resource_policy::OperationClass::Tile,
+        );
+        crate::image_resource_policy::validate_dimensions(region.width, region.height, &limits)
+            .map_err(|e| e.to_string())?;
+        crate::image_resource_policy::validate_memory_footprint(
+            region.width,
+            region.height,
+            4,
+            2,
+            &limits,
+        )
+        .map_err(|e| e.to_string())?;
 
         let (source_width, source_height) = bitmap_source_size(source)?;
         if region.x >= source_width || region.y >= source_height {

@@ -8,7 +8,7 @@ import {
   type MouseEvent,
   type UIEvent,
 } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
@@ -220,6 +220,8 @@ export function ContactSheet({
     preloadThumbnails(
       visibleResults.map(({ image }) => ({
         path: image.path,
+        sessionId: image.sessionId,
+        imageId: image.id,
         sizeBytes: image.size_bytes,
         modifiedAt: image.modified_at,
       })),
@@ -366,7 +368,11 @@ export function ContactSheet({
 
     const result = await transferImagesToDestination(targetPaths, destination, mode);
     if (mode === 'move') {
-      const movedPaths = new Set(result.successes.map((success) => success.sourcePath));
+      const movedPaths = new Set(
+        result.successes
+          .filter((success) => success.sourceRemoved !== false)
+          .map((success) => success.sourcePath)
+      );
       removeMovedImages([...movedPaths]);
       setSelectedPaths((current) => current.filter((path) => !movedPaths.has(path)));
     }
@@ -465,7 +471,7 @@ export function ContactSheet({
 
   const handleToggleFullscreen = async () => {
     try {
-      const appWindow = getCurrentWindow();
+      const appWindow = getRuntime().window;
       const nextFullscreen = !isFullscreen;
       await appWindow.setFullscreen(nextFullscreen);
       setFullscreen(nextFullscreen);
@@ -678,7 +684,13 @@ export function ContactSheet({
   ]);
 
   return (
-    <div className="contact-sheet-overlay" ref={contactSheetRootRef}>
+    <div
+      className="contact-sheet-overlay"
+      ref={contactSheetRootRef}
+      data-testid="grid-root"
+      data-visible-count={searchResults.length}
+      data-total-count={images.length}
+    >
       <div className="contact-sheet-header">
         <div className="header-left">
           <h2>Contact Sheet</h2>
@@ -1009,6 +1021,8 @@ export function ContactSheet({
               const isActive = image.path === currentImagePath && currentResultIndex >= 0;
               const url = getCachedThumbnail({
                 path: image.path,
+                sessionId: image.sessionId,
+                imageId: image.id,
                 sizeBytes: image.size_bytes,
                 modifiedAt: image.modified_at,
               });

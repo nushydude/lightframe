@@ -96,6 +96,86 @@ body,
   user-select: none;
 }
 
+.browser-demo {
+  min-height: 100%;
+  padding: 24px;
+  display: grid;
+  gap: 20px;
+  background: var(--bg-primary);
+}
+.browser-demo__header,
+.browser-demo__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.browser-demo__header span,
+.browser-demo__notice {
+  color: var(--text-secondary);
+}
+.browser-demo button,
+.browser-demo select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.browser-demo button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.browser-demo__notice {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--accent-dim);
+}
+.browser-demo__home,
+.browser-demo__viewer {
+  display: grid;
+  place-content: center;
+  gap: 16px;
+  text-align: center;
+}
+.browser-demo__image {
+  min-height: min(56vh, 520px);
+  min-width: min(80vw, 800px);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  font-size: 24px;
+  color: white;
+}
+.browser-demo__grid,
+.browser-demo__compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 16px;
+}
+.browser-demo__grid button,
+.browser-demo__compare div {
+  min-height: 180px;
+  color: white;
+}
+.browser-demo__modal {
+  position: fixed;
+  inset: 20% 20%;
+  z-index: 1000;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
 /* Thumbnail Strip */
 .thumbnail-strip-container {
   position: absolute;

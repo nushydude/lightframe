@@ -11,6 +11,8 @@ import {
 } from './viewerActions';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
+import { initializeRuntime } from './runtime/runtime';
+import { createTestRuntimeAdapter } from './runtime/testAdapter';
 
 const {
   confirmMock,
@@ -28,10 +30,6 @@ const {
   transferImagesToFolderMock: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  confirm: confirmMock,
-}));
-
 vi.mock('./tauriCommands', () => ({
   copyImageToClipboard: copyImageToClipboardMock,
   moveToTrash: moveToTrashMock,
@@ -44,7 +42,8 @@ describe('viewerActions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
-    moveToTrashMock.mockResolvedValue(undefined);
+    initializeRuntime(createTestRuntimeAdapter({ confirm: confirmMock }));
+    moveToTrashMock.mockResolvedValue({ committed: true });
     useToastStore.getState().clearToasts();
     useSettingsStore.getState().updateSettings = vi.fn().mockResolvedValue(undefined);
     useSettingsStore.setState((state) => ({
@@ -147,6 +146,29 @@ describe('viewerActions', () => {
     expect(removeImage).not.toHaveBeenCalled();
   });
 
+  it('surfaces a committed single-delete warning', async () => {
+    moveToTrashMock.mockResolvedValue({
+      committed: true,
+      warning: 'Retained recovery link.',
+    });
+    const removeImage = vi.fn();
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/test.jpg',
+      currentIndex: 1,
+      removeImage,
+    });
+
+    expect(removeImage).toHaveBeenCalledWith(1);
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Image deleted with a warning',
+        kind: 'warning',
+        detail: 'Retained recovery link.',
+      })
+    );
+  });
+
   it('deletes multiple images and removes successful paths in one pass', async () => {
     const removeImagesByPaths = vi.fn();
 
@@ -165,6 +187,62 @@ describe('viewerActions', () => {
       expect.objectContaining({
         title: 'Images deleted',
         kind: 'success',
+      })
+    );
+  });
+
+  it('surfaces a committed bulk-delete warning', async () => {
+    moveToTrashMock.mockResolvedValue({
+      committed: true,
+      warning: 'Retained recovery link.',
+    });
+    const removeImagesByPaths = vi.fn();
+
+    await deleteImages({
+      imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      removeImagesByPaths,
+    });
+
+    expect(removeImagesByPaths).toHaveBeenCalledWith(['c:/images/one.jpg', 'c:/images/two.jpg']);
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Images deleted with a warning',
+        kind: 'warning',
+        detail: 'Retained recovery link.',
+      })
+    );
+  });
+
+  it('aggregates distinct committed bulk-delete warnings', async () => {
+    moveToTrashMock
+      .mockResolvedValueOnce({ committed: true, warning: 'Recovery link one.' })
+      .mockResolvedValueOnce({ committed: true, warning: 'Recovery link two.' });
+    await deleteImages({
+      imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      removeImagesByPaths: vi.fn(),
+    });
+
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Images deleted with a warning',
+        detail: 'Recovery link one.\nRecovery link two.',
+      })
+    );
+  });
+
+  it('keeps committed warnings in a mixed bulk-delete result', async () => {
+    moveToTrashMock
+      .mockResolvedValueOnce({ committed: true, warning: 'Recovery link retained.' })
+      .mockRejectedValueOnce(new Error('locked'));
+    await deleteImages({
+      imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      removeImagesByPaths: vi.fn(),
+    });
+
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Delete issues',
+        detail: 'Recovery link retained.\n\nc:/images/two.jpg\nlocked',
       })
     );
   });
@@ -210,6 +288,33 @@ describe('viewerActions', () => {
         kind: 'warning',
         message: 'Moved 1 image to Favorites, but 1 failed.',
         detail: 'c:/images/two.jpg\ndisk full',
+      })
+    );
+  });
+
+  it('surfaces a committed move warning even when no transfer failed', () => {
+    showTransferResultMessage(
+      {
+        successes: [
+          {
+            sourcePath: 'c:/images/one.jpg',
+            targetPath: 'd:/favorites/one.jpg',
+            sourceRemoved: false,
+            warning: 'Destination committed; source remains.',
+          },
+        ],
+        failures: [],
+        failureCount: 0,
+      },
+      { id: 'fav', label: 'Favorites', path: 'd:/favorites' },
+      'move'
+    );
+
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Move completed with a warning',
+        kind: 'warning',
+        detail: 'Destination committed; source remains.',
       })
     );
   });

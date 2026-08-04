@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
 import type { ImageFile } from '../types/image';
 import {
   getParentFolder,
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
+  selectFileSession,
+  selectFolderSession,
 } from '../services/tauriCommands';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
@@ -30,11 +31,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { useCurationStore } from '../state/curationStore';
 import { mainWindowTitle } from '../services/windowTitle';
 import { playBoundaryBeep } from '../services/boundaryFeedback';
-import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
 import { useFolderWatcherLifecycle } from './useFolderWatcherLifecycle';
+import { pathIdentityKey } from '../services/pathIdentity';
 
 function normalizePathKey(path: string): string {
-  return path.replace(/\\/g, '/').toLowerCase();
+  return pathIdentityKey(path);
 }
 
 function rememberOpenedFolder(folderPath: string) {
@@ -186,7 +187,7 @@ export function useImageNavigation() {
       autoRefreshFolder: state.settings.autoRefreshFolder,
     }))
   );
-  const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
+  const isMainWindowRef = useRef(getRuntime().window.label === 'main');
   const randomOrderRef = useRef<string[] | null>(null);
   const randomSortKeyRef = useRef<string | null>(null);
   const randomFolderRef = useRef<string | null>(null);
@@ -365,7 +366,7 @@ export function useImageNavigation() {
   );
 
   const setFolderWindowTitle = useCallback(async (nextFolderPath: string) => {
-    const appWindow = getCurrentWindow();
+    const appWindow = getRuntime().window;
     const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
     await appWindow.setTitle(mainWindowTitle(`[Folder] ${folderName}`));
   }, []);
@@ -461,9 +462,9 @@ export function useImageNavigation() {
         folderImages = applyActiveSortOrder(folderImages, parentFolder);
         if (!isCurrentGeneration(loadGeneration)) return;
 
-        const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
+        const normalizedPath = pathIdentityKey(filePath);
         const index = folderImages.findIndex(
-          (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
+          (image) => pathIdentityKey(image.path) === normalizedPath
         );
         applyFolderImages(folderImages, {
           emptyMessage: emptyFolderOpenMessage,
@@ -507,7 +508,7 @@ export function useImageNavigation() {
         setCurrentImage(filePath, 0);
         setViewMode('viewer');
 
-        const appWindow = getCurrentWindow();
+        const appWindow = getRuntime().window;
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
         await appWindow.setTitle(mainWindowTitle(fileName));
         if (!isCurrentGeneration(loadGeneration)) return;
@@ -555,18 +556,11 @@ export function useImageNavigation() {
   /** Open a file picker dialog */
   const openFilePicker = useCallback(async () => {
     try {
-      const selected = await open({
-        multiple: false,
-        filters: [
-          {
-            name: 'Images',
-            extensions: [...SUPPORTED_IMAGE_EXTENSIONS],
-          },
-        ],
-      });
-
+      const selected = await selectFileSession();
       if (selected) {
-        await openImage(selected as string);
+        const requested = selected.images.find((image) => image.id === selected.requested_image_id);
+        if (!requested) throw new Error('Native selection returned no requested image');
+        await openImage(requested.path);
       }
     } catch (err) {
       console.error('File picker error:', err);
@@ -657,13 +651,9 @@ export function useImageNavigation() {
   /** Open a folder picker dialog */
   const openFolderPicker = useCallback(async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
-
+      const selected = await selectFolderSession();
       if (selected) {
-        await openFolder(selected as string);
+        await openFolder(selected.canonical_folder);
       }
     } catch (err) {
       console.error('Folder picker error:', err);

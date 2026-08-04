@@ -8,8 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm, save } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from '../services/runtime/runtime';
 import { ExifPanel } from './ExifPanel';
 import { ImageCaptionOverlay } from './ImageCaptionOverlay';
 import {
@@ -21,8 +20,10 @@ import {
   openSecondaryWindow,
   overwriteWithCrop,
   saveCroppedCopy,
+  selectDestination,
 } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
+import { pathIdentityKey } from '../services/pathIdentity';
 import {
   chooseQuickDestinationFolder,
   canSaveRotationForPath,
@@ -98,6 +99,8 @@ type SecondaryActionGroup = 'file' | 'organize' | 'workspace' | 'view';
 
 interface PreparedCroppedCopy {
   outputPath: string;
+  destinationGrantId: string;
+  relativeFileName: string;
   cropRect: CropRect;
 }
 
@@ -522,9 +525,9 @@ export function ViewerChrome({
     const lastMarkedPath = markedPaths[markedPaths.length - 1];
     if (!lastMarkedPath) return;
 
-    const normalizedLastMarkedPath = lastMarkedPath.replace(/\\/g, '/').toLowerCase();
+    const normalizedLastMarkedPath = pathIdentityKey(lastMarkedPath);
     const lastMarkedIndex = images.findIndex(
-      (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedLastMarkedPath
+      (image) => pathIdentityKey(image.path) === normalizedLastMarkedPath
     );
     if (lastMarkedIndex >= 0) {
       setCurrentIndex(lastMarkedIndex);
@@ -534,7 +537,7 @@ export function ViewerChrome({
   };
   const toggleFullscreen = async () => {
     try {
-      const appWindow = getCurrentWindow();
+      const appWindow = getRuntime().window;
       const nextFullscreen = !isFullscreen;
       await appWindow.setFullscreen(nextFullscreen);
       setFullscreen(nextFullscreen);
@@ -641,7 +644,11 @@ export function ViewerChrome({
     if (mode === 'move') {
       useViewerStore
         .getState()
-        .removeImagesByPaths(result.successes.map((success) => success.sourcePath));
+        .removeImagesByPaths(
+          result.successes
+            .filter((success) => success.sourceRemoved !== false)
+            .map((success) => success.sourcePath)
+        );
     }
     showTransferResultMessage(result, destination, mode);
     closeOverflowMenus();
@@ -759,15 +766,17 @@ export function ViewerChrome({
     const dotIndex = originalName.lastIndexOf('.');
     const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
     const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
-    const outputPath = await save({
-      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),
-    });
-
-    if (!outputPath) {
+    const destination = await selectDestination(`${baseName}-cropped${extension}`, 'crop-copy');
+    if (!destination) {
       return null;
     }
 
-    return { outputPath, cropRect: pixelCropRect };
+    return {
+      outputPath: destination.selectedPath,
+      destinationGrantId: destination.destinationGrantId,
+      relativeFileName: destination.relativeFileName,
+      cropRect: pixelCropRect,
+    };
   };
 
   const handleQueueCroppedCopy = async () => {
@@ -780,6 +789,9 @@ export function ViewerChrome({
       kind: 'cropped-copy',
       sourcePath: currentImagePath,
       outputPath: preparedCopy.outputPath,
+      destinationGrantId: preparedCopy.destinationGrantId,
+      relativeFileName: preparedCopy.relativeFileName,
+      destinationOperation: 'crop-copy',
       cropRect: preparedCopy.cropRect,
       rotationDegrees: rotation,
     });
@@ -843,7 +855,7 @@ export function ViewerChrome({
 
     const { width: imageWidth, height: imageHeight } = dimensions;
 
-    const confirmed = await confirm(
+    const confirmed = await getRuntime().confirm(
       `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
       {
         title: 'Overwrite Cropped Image',
@@ -900,7 +912,11 @@ export function ViewerChrome({
     }
 
     const result = await transferImagesToDestination(markedPaths, destination, mode);
-    const successfulPaths = new Set(result.successes.map((success) => success.sourcePath));
+    const successfulPaths = new Set(
+      result.successes
+        .filter((success) => mode !== 'move' || success.sourceRemoved !== false)
+        .map((success) => success.sourcePath)
+    );
     const failedPaths = markedPaths.filter((path) => !successfulPaths.has(path));
 
     if (mode === 'move') {

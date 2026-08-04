@@ -1,7 +1,10 @@
 import {
-  convertFileSrc,
+  cancelMediaRequest,
   generatedImageAssetToUrl,
   getPreviewImage,
+  getPreviewImageById,
+  getSessionAssetUrl,
+  releaseSessionAssetDelivery,
   type GeneratedImageAsset,
 } from './tauriCommands';
 import {
@@ -29,12 +32,18 @@ import {
 } from './retainedImage';
 
 type ImageAssetEntry = {
+  path: string;
   url: string;
   version: number;
   lastUsedAt: number;
+  sessionId: string;
+  imageId: string;
 };
 
 type PreviewAssetEntry = {
+  path: string;
+  sessionId: string;
+  imageId: string;
   url: string;
   version: number;
   maxDimension: number;
@@ -48,6 +57,7 @@ type CacheStoreGuard = () => boolean;
 type CacheReadOptions = {
   canStore?: CacheStoreGuard;
   signal?: AbortSignal;
+  requestId?: string;
 };
 
 type ScheduledCacheReadOptions = CacheReadOptions & {
@@ -61,22 +71,38 @@ type CacheTrimOptions = {
 };
 
 const fullImageAssetCache = new Map<string, ImageAssetEntry>();
+let fullDeliveryRequestSequence = 0;
 const previewImageAssetCache = new Map<string, PreviewAssetEntry>();
 const pendingInvalidations = new Map<string, number>();
 const latestMutationVersions = new Map<string, number>();
 const activeMutationVersionRefs = new Map<string, number>();
 const MAX_MUTATION_VERSION_ENTRIES = 2048;
+const PRUNED_MUTATION_BUCKET_COUNT = 65_536;
+const prunedMutationVersionBucketsA = new Float64Array(PRUNED_MUTATION_BUCKET_COUNT);
+const prunedMutationVersionBucketsB = new Float64Array(PRUNED_MUTATION_BUCKET_COUNT);
 const DEFAULT_PREVIEW_MAX_DIMENSION = 2048;
 let previewCacheBudgetBytes = getPerformanceModeProfile('balanced').previewCacheBudgetBytes;
 let previewImageAssetCacheEstimatedBytes = 0;
 let latestProtectedPreviewPaths = new Set<string>();
 let latestPrimaryProtectedPreviewPath: string | null = null;
+let mutationGeneration = 0;
+
+function nextMutationGeneration(): number {
+  // Date.now() alone is not a generation: multiple mutations in one clock tick (or while the
+  // clock is adjusted backwards) would otherwise reuse an asset URL and admit stale work.
+  mutationGeneration = Math.max(mutationGeneration + 1, Date.now());
+  return mutationGeneration;
+}
 
 function syncImageAssetTelemetry(): void {
   setFullAssetCacheEntryCountTelemetry(fullImageAssetCache.size);
   setPreviewAssetCacheEntryCountTelemetry(previewImageAssetCache.size);
   setPreviewAssetCacheEstimatedBytesTelemetry(previewImageAssetCacheEstimatedBytes);
   setPreviewAssetCacheBudgetBytesTelemetry(previewCacheBudgetBytes);
+}
+
+function releaseCachedFullAssetEntry(entry: ImageAssetEntry): void {
+  if (entry.url) void releaseSessionAssetDelivery(entry.url);
 }
 
 function applyVersionToUrl(url: string, version: number): string {
@@ -108,17 +134,31 @@ function updateUrlSearchParams(url: string, update: (params: URLSearchParams) =>
   }
 }
 
-function createCacheEntry(path: string, version: number): ImageAssetEntry {
-  const baseUrl = convertFileSrc(path);
-  return {
-    url: applyVersionToUrl(baseUrl, version),
-    version,
-    lastUsedAt: Date.now(),
-  };
+function currentVersion(path: string): number {
+  const [bucketA, bucketB] = mutationBuckets(path);
+  const prunedVersion = Math.min(
+    prunedMutationVersionBucketsA[bucketA] ?? 0,
+    prunedMutationVersionBucketsB[bucketB] ?? 0
+  );
+  return Math.max(
+    prunedVersion,
+    pendingInvalidations.get(path) ?? 0,
+    latestMutationVersions.get(path) ?? 0
+  );
 }
 
-function currentVersion(path: string): number {
-  return Math.max(pendingInvalidations.get(path) ?? 0, latestMutationVersions.get(path) ?? 0);
+function mutationBuckets(path: string): [number, number] {
+  let hashA = 2166136261;
+  let hashB = 0x9e3779b9;
+  for (let index = 0; index < path.length; index += 1) {
+    const code = path.charCodeAt(index);
+    hashA = Math.imul(hashA ^ code, 16777619);
+    hashB = Math.imul(hashB ^ code, 2246822519) ^ (hashB >>> 13);
+  }
+  return [
+    (hashA >>> 0) % PRUNED_MUTATION_BUCKET_COUNT,
+    (hashB >>> 0) % PRUNED_MUTATION_BUCKET_COUNT,
+  ];
 }
 
 function mutationRefKey(path: string, version: number): string {
@@ -144,12 +184,24 @@ function pruneMutationVersionHistory(): void {
       const hasActiveRequest = Array.from(activeMutationVersionRefs.keys()).some((key) =>
         key.startsWith(`${path}\u0000`)
       );
-      const hasCachedAsset = fullImageAssetCache.has(path) || previewImageAssetCache.has(path);
+      const hasCachedAsset =
+        Array.from(fullImageAssetCache.values()).some((entry) => entry.path === path) ||
+        Array.from(previewImageAssetCache.values()).some((entry) => entry.path === path);
       return !hasActiveRequest && !hasCachedAsset;
     })
     .sort(([, left], [, right]) => left - right);
   for (const [path] of candidates) {
     if (latestMutationVersions.size <= MAX_MUTATION_VERSION_ENTRIES) break;
+    const version = latestMutationVersions.get(path) ?? 0;
+    const [bucketA, bucketB] = mutationBuckets(path);
+    prunedMutationVersionBucketsA[bucketA] = Math.max(
+      prunedMutationVersionBucketsA[bucketA] ?? 0,
+      version
+    );
+    prunedMutationVersionBucketsB[bucketB] = Math.max(
+      prunedMutationVersionBucketsB[bucketB] ?? 0,
+      version
+    );
     latestMutationVersions.delete(path);
     pendingInvalidations.delete(path);
   }
@@ -159,33 +211,6 @@ function pruneMutationVersionHistory(): void {
 // fallow-ignore-next-line unused-export -- deterministic cache retention tests
 export function getImageAssetCacheVersionEntryCountForTests(): number {
   return latestMutationVersions.size;
-}
-
-function getLeastRecentlyUsedEntries<T extends { lastUsedAt: number }>(
-  cache: Map<string, T>,
-  keepPaths: Set<string>
-): Array<[string, T]> {
-  return Array.from(cache.entries())
-    .filter(([path]) => !keepPaths.has(path))
-    .sort((a, b) => {
-      if (a[1].lastUsedAt !== b[1].lastUsedAt) {
-        return a[1].lastUsedAt - b[1].lastUsedAt;
-      }
-      return a[0].localeCompare(b[0]);
-    });
-}
-
-function trimCacheEntries<T extends { lastUsedAt: number }>(
-  cache: Map<string, T>,
-  keepPaths: Set<string>,
-  maxEntries: number
-): void {
-  if (maxEntries < 0 || cache.size <= maxEntries) return;
-
-  for (const [path] of getLeastRecentlyUsedEntries(cache, keepPaths)) {
-    if (cache.size <= maxEntries) break;
-    cache.delete(path);
-  }
 }
 
 function normalizeBudgetBytes(value: number, fallback: number): number {
@@ -200,11 +225,42 @@ function shouldStore(options?: CacheReadOptions): boolean {
   return options?.canStore?.() ?? true;
 }
 
-function maybePruneEntries<T>(cache: Map<string, T>, keepPaths: Set<string>): void {
-  for (const path of cache.keys()) {
-    if (!keepPaths.has(path)) {
-      cache.delete(path);
+function fullAssetCacheKey(
+  path: string,
+  sessionId: string,
+  imageId: string,
+  version: number
+): string {
+  return `${sessionId}\u0000${imageId}\u0000${path}\u0000${version}`;
+}
+
+function deleteFullAssetsForPath(path: string): void {
+  for (const [key, entry] of fullImageAssetCache) {
+    if (entry.path === path) {
+      fullImageAssetCache.delete(key);
+      releaseCachedFullAssetEntry(entry);
     }
+  }
+}
+
+function pruneFullAssetEntries(keepPaths: Set<string>): void {
+  for (const [key, entry] of fullImageAssetCache) {
+    if (!keepPaths.has(entry.path)) {
+      fullImageAssetCache.delete(key);
+      releaseCachedFullAssetEntry(entry);
+    }
+  }
+}
+
+function trimFullAssetEntries(keepPaths: Set<string>, maxEntries: number): void {
+  if (maxEntries < 0 || fullImageAssetCache.size <= maxEntries) return;
+  const candidates = Array.from(fullImageAssetCache.entries())
+    .filter(([, entry]) => !keepPaths.has(entry.path))
+    .sort((left, right) => left[1].lastUsedAt - right[1].lastUsedAt);
+  for (const [key, entry] of candidates) {
+    if (fullImageAssetCache.size <= maxEntries) break;
+    fullImageAssetCache.delete(key);
+    releaseCachedFullAssetEntry(entry);
   }
 }
 
@@ -217,26 +273,34 @@ function retainPreviewAssetEntry(entry: PreviewAssetEntry): void {
 }
 
 function deletePreviewAssetEntry(path: string): void {
-  const entry = previewImageAssetCache.get(path);
-  if (!entry) {
-    return;
+  for (const [key, entry] of previewImageAssetCache) {
+    if (entry.path !== path) continue;
+    previewImageAssetCache.delete(key);
+    previewImageAssetCacheEstimatedBytes -= entry.estimatedBytes;
+    releasePreviewAssetEntry(entry);
   }
-
-  previewImageAssetCache.delete(path);
-  previewImageAssetCacheEstimatedBytes -= entry.estimatedBytes;
-  releasePreviewAssetEntry(entry);
 }
 
-function setPreviewAssetEntry(path: string, entry: PreviewAssetEntry): void {
-  deletePreviewAssetEntry(path);
-  previewImageAssetCache.set(path, entry);
+function previewAssetCacheKey(path: string, sessionId?: string, imageId?: string): string {
+  return `${sessionId ?? 'legacy'}\u0000${imageId ?? 'legacy'}\u0000${path}`;
+}
+
+function setPreviewAssetEntry(key: string, entry: PreviewAssetEntry): void {
+  const previous = previewImageAssetCache.get(key);
+  if (previous) {
+    previewImageAssetCacheEstimatedBytes -= previous.estimatedBytes;
+    releasePreviewAssetEntry(previous);
+  }
+  previewImageAssetCache.set(key, entry);
   previewImageAssetCacheEstimatedBytes += entry.estimatedBytes;
 }
 
 function prunePreviewAssetEntries(keepPaths: Set<string>): void {
-  for (const path of previewImageAssetCache.keys()) {
-    if (!keepPaths.has(path)) {
-      deletePreviewAssetEntry(path);
+  for (const [key, entry] of previewImageAssetCache) {
+    if (!keepPaths.has(entry.path)) {
+      previewImageAssetCache.delete(key);
+      previewImageAssetCacheEstimatedBytes -= entry.estimatedBytes;
+      releasePreviewAssetEntry(entry);
     }
   }
 }
@@ -252,26 +316,19 @@ function createAbortError(message: string): Error {
   return error;
 }
 
-function buildFullAssetEntry(path: string): ImageAssetEntry {
-  const startVersion = currentVersion(path);
-  const entry = createCacheEntry(path, startVersion);
-  const resolvedVersion = Math.max(startVersion, currentVersion(path));
-
-  if (resolvedVersion !== entry.version) {
-    entry.version = resolvedVersion;
-    entry.url = applyVersionToUrl(entry.url, resolvedVersion);
-  }
-
-  return entry;
-}
-
 function createPreviewAssetEntry(
   asset: GeneratedImageAsset,
+  path: string,
+  sessionId: string | undefined,
+  imageId: string | undefined,
   version: number,
   maxDimension: number
 ): PreviewAssetEntry {
   const url = generatedImageAssetToUrl(asset);
   return {
+    path,
+    sessionId: sessionId ?? 'legacy',
+    imageId: imageId ?? 'legacy',
     url,
     version,
     maxDimension,
@@ -285,12 +342,23 @@ function createPreviewAssetEntry(
   };
 }
 
-function fullAssetWorkKey(path: string, version: number): string {
-  return `full::${path}::${version}`;
+function fullAssetWorkKey(
+  path: string,
+  sessionId: string,
+  imageId: string,
+  version: number
+): string {
+  return `full::${sessionId}::${imageId}::${path}::${version}`;
 }
 
-function previewAssetWorkKey(path: string, maxDimension: number, version: number): string {
-  return `preview::${path}::${maxDimension}::${version}`;
+function previewAssetWorkKey(
+  path: string,
+  sessionId: string | undefined,
+  imageId: string | undefined,
+  maxDimension: number,
+  version: number
+): string {
+  return `preview::${sessionId ?? 'legacy'}::${imageId ?? 'legacy'}::${path}::${maxDimension}::${version}`;
 }
 
 function workScope(priority: ImageWorkPriority): 'interactive' | 'background' {
@@ -302,19 +370,23 @@ function workScope(priority: ImageWorkPriority): 'interactive' | 'background' {
 
 function scopedFullAssetWorkKey(
   path: string,
+  sessionId: string,
+  imageId: string,
   version: number,
   priority: ImageWorkPriority
 ): string {
-  return `${fullAssetWorkKey(path, version)}::${workScope(priority)}`;
+  return `${fullAssetWorkKey(path, sessionId, imageId, version)}::${workScope(priority)}`;
 }
 
 function scopedPreviewAssetWorkKey(
   path: string,
+  sessionId: string | undefined,
+  imageId: string | undefined,
   maxDimension: number,
   version: number,
   priority: ImageWorkPriority
 ): string {
-  return `${previewAssetWorkKey(path, maxDimension, version)}::${workScope(priority)}`;
+  return `${previewAssetWorkKey(path, sessionId, imageId, maxDimension, version)}::${workScope(priority)}`;
 }
 
 function storeFullAsset(path: string, entry: ImageAssetEntry, options?: CacheReadOptions): string {
@@ -323,15 +395,21 @@ function storeFullAsset(path: string, entry: ImageAssetEntry, options?: CacheRea
     return entry.url;
   }
 
-  const current = fullImageAssetCache.get(path);
+  const key = fullAssetCacheKey(path, entry.sessionId, entry.imageId, entry.version);
+  const current = fullImageAssetCache.get(key);
   if (current && current.version >= entry.version) {
     current.lastUsedAt = Date.now();
     recordFullAssetCacheHit();
     syncImageAssetTelemetry();
-    return current.url;
+    return entry.url;
   }
 
-  fullImageAssetCache.set(path, entry);
+  if (current) {
+    releaseCachedFullAssetEntry(current);
+  }
+  // The cache records reusable readiness only. Delivery URLs remain exclusively owned by the
+  // caller that receives them and are never published into shared cache state.
+  fullImageAssetCache.set(key, { ...entry, url: '' });
   if (entry.version > 0) {
     latestMutationVersions.set(path, entry.version);
   }
@@ -346,6 +424,7 @@ function storeFullAsset(path: string, entry: ImageAssetEntry, options?: CacheRea
 
 function storePreviewAsset(
   path: string,
+  cacheKey: string,
   entry: PreviewAssetEntry,
   options?: CacheReadOptions
 ): string {
@@ -355,7 +434,7 @@ function storePreviewAsset(
     return entry.url;
   }
 
-  const current = previewImageAssetCache.get(path);
+  const current = previewImageAssetCache.get(cacheKey);
   if (current && current.version >= entry.version && current.maxDimension === entry.maxDimension) {
     releasePreviewAssetEntry(entry);
     current.lastUsedAt = Date.now();
@@ -365,7 +444,7 @@ function storePreviewAsset(
   }
 
   retainPreviewAssetEntry(entry);
-  setPreviewAssetEntry(path, entry);
+  setPreviewAssetEntry(cacheKey, entry);
   if (entry.version > 0) {
     latestMutationVersions.set(path, entry.version);
   }
@@ -385,12 +464,17 @@ function enforcePreviewBudget(keepPaths: Set<string>): void {
     return;
   }
 
-  for (const [path] of getLeastRecentlyUsedEntries(previewImageAssetCache, keepPaths)) {
+  const candidates = Array.from(previewImageAssetCache.entries())
+    .filter(([, entry]) => !keepPaths.has(entry.path))
+    .sort((left, right) => left[1].lastUsedAt - right[1].lastUsedAt);
+  for (const [key, entry] of candidates) {
     if (previewImageAssetCacheEstimatedBytes <= previewCacheBudgetBytes) {
       break;
     }
 
-    deletePreviewAssetEntry(path);
+    previewImageAssetCache.delete(key);
+    previewImageAssetCacheEstimatedBytes -= entry.estimatedBytes;
+    releasePreviewAssetEntry(entry);
   }
 }
 
@@ -409,41 +493,83 @@ export function configureImageAssetCache(options: { previewCacheBudgetBytes?: nu
   syncImageAssetTelemetry();
 }
 
+async function createCacheEntry(
+  sessionId: string,
+  imageId: string,
+  version: number
+): Promise<ImageAssetEntry> {
+  const baseUrl = await getSessionAssetUrl(sessionId, imageId);
+  return {
+    path: '',
+    url: applyVersionToUrl(baseUrl, version),
+    version,
+    lastUsedAt: Date.now(),
+    sessionId,
+    imageId,
+  };
+}
+
 async function loadFullAssetWithPriority(
   path: string,
   priority: ImageWorkPriority,
-  options?: CacheReadOptions
+  options?: CacheReadOptions,
+  sessionId?: string,
+  imageId?: string
 ): Promise<string> {
+  if (!sessionId || !imageId) {
+    throw new Error('Full resolution asset request requires authorized sessionId and id');
+  }
+
   const version = currentVersion(path);
-  const cached = fullImageAssetCache.get(path);
-  if (cached && cached.version === version) {
+  const cacheKey = fullAssetCacheKey(path, sessionId, imageId, version);
+  const cached = fullImageAssetCache.get(cacheKey);
+  if (
+    cached &&
+    cached.version === version &&
+    cached.sessionId === sessionId &&
+    cached.imageId === imageId
+  ) {
+    const replacementUrl = applyVersionToUrl(await getSessionAssetUrl(sessionId, imageId), version);
+    if (options?.signal?.aborted) {
+      void releaseSessionAssetDelivery(replacementUrl);
+      throw createAbortError('Full asset work aborted after delivery mint.');
+    }
+    // Each full-asset URL represents one backend delivery and belongs to the caller receiving it.
+    // A cache hit therefore must not replace or release another caller's still-live delivery.
     cached.lastUsedAt = Date.now();
     recordFullAssetCacheHit();
     syncImageAssetTelemetry();
-    return cached.url;
+    return replacementUrl;
   }
 
   retainMutationVersion(path, version);
   return imageWorkScheduler
     .schedule({
-      key: scopedFullAssetWorkKey(path, version, priority),
+      key: `${scopedFullAssetWorkKey(path, sessionId, imageId, version, priority)}::delivery_${++fullDeliveryRequestSequence}`,
       priority,
       sourcePath: path,
       generationToken: version,
       signal: options?.signal,
-      run: ({ signal }) => {
+      run: async ({ signal }) => {
         if (signal.aborted) {
           throw createAbortError('Full asset work aborted before execution.');
         }
 
         recordFullAssetCacheMiss();
-        const entry = buildFullAssetEntry(path);
+        const entry = { ...(await createCacheEntry(sessionId, imageId, version)), path };
+        try {
+          if (currentVersion(path) > entry.version) {
+            throw new Error(`Full asset for '${path}' superseded by concurrent mutation.`);
+          }
+          if (signal.aborted) {
+            throw createAbortError('Full asset work aborted before cache publication.');
+          }
 
-        if (signal.aborted) {
-          throw createAbortError('Full asset work aborted after execution.');
+          return storeFullAsset(path, entry, options);
+        } catch (error) {
+          void releaseSessionAssetDelivery(entry.url);
+          throw error;
         }
-
-        return storeFullAsset(path, entry, options);
       },
     })
     .promise.finally(() => {
@@ -456,10 +582,13 @@ async function loadPreviewAssetWithPriority(
   path: string,
   maxDimension: number,
   priority: ImageWorkPriority,
-  options?: CacheReadOptions
+  options?: CacheReadOptions,
+  sessionId?: string,
+  imageId?: string
 ): Promise<string> {
   const version = currentVersion(path);
-  const existing = previewImageAssetCache.get(path);
+  const cacheKey = previewAssetCacheKey(path, sessionId, imageId);
+  const existing = previewImageAssetCache.get(cacheKey);
   if (existing && existing.version === version && existing.maxDimension === maxDimension) {
     existing.lastUsedAt = Date.now();
     recordPreviewAssetCacheHit();
@@ -470,46 +599,75 @@ async function loadPreviewAssetWithPriority(
   retainMutationVersion(path, version);
   return imageWorkScheduler
     .schedule({
-      key: scopedPreviewAssetWorkKey(path, maxDimension, version, priority),
+      key: scopedPreviewAssetWorkKey(path, sessionId, imageId, maxDimension, version, priority),
       priority,
       sourcePath: path,
       generationToken: version,
       signal: options?.signal,
       run: async ({ signal }) => {
+        // The request ID belongs to the coalesced physical job, not to whichever consumer happened
+        // to schedule it first. The scheduler aborts this signal only after the final consumer has
+        // detached, so one consumer can no longer cancel work still needed by another.
+        const requestId =
+          options?.requestId ?? `req_prev_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const onAbort = () => {
+          void cancelMediaRequest(requestId).catch(() => {});
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
         if (signal.aborted) {
+          onAbort();
           throw createAbortError('Preview work aborted before execution.');
         }
 
         recordPreviewAssetCacheMiss();
         const initialVersion = currentVersion(path);
         const initialBust = initialVersion > 0 ? initialVersion : undefined;
-        let entry = createPreviewAssetEntry(
-          await measurePerformanceSpan('previewGeneration', () =>
-            getPreviewImage(path, maxDimension, initialBust)
-          ),
-          initialVersion,
-          maxDimension
-        );
 
-        const resolvedVersion = Math.max(initialVersion, currentVersion(path));
-        if (resolvedVersion !== entry.version) {
-          releasePreviewAssetEntry(entry);
-          const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
-          entry = createPreviewAssetEntry(
+        try {
+          let entry = createPreviewAssetEntry(
             await measurePerformanceSpan('previewGeneration', () =>
-              getPreviewImage(path, maxDimension, resolvedBust)
+              sessionId && imageId
+                ? getPreviewImageById(sessionId, imageId, maxDimension, initialBust, requestId)
+                : getPreviewImage(path, maxDimension, initialBust, requestId)
             ),
-            resolvedVersion,
+            path,
+            sessionId,
+            imageId,
+            initialVersion,
             maxDimension
           );
-        }
 
-        if (signal.aborted) {
-          releasePreviewAssetEntry(entry);
-          throw createAbortError('Preview work aborted after execution.');
-        }
+          const resolvedVersion = Math.max(initialVersion, currentVersion(path));
+          if (resolvedVersion !== entry.version) {
+            releasePreviewAssetEntry(entry);
+            const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
+            entry = createPreviewAssetEntry(
+              await measurePerformanceSpan('previewGeneration', () =>
+                sessionId && imageId
+                  ? getPreviewImageById(sessionId, imageId, maxDimension, resolvedBust, requestId)
+                  : getPreviewImage(path, maxDimension, resolvedBust, requestId)
+              ),
+              path,
+              sessionId,
+              imageId,
+              resolvedVersion,
+              maxDimension
+            );
+          }
 
-        return storePreviewAsset(path, entry, options);
+          if (currentVersion(path) > entry.version) {
+            releasePreviewAssetEntry(entry);
+            throw new Error(`Preview asset for '${path}' superseded by concurrent mutation.`);
+          }
+          if (signal.aborted) {
+            releasePreviewAssetEntry(entry);
+            throw createAbortError('Preview work aborted before cache publication.');
+          }
+
+          return storePreviewAsset(path, cacheKey, entry, options);
+        } finally {
+          signal.removeEventListener('abort', onAbort);
+        }
       },
     })
     .promise.finally(() => {
@@ -518,68 +676,92 @@ async function loadPreviewAssetWithPriority(
     });
 }
 
-export function requestFullAsset(path: string, options?: CacheReadOptions): Promise<string> {
-  return loadFullAssetWithPriority(path, IMAGE_WORK_PRIORITY.currentFull, options);
+export function requestFullAsset(
+  image: { path: string; sessionId: string; id: string },
+  options?: CacheReadOptions
+): Promise<string> {
+  if (!image || !image.sessionId || !image.id) {
+    return Promise.reject(
+      new Error('Full resolution asset request requires authorized sessionId and id')
+    );
+  }
+  return loadFullAssetWithPriority(
+    image.path,
+    IMAGE_WORK_PRIORITY.currentFull,
+    options,
+    image.sessionId,
+    image.id
+  );
 }
 
 export async function getPreviewAsset(
-  path: string,
+  pathOrImage: string | { path: string; sessionId?: string; id?: string },
   maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION,
   options?: CacheReadOptions
 ): Promise<string> {
+  const path = typeof pathOrImage === 'string' ? pathOrImage : pathOrImage.path;
   return loadPreviewAssetWithPriority(
     path,
     maxDimension,
     IMAGE_WORK_PRIORITY.currentPreview,
-    options
+    options,
+    typeof pathOrImage === 'string' ? undefined : pathOrImage.sessionId,
+    typeof pathOrImage === 'string' ? undefined : pathOrImage.id
   );
 }
 
 export async function preloadFullAsset(
-  path: string,
+  image: { path: string; sessionId: string; id: string },
   options?: ScheduledCacheReadOptions
 ): Promise<void> {
-  if (!shouldStore(options)) {
+  if (!shouldStore(options) || !image || !image.sessionId || !image.id) {
     return;
   }
 
-  const url = await loadFullAssetWithPriority(
-    path,
-    options?.priority ?? IMAGE_WORK_PRIORITY.backgroundPreload,
-    options
-  );
-  if (!shouldStore(options)) {
-    return;
+  let deliveryUrl: string | undefined;
+  try {
+    deliveryUrl = await loadFullAssetWithPriority(
+      image.path,
+      options?.priority ?? IMAGE_WORK_PRIORITY.adjacentDirectional,
+      options,
+      image.sessionId,
+      image.id
+    );
+  } finally {
+    if (deliveryUrl) {
+      await releaseSessionAssetDelivery(deliveryUrl).catch(() => {});
+    }
   }
-
-  const img = new Image();
-  img.src = url;
 }
 
 export async function preloadPreviewAsset(
-  path: string,
+  pathOrImage: string | { path: string; sessionId?: string; id?: string },
   maxDimension = DEFAULT_PREVIEW_MAX_DIMENSION,
   options?: ScheduledCacheReadOptions
 ): Promise<void> {
   if (!shouldStore(options)) {
     return;
   }
+
+  const path = typeof pathOrImage === 'string' ? pathOrImage : pathOrImage.path;
 
   await loadPreviewAssetWithPriority(
     path,
     maxDimension,
     options?.priority ?? IMAGE_WORK_PRIORITY.backgroundPreload,
-    options
+    options,
+    typeof pathOrImage === 'string' ? undefined : pathOrImage.sessionId,
+    typeof pathOrImage === 'string' ? undefined : pathOrImage.id
   );
 }
 
 export function invalidateImageAsset(path: string): void {
-  const version = Date.now();
+  const version = nextMutationGeneration();
   pendingInvalidations.set(path, version);
   latestMutationVersions.set(path, version);
 
   imageWorkScheduler.cancelQueued((job) => job.sourcePath === path);
-  fullImageAssetCache.delete(path);
+  deleteFullAssetsForPath(path);
   deletePreviewAssetEntry(path);
   syncImageAssetTelemetry();
   pruneMutationVersionHistory();
@@ -592,7 +774,7 @@ export function trimImageAssetCache(
 ): void {
   if (options?.pruneMissing) {
     const prunePaths = options.pruneMissingPaths ?? keepPaths;
-    maybePruneEntries(fullImageAssetCache, prunePaths);
+    pruneFullAssetEntries(prunePaths);
     prunePreviewAssetEntries(prunePaths);
   }
 
@@ -601,7 +783,7 @@ export function trimImageAssetCache(
     latestPrimaryProtectedPreviewPath = firstSetValue(keepPaths);
   }
 
-  trimCacheEntries(fullImageAssetCache, keepPaths, maxEntries);
+  trimFullAssetEntries(keepPaths, maxEntries);
   enforcePreviewBudget(latestProtectedPreviewPaths);
   const cancelKeepPaths = options?.cancelOutsidePaths ?? keepPaths;
   imageWorkScheduler.cancelQueued(

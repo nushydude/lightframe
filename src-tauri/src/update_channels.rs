@@ -29,6 +29,7 @@ pub async fn check_update_channel<R: Runtime>(
     webview: Webview<R>,
     channel: UpdateChannel,
 ) -> Result<Option<ChannelUpdateMetadata>, String> {
+    crate::commands::enforce_main_window(&webview.window())?;
     let mut builder = webview.updater_builder();
     if channel == UpdateChannel::Preview {
         let endpoint = Url::parse(PREVIEW_UPDATE_ENDPOINT)

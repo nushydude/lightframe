@@ -1,11 +1,11 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
-import { currentMonitor } from '@tauri-apps/api/window';
-import type { Window } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
+import type { RuntimeWindow } from '../services/runtime/types';
 import { useSettingsStore } from '../state/settingsStore';
 import { displayKeyFromMonitor, persistWindowBoundsSafely } from '../services/windowBounds';
 
 type WindowPersistenceOptions = {
-  appWindow: Window;
+  appWindow: RuntimeWindow;
   isMainWindow: boolean;
   settingsRef: MutableRefObject<ReturnType<typeof useSettingsStore.getState>['settings']>;
   settingsLoadedRef: MutableRefObject<boolean>;
@@ -55,7 +55,7 @@ export function useWindowPersistence({
             ]);
             return { position, size };
           },
-          readDisplayKey: async () => displayKeyFromMonitor(await currentMonitor()),
+          readDisplayKey: async () => displayKeyFromMonitor(await getRuntime().currentMonitor()),
           updateSettings: async (partial) => {
             if (!isUnmounted) await updateSettings(partial);
           },

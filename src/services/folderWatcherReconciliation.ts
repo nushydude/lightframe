@@ -1,4 +1,5 @@
 import type { ImageFile } from '../types/image';
+import { pathIdentityKey } from './pathIdentity';
 import type { AppSettings } from '../types/settings';
 import { createImageComparator, sortImages } from './imageSorting';
 import type { FolderWatcherPayload } from './tauriCommands';
@@ -45,6 +46,18 @@ export function reconcileFolderWatcherPayload(
     sortOrder,
     sortDirection = sortOrder === 'name' ? 'ascending' : 'descending',
   } = options;
+  if (payload.sessionId && Array.isArray(payload.images)) {
+    return reconcileAuthoritativeSnapshot(
+      payload,
+      images,
+      currentIndex,
+      currentImagePath,
+      sortOrder,
+      sortDirection,
+      options.randomOrder,
+      options.pathIndex
+    );
+  }
   if (requiresFullRefresh(payload))
     return fullRefreshResult(images, currentIndex, currentImagePath);
 
@@ -86,6 +99,147 @@ export function reconcileFolderWatcherPayload(
     preferredPath,
     requiresFullRefresh: false,
   };
+}
+
+function reconcileAuthoritativeSnapshot(
+  payload: FolderWatcherPayload,
+  previousImages: ImageFile[],
+  currentIndex: number,
+  currentImagePath: string | null,
+  sortOrder: AppSettings['sortOrder'],
+  sortDirection: AppSettings['sortDirection'],
+  randomOrder?: string[] | null,
+  pathIndex?: Map<string, bigint>
+): FolderWatcherReconciliationResult {
+  if (!hasCapableAuthoritativeSnapshot(payload)) {
+    return fullRefreshResult(previousImages, currentIndex, currentImagePath);
+  }
+  const authoritativeImages = orderAuthoritativeImages(
+    payload.images,
+    previousImages,
+    sortOrder,
+    sortDirection,
+    randomOrder
+  );
+  const invalidatedPaths = collectAuthoritativeInvalidations(
+    payload,
+    previousImages,
+    authoritativeImages
+  );
+  const preferredIndex = resolveAuthoritativePreferredIndex(
+    previousImages,
+    authoritativeImages,
+    currentImagePath
+  );
+  const preferredPath = preferredIndex >= 0 ? authoritativeImages[preferredIndex].path : null;
+  rebuildAuthoritativePathIndex(pathIndex, authoritativeImages);
+  return {
+    images: authoritativeImages,
+    invalidatedPaths: Array.from(invalidatedPaths),
+    preferredIndex:
+      authoritativeImages.length === 0
+        ? -1
+        : preferredIndex >= 0
+          ? preferredIndex
+          : Math.min(Math.max(currentIndex, 0), authoritativeImages.length - 1),
+    preferredPath,
+    requiresFullRefresh: false,
+  };
+}
+
+function hasCapableAuthoritativeSnapshot(payload: FolderWatcherPayload): boolean {
+  if (!payload.sessionId || !Array.isArray(payload.images)) return false;
+  return payload.images.every(
+    (image) => Boolean(image.id) && image.sessionId === payload.sessionId
+  );
+}
+
+function orderAuthoritativeImages(
+  images: ImageFile[],
+  previousImages: ImageFile[],
+  sortOrder: AppSettings['sortOrder'],
+  sortDirection: AppSettings['sortDirection'],
+  randomOrder?: string[] | null
+): ImageFile[] {
+  if (sortOrder !== 'random') return sortImages(images, sortOrder, sortDirection);
+  const byPath = new Map(images.map((image) => [pathKey(image.path), image]));
+  const ordered: ImageFile[] = [];
+  for (const path of randomOrder ?? previousImages.map((image) => image.path)) {
+    const image = byPath.get(pathKey(path));
+    if (!image) continue;
+    ordered.push(image);
+    byPath.delete(pathKey(path));
+  }
+  ordered.push(...byPath.values());
+  return ordered;
+}
+
+function collectAuthoritativeInvalidations(
+  payload: FolderWatcherPayload,
+  previousImages: ImageFile[],
+  authoritativeImages: ImageFile[]
+): Set<string> {
+  const previousByPath = new Map(previousImages.map((image) => [pathKey(image.path), image]));
+  const currentByPath = new Map(authoritativeImages.map((image) => [pathKey(image.path), image]));
+  const invalidated = new Set<string>();
+  addChangeInvalidations(invalidated, payload);
+  addPreviousImageInvalidations(invalidated, previousImages, currentByPath);
+  addNewImageInvalidations(invalidated, authoritativeImages, previousByPath);
+  return invalidated;
+}
+
+function addChangeInvalidations(paths: Set<string>, payload: FolderWatcherPayload): void {
+  for (const change of payload.changes) {
+    if (change.oldPath) paths.add(change.oldPath);
+    paths.add(change.path);
+  }
+}
+
+function addPreviousImageInvalidations(
+  paths: Set<string>,
+  previousImages: ImageFile[],
+  currentByPath: Map<string, ImageFile>
+): void {
+  for (const image of previousImages) {
+    const current = currentByPath.get(pathKey(image.path));
+    if (!current || current.id !== image.id || current.modified_at !== image.modified_at) {
+      paths.add(image.path);
+    }
+  }
+}
+
+function addNewImageInvalidations(
+  paths: Set<string>,
+  authoritativeImages: ImageFile[],
+  previousByPath: Map<string, ImageFile>
+): void {
+  for (const image of authoritativeImages) {
+    if (!previousByPath.has(pathKey(image.path))) paths.add(image.path);
+  }
+}
+
+function resolveAuthoritativePreferredIndex(
+  previousImages: ImageFile[],
+  authoritativeImages: ImageFile[],
+  currentImagePath: string | null
+): number {
+  if (!currentImagePath) return -1;
+  const previous = previousImages.find((image) => isSamePath(image.path, currentImagePath));
+  return authoritativeImages.findIndex(
+    (image) =>
+      isSamePath(image.path, currentImagePath) || Boolean(previous?.id && image.id === previous.id)
+  );
+}
+
+function rebuildAuthoritativePathIndex(
+  pathIndex: Map<string, bigint> | undefined,
+  images: ImageFile[]
+): void {
+  if (!pathIndex) return;
+  pathIndex.clear();
+  images.forEach((image, index) => {
+    pathIndex.set(pathKey(image.path), BigInt(index) * ORDER_STEP);
+  });
 }
 
 function requiresFullRefresh(payload: FolderWatcherPayload): boolean {
@@ -270,7 +424,7 @@ function labelBetween(draft: FolderWatcherReconciliationDraft, index: number): b
 }
 
 function pathKey(path: string): string {
-  return path.replace(/\\/g, '/').toLowerCase();
+  return pathIdentityKey(path);
 }
 
 function isSamePath(a: string, b: string): boolean {

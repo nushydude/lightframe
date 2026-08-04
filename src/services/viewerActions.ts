@@ -1,4 +1,4 @@
-import { confirm, open } from '@tauri-apps/plugin-dialog';
+import { getRuntime } from './runtime/runtime';
 import {
   copyImageToClipboard,
   getFileName,
@@ -6,6 +6,7 @@ import {
   openInExternalApplication,
   revealInExplorer,
   transferImagesToFolder,
+  selectDestinationFolder,
 } from './tauriCommands';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
@@ -27,8 +28,13 @@ interface DeleteFailure {
   error: string;
 }
 
+interface DeleteSuccess {
+  path: string;
+  warning?: string;
+}
+
 interface DeleteResult {
-  successes: string[];
+  successes: DeleteSuccess[];
   failures: DeleteFailure[];
 }
 
@@ -44,6 +50,8 @@ export function canSaveRotationForPath(filePath: string | null): boolean {
 export interface QuickTransferSuccess {
   sourcePath: string;
   targetPath: string;
+  warning?: string;
+  sourceRemoved?: boolean;
 }
 
 export interface QuickTransferFailure {
@@ -89,12 +97,24 @@ export function showTransferResultMessage(
   const verb = mode === 'copy' ? 'Copied' : 'Moved';
   const noun = result.successes.length === 1 ? 'image' : 'images';
   const pushToast = useToastStore.getState().pushToast;
+  const firstWarning = result.successes.find((success) => success.warning)?.warning;
 
-  if (result.failureCount === 0) {
+  if (result.failureCount === 0 && !firstWarning) {
     pushToast({
       title: mode === 'copy' ? 'Copy complete' : 'Move complete',
       kind: 'success',
       message: `${verb} ${result.successes.length} ${noun} to ${destination.label}.`,
+    });
+    return;
+  }
+
+  if (result.failureCount === 0 && firstWarning) {
+    pushToast({
+      title: mode === 'copy' ? 'Copy completed with a warning' : 'Move completed with a warning',
+      kind: 'warning',
+      message: `${verb} ${result.successes.length} ${noun} to ${destination.label}.`,
+      detail: firstWarning,
+      duration: 9000,
     });
     return;
   }
@@ -248,12 +268,8 @@ export async function copyCurrentImageFileName(currentImagePath: string | null):
 }
 
 export async function chooseQuickDestinationFolder(): Promise<QuickDestination | null> {
-  const selected = await open({ directory: true, multiple: false });
-  if (!selected || typeof selected !== 'string') {
-    return null;
-  }
-
-  const normalizedPath = selected.trim();
+  const selected = await selectDestinationFolder();
+  const normalizedPath = selected?.selectedPath.trim() ?? '';
   if (!normalizedPath) {
     return null;
   }
@@ -318,7 +334,7 @@ export async function deleteCurrentImage({
 
   try {
     const fileName = currentImagePath.replace(/\\/g, '/').split('/').pop() ?? currentImagePath;
-    const confirmed = await confirm(
+    const confirmed = await getRuntime().confirm(
       `Are you sure you want to move this image to the Recycle Bin?\n\n${fileName}`,
       {
         title: 'Delete Image',
@@ -330,8 +346,17 @@ export async function deleteCurrentImage({
       return;
     }
 
-    await moveToTrash(currentImagePath);
+    const outcome = await moveToTrash(currentImagePath);
     removeImage(currentIndex);
+    if (outcome?.warning) {
+      useToastStore.getState().pushToast({
+        title: 'Image deleted with a warning',
+        kind: 'warning',
+        message: 'Moved image to the Recycle Bin.',
+        detail: outcome.warning,
+        duration: 9000,
+      });
+    }
   } catch (err) {
     console.error('Failed to move to trash:', err);
     useToastStore.getState().pushToast({
@@ -368,20 +393,20 @@ function getDeleteConfirmationOptions(imagePaths: string[]): {
 
 async function confirmDeleteImages(imagePaths: string[]): Promise<boolean> {
   const { message, title } = getDeleteConfirmationOptions(imagePaths);
-  return confirm(message, {
+  return getRuntime().confirm(message, {
     title,
     kind: 'warning',
   });
 }
 
 async function moveImagesToTrash(imagePaths: string[]): Promise<DeleteResult> {
-  const successes: string[] = [];
+  const successes: DeleteSuccess[] = [];
   const failures: DeleteFailure[] = [];
 
   for (const path of imagePaths) {
     try {
-      await moveToTrash(path);
-      successes.push(path);
+      const outcome = await moveToTrash(path);
+      successes.push({ path, warning: outcome?.warning });
     } catch (err) {
       console.error('Failed to move to trash:', err);
       failures.push({
@@ -394,21 +419,50 @@ async function moveImagesToTrash(imagePaths: string[]): Promise<DeleteResult> {
   return { successes, failures };
 }
 
-function showDeleteResultToast(successes: string[], failures: DeleteFailure[]): void {
-  const pushToast = useToastStore.getState().pushToast;
+function collectDeleteWarnings(successes: DeleteSuccess[]): string[] {
+  const warnings = new Set<string>();
+  for (const success of successes) {
+    if (success.warning) {
+      warnings.add(success.warning);
+    }
+  }
+  return Array.from(warnings);
+}
 
-  if (failures.length === 0) {
+function deleteSuccessMessage(count: number): string {
+  return count === 1
+    ? 'Moved image to the Recycle Bin.'
+    : `Moved ${count} images to the Recycle Bin.`;
+}
+
+function showSuccessfulDeleteToast(successes: DeleteSuccess[], warnings: string[]): void {
+  const pushToast = useToastStore.getState().pushToast;
+  if (warnings.length === 0) {
     pushToast({
       title: successes.length === 1 ? 'Image deleted' : 'Images deleted',
       kind: 'success',
-      message:
-        successes.length === 1
-          ? 'Moved image to the Recycle Bin.'
-          : `Moved ${successes.length} images to the Recycle Bin.`,
+      message: deleteSuccessMessage(successes.length),
     });
     return;
   }
 
+  pushToast({
+    title:
+      successes.length === 1 ? 'Image deleted with a warning' : 'Images deleted with a warning',
+    kind: 'warning',
+    message: deleteSuccessMessage(successes.length),
+    detail: warnings.join('\n'),
+    duration: 9000,
+  });
+}
+
+function showDeleteIssueToast(
+  successes: DeleteSuccess[],
+  failures: DeleteFailure[],
+  warnings: string[]
+): void {
+  const pushToast = useToastStore.getState().pushToast;
+  const firstFailure = failures[0];
   pushToast({
     title: successes.length > 0 ? 'Delete issues' : 'Delete failed',
     kind: successes.length > 0 ? 'warning' : 'error',
@@ -416,9 +470,23 @@ function showDeleteResultToast(successes: string[], failures: DeleteFailure[]): 
       successes.length > 0
         ? `Deleted ${successes.length} images, but ${failures.length} failed.`
         : 'Could not delete the selected images.',
-    detail: `${failures[0]?.path ?? ''}\n${failures[0]?.error ?? ''}`.trim(),
+    detail: [
+      warnings.join('\n'),
+      `${firstFailure?.path ?? ''}\n${firstFailure?.error ?? ''}`.trim(),
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
     duration: 8000,
   });
+}
+
+function showDeleteResultToast(successes: DeleteSuccess[], failures: DeleteFailure[]): void {
+  const warnings = collectDeleteWarnings(successes);
+  if (failures.length > 0) {
+    showDeleteIssueToast(successes, failures, warnings);
+    return;
+  }
+  showSuccessfulDeleteToast(successes, warnings);
 }
 
 export async function deleteImages({
@@ -438,7 +506,7 @@ export async function deleteImages({
   const { successes, failures } = await moveImagesToTrash(normalizedPaths);
 
   if (successes.length > 0) {
-    removeImagesByPaths(successes);
+    removeImagesByPaths(successes.map((success) => success.path));
   }
 
   showDeleteResultToast(successes, failures);

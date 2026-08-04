@@ -17,8 +17,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
 
 const THUMBNAIL_SIZE: u32 = 160;
+#[allow(dead_code)]
 const THUMBNAIL_CACHE_VERSION: &str = "thumb-v4";
 const PREVIEW_CACHE_VERSION: &str = "preview-v2";
+
 const TILE_CACHE_VERSION: &str = "tile-v2";
 const MIN_TILE_SIZE: u32 = 128;
 const MAX_TILE_SIZE: u32 = 2_048;
@@ -174,6 +176,7 @@ impl GeneratedImageFormat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum ThumbnailGenerationBackend {
     Native,
     Rust,
@@ -214,6 +217,7 @@ fn timing_snapshot(
     }
 }
 
+#[allow(dead_code)]
 pub fn resolve_source_metadata(
     file_path: &Path,
     size_bytes: Option<u64>,
@@ -243,6 +247,7 @@ pub fn resolve_source_metadata(
     Err("Failed to read source metadata and no usable metadata was provided".to_string())
 }
 
+#[allow(dead_code)]
 pub fn build_cache_key(file_path: &Path, metadata: &SourceMetadata) -> String {
     build_versioned_cache_key(THUMBNAIL_CACHE_VERSION, file_path, metadata, None, None)
 }
@@ -352,12 +357,27 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
     }
 }
 
+#[allow(dead_code)]
 pub fn get_or_create_thumbnail(
     file_path: &Path,
     metadata: &SourceMetadata,
     cache_root: &Path,
 ) -> Result<GeneratedImageAsset, String> {
-    let cache_key = build_cache_key(file_path, metadata);
+    get_or_create_thumbnail_with_cancellation(file_path, file_path, metadata, cache_root, None)
+}
+
+pub fn get_or_create_thumbnail_with_cancellation(
+    file_path: &Path,
+    cache_identity_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
+) -> Result<GeneratedImageAsset, String> {
+    if cancellation_token.is_some_and(|t| t.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
+
+    let cache_key = build_cache_key(cache_identity_path, metadata);
     let cache_hash = hash_cache_key(&cache_key);
     let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
 
@@ -368,13 +388,74 @@ pub fn get_or_create_thumbnail(
             cached_thumbnail_formats(file_path, &cache_hash),
             Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
         ) {
+            if cancellation_token.is_some_and(|token| token.is_canceled()) {
+                return Err("Operation canceled".to_string());
+            }
             THUMBNAIL_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
     }
 
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Thumbnail,
+    );
+    crate::image_resource_policy::validate_file_size(file_path, &limits)
+        .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+    let dims = image::image_dimensions(file_path)
+        .ok()
+        .or_else(|| native_codecs::metadata_from_path(file_path).ok().map(|m| (m.width, m.height)));
+
+    let is_fallback_format = normalized_extension(file_path).as_deref().is_some_and(|ext| {
+        is_raw_extension(ext) || matches!(ext, "heic" | "heif" | "avif" | "svg")
+    });
+
+    match dims {
+        Some((width, height)) => {
+            crate::image_resource_policy::validate_decode(
+                file_path,
+                width,
+                height,
+                crate::image_resource_policy::OperationClass::Thumbnail,
+            )
+            .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+        }
+        None => {
+            if is_fallback_format {
+                let ext_label = normalized_extension(file_path)
+                    .map(|e| e.to_uppercase())
+                    .unwrap_or_else(|| "RAW".to_string());
+                let placeholder_svg = placeholder_thumbnail_svg(&ext_label);
+                PLACEHOLDER_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                return cache_asset_text_with_cancellation(
+                    cache_root,
+                    cache_available,
+                    &cache_hash,
+                    GeneratedImageFormat::Svg,
+                    &placeholder_svg,
+                    Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
+                    cancellation_token,
+                )
+                .map(|mut asset| {
+                    asset.cache_key = cache_hash;
+                    asset
+                });
+            }
+            return Err(format!(
+                "Resource policy validation failed: Unable to inspect dimensions for '{}'",
+                file_path.display()
+            ));
+        }
+    }
+
+    if cancellation_token.is_some_and(|t| t.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
+
     match generate_best_thumbnail_jpeg(file_path) {
         Ok((jpeg_bytes, backend)) => {
+            if cancellation_token.is_some_and(|t| t.is_canceled()) {
+                return Err("Operation canceled".to_string());
+            }
             match backend {
                 ThumbnailGenerationBackend::Native => {
                     NATIVE_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -383,26 +464,28 @@ pub fn get_or_create_thumbnail(
                     RUST_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            cache_asset_bytes(
+            cache_asset_bytes_with_cancellation(
                 cache_root,
                 cache_available,
                 &cache_hash,
                 GeneratedImageFormat::Jpeg,
                 &jpeg_bytes,
                 None,
+                cancellation_token,
             )
         }
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_thumbnail_svg(file_path, &error) {
                 remember_raw_native_decode_failure(file_path, &cache_hash);
                 PLACEHOLDER_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-                return cache_asset_text(
+                return cache_asset_text_with_cancellation(
                     cache_root,
                     cache_available,
                     &cache_hash,
                     GeneratedImageFormat::Svg,
                     &placeholder_svg,
                     Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
+                    cancellation_token,
                 );
             }
 
@@ -415,6 +498,7 @@ pub fn get_or_create_thumbnail(
     })
 }
 
+#[allow(dead_code)]
 pub fn get_or_create_preview(
     file_path: &Path,
     metadata: &SourceMetadata,
@@ -422,11 +506,36 @@ pub fn get_or_create_preview(
     max_dimension: u32,
     invalidation_bust: Option<u64>,
 ) -> Result<GeneratedImageAsset, String> {
+    get_or_create_preview_with_cancellation(
+        file_path,
+        file_path,
+        metadata,
+        cache_root,
+        max_dimension,
+        invalidation_bust,
+        None,
+    )
+}
+
+pub fn get_or_create_preview_with_cancellation(
+    file_path: &Path,
+    cache_identity_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
+) -> Result<GeneratedImageAsset, String> {
+    if cancellation_token.is_some_and(|t| t.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
+
     if max_dimension == 0 {
         return Err("max_dimension must be greater than zero".to_string());
     }
 
-    let cache_key = build_preview_cache_key(file_path, metadata, max_dimension, invalidation_bust);
+    let cache_key =
+        build_preview_cache_key(cache_identity_path, metadata, max_dimension, invalidation_bust);
     let cache_hash = hash_cache_key(&cache_key);
     let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
 
@@ -442,23 +551,81 @@ pub fn get_or_create_preview(
         }
     }
 
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Preview,
+    );
+    crate::image_resource_policy::validate_file_size(file_path, &limits)
+        .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+    crate::image_resource_policy::validate_requested_output_dimension(max_dimension, &limits)
+        .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+
+    let dims = image::image_dimensions(file_path)
+        .ok()
+        .or_else(|| native_codecs::metadata_from_path(file_path).ok().map(|m| (m.width, m.height)));
+
+    let is_fallback_format = normalized_extension(file_path).as_deref().is_some_and(|ext| {
+        is_raw_extension(ext) || matches!(ext, "heic" | "heif" | "avif" | "svg")
+    });
+
+    match dims {
+        Some((width, height)) => {
+            crate::image_resource_policy::validate_decode(
+                file_path,
+                width,
+                height,
+                crate::image_resource_policy::OperationClass::Preview,
+            )
+            .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+        }
+        None => {
+            if is_fallback_format {
+                let ext_label = normalized_extension(file_path)
+                    .map(|e| e.to_uppercase())
+                    .unwrap_or_else(|| "RAW".to_string());
+                let placeholder_svg = placeholder_preview_svg(&ext_label);
+                PLACEHOLDER_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                return cache_asset_text_with_cancellation(
+                    cache_root,
+                    cache_available,
+                    &cache_hash,
+                    GeneratedImageFormat::Svg,
+                    &placeholder_svg,
+                    Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
+                    cancellation_token,
+                )
+                .map(|mut asset| {
+                    asset.cache_key = cache_hash;
+                    asset
+                });
+            }
+            return Err(format!(
+                "Resource policy validation failed: Unable to inspect dimensions for '{}'",
+                file_path.display()
+            ));
+        }
+    }
+
     let preview_started_at = Instant::now();
     if native_codecs::should_prefer_native_preview(file_path) {
         match native_codecs::generate_preview_jpeg(file_path, max_dimension) {
             Ok(jpeg_bytes) => {
+                if cancellation_token.is_some_and(|token| token.is_canceled()) {
+                    return Err("Operation canceled".to_string());
+                }
                 NATIVE_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
                 record_runtime_duration(
                     &NATIVE_PREVIEW_TOTAL_MS,
                     &NATIVE_PREVIEW_MAX_MS,
                     elapsed_millis(preview_started_at),
                 );
-                return cache_asset_bytes(
+                return cache_asset_bytes_with_cancellation(
                     cache_root,
                     cache_available,
                     &cache_hash,
                     GeneratedImageFormat::Jpeg,
                     &jpeg_bytes,
                     None,
+                    cancellation_token,
                 )
                 .map(|mut asset| {
                     asset.cache_key = cache_hash;
@@ -486,13 +653,17 @@ pub fn get_or_create_preview(
                     &PLACEHOLDER_PREVIEW_MAX_MS,
                     elapsed_millis(preview_started_at),
                 );
-                return cache_asset_text(
+                if cancellation_token.is_some_and(|token| token.is_canceled()) {
+                    return Err("Operation canceled".to_string());
+                }
+                return cache_asset_text_with_cancellation(
                     cache_root,
                     cache_available,
                     &cache_hash,
                     GeneratedImageFormat::Svg,
                     &placeholder_svg,
                     Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
+                    cancellation_token,
                 )
                 .map(|mut asset| {
                     asset.cache_key = cache_hash;
@@ -503,6 +674,9 @@ pub fn get_or_create_preview(
             return Err(format!("Failed to open image for preview: {}", error));
         }
     };
+    if cancellation_token.is_some_and(|token| token.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
     let (width, height) = img.dimensions();
     let preview = if width > max_dimension || height > max_dimension {
         img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
@@ -524,6 +698,9 @@ pub fn get_or_create_preview(
             .map_err(|e| format!("Failed to encode preview image: {}", e))?;
         GeneratedImageFormat::Jpeg
     };
+    if cancellation_token.is_some_and(|token| token.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
 
     RUST_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
     record_runtime_duration(
@@ -531,13 +708,14 @@ pub fn get_or_create_preview(
         &RUST_PREVIEW_MAX_MS,
         elapsed_millis(preview_started_at),
     );
-    cache_asset_bytes(
+    cache_asset_bytes_with_cancellation(
         cache_root,
         cache_available,
         &cache_hash,
         format,
         &buffer.into_inner(),
         Some(preview_dimensions),
+        cancellation_token,
     )
     .map(|mut asset| {
         asset.cache_key = cache_hash;
@@ -576,18 +754,47 @@ pub fn validate_tile_request(request: TileRequest) -> Result<TileBounds, String>
     Ok(TileBounds { x: x as u32, y: y as u32, width: width as u32, height: height as u32 })
 }
 
+#[allow(dead_code)]
 pub fn get_or_create_tile(
     file_path: &Path,
     metadata: &SourceMetadata,
     cache_root: &Path,
     request: TileRequest,
 ) -> Result<GeneratedImageAsset, String> {
+    get_or_create_tile_with_cancellation(file_path, file_path, metadata, cache_root, request, None)
+}
+
+pub fn get_or_create_tile_with_cancellation(
+    file_path: &Path,
+    cache_identity_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    request: TileRequest,
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
+) -> Result<GeneratedImageAsset, String> {
+    if cancellation_token.is_some_and(|token| token.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
     if !tile_decode_supported_for_path(file_path) {
         return Err("Tiled rendering currently supports JPEG images only".to_string());
     }
 
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Tile,
+    );
+    crate::image_resource_policy::validate_file_size(file_path, &limits)
+        .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+
+    crate::image_resource_policy::validate_decode(
+        file_path,
+        request.source_width,
+        request.source_height,
+        crate::image_resource_policy::OperationClass::Tile,
+    )
+    .map_err(|e| format!("Resource policy validation failed: {}", e))?;
+
     let bounds = validate_tile_request(request)?;
-    let cache_key = build_tile_cache_key(file_path, metadata, request)?;
+    let cache_key = build_tile_cache_key(cache_identity_path, metadata, request)?;
     let cache_hash = hash_cache_key(&cache_key);
     let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
 
@@ -618,6 +825,10 @@ pub fn get_or_create_tile(
         (jpeg_bytes, TileGenerationBackend::RustJpeg)
     };
 
+    if cancellation_token.is_some_and(|token| token.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
+
     TILE_GENERATED_COUNT.fetch_add(1, Ordering::Relaxed);
     let tile_duration_ms = elapsed_millis(tile_started_at);
     match backend {
@@ -630,13 +841,14 @@ pub fn get_or_create_tile(
             record_runtime_duration(&RUST_TILE_TOTAL_MS, &RUST_TILE_MAX_MS, tile_duration_ms);
         }
     }
-    cache_asset_bytes(
+    cache_asset_bytes_with_cancellation(
         cache_root,
         cache_available,
         &cache_hash,
         GeneratedImageFormat::Jpeg,
         &jpeg_bytes,
         Some((bounds.width, bounds.height)),
+        cancellation_token,
     )
     .map(|mut asset| {
         asset.cache_key = cache_hash;
@@ -670,8 +882,29 @@ fn build_versioned_cache_key(
     parts.join("|")
 }
 
+#[allow(dead_code)]
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
+    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
+        crate::image_resource_policy::OperationClass::Thumbnail,
+    );
+    if let Err(policy_err) = crate::image_resource_policy::validate_file_size(file_path, &limits) {
+        return Err(image::ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            policy_err.to_string(),
+        )));
+    }
+
     let img = decode_image_with_orientation(file_path)?;
+    let (width, height) = img.dimensions();
+    if let Err(policy_err) =
+        crate::image_resource_policy::validate_dimensions(width, height, &limits)
+    {
+        return Err(image::ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            policy_err.to_string(),
+        )));
+    }
+
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
 
     let mut buffer = std::io::Cursor::new(Vec::new());
@@ -679,6 +912,7 @@ fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageErro
     Ok(buffer.into_inner())
 }
 
+#[allow(dead_code)]
 fn generate_best_thumbnail_jpeg(
     file_path: &Path,
 ) -> Result<(Vec<u8>, ThumbnailGenerationBackend), image::ImageError> {
@@ -898,6 +1132,7 @@ fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, Stri
     .map_err(|error| format!("Failed to encode JPEG tile: {}", error))
 }
 
+#[allow(dead_code)]
 fn cached_thumbnail_formats(file_path: &Path, cache_hash: &str) -> &'static [GeneratedImageFormat] {
     if should_reuse_raw_native_placeholder(file_path, cache_hash) {
         return &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg];
@@ -981,6 +1216,7 @@ fn reset_raw_native_decode_failure_cache_for_test() {
     clear_raw_native_decode_failure_cache();
 }
 
+#[allow(dead_code)]
 fn known_fallback_thumbnail_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
     if matches!(error, image::ImageError::IoError(_)) {
         return None;
@@ -1035,13 +1271,14 @@ fn is_raw_extension(extension: &str) -> bool {
 }
 
 fn placeholder_thumbnail_svg(extension: &str) -> String {
-    let format_label = match extension {
+    let ext_lower = extension.to_ascii_lowercase();
+    let format_label = match ext_lower.as_str() {
         "heic" => "HEIC".to_string(),
         "heif" => "HEIF".to_string(),
         "avif" => "AVIF".to_string(),
         "svg" => "SVG".to_string(),
-        extension if is_raw_extension(extension) => extension.to_ascii_uppercase(),
-        _ => "IMAGE".to_string(),
+        ext if is_raw_extension(ext) => ext.to_ascii_uppercase(),
+        _ => ext_lower.to_ascii_uppercase(),
     };
 
     let canvas_size = THUMBNAIL_SIZE;
@@ -1087,6 +1324,7 @@ fn placeholder_preview_svg(extension: &str) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn parse_modified_epoch_nanos(value: &str) -> Option<u128> {
     const MIN_NANOSECOND_TIMESTAMP: u128 = 1_000_000_000_000_000;
     let timestamp = value.parse::<u128>().ok()?;
@@ -1125,13 +1363,14 @@ fn store_generated_asset(
     format: GeneratedImageFormat,
     bytes: &[u8],
     dimensions: Option<(u32, u32)>,
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
 ) -> Result<GeneratedImageAsset, String> {
     let asset_path = generated_asset_path(root, cache_hash, format);
     if asset_path.is_file() {
         return Ok(build_generated_image_asset(&asset_path, cache_hash, format, dimensions));
     }
 
-    write_cache_file(&asset_path, bytes).map_err(|error| {
+    write_cache_file(&asset_path, bytes, cancellation_token).map_err(|error| {
         format!("Failed to write generated cache file '{}': {}", asset_path.display(), error)
     })?;
     record_cache_write(root, bytes.len() as u64, cleanup_cache_best_effort);
@@ -1170,51 +1409,60 @@ fn temp_generated_asset_root() -> PathBuf {
     std::env::temp_dir().join("lightframe-generated-assets")
 }
 
-fn cache_asset_bytes(
+fn cache_asset_bytes_with_cancellation(
     cache_root: &Path,
     cache_available: bool,
     cache_hash: &str,
     format: GeneratedImageFormat,
     bytes: &[u8],
     dimensions: Option<(u32, u32)>,
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
 ) -> Result<GeneratedImageAsset, String> {
+    if cancellation_token.is_some_and(|token| token.is_canceled()) {
+        return Err("Operation canceled".to_string());
+    }
     if cache_available {
-        match store_generated_asset(cache_root, cache_hash, format, bytes, dimensions) {
+        match store_generated_asset(
+            cache_root,
+            cache_hash,
+            format,
+            bytes,
+            dimensions,
+            cancellation_token,
+        ) {
             Ok(asset) => return Ok(asset),
+            Err(_error) if cancellation_token.is_some_and(|token| token.is_canceled()) => {
+                return Err("Operation canceled".to_string());
+            }
             Err(error) => {
-                eprintln!("Warning: {}. Falling back to temporary generated asset storage.", error);
+                eprintln!("Warning: {}. Falling back to temporary generated asset storage.", error)
             }
         }
-    } else {
-        eprintln!("Warning: generated image cache unavailable. Falling back to temporary generated asset storage.");
     }
-
     let temp_root = temp_generated_asset_root();
     if !ensure_cache_root(&temp_root, cleanup_cache_best_effort) {
-        return Err(format!(
-            "Generated image cache unavailable and temporary generated asset storage at '{}' could not be prepared",
-            temp_root.display()
-        ));
+        return Err("Generated image storage could not be prepared".to_string());
     }
-
-    store_generated_asset(&temp_root, cache_hash, format, bytes, dimensions)
+    store_generated_asset(&temp_root, cache_hash, format, bytes, dimensions, cancellation_token)
 }
 
-fn cache_asset_text(
+fn cache_asset_text_with_cancellation(
     cache_root: &Path,
     cache_available: bool,
     cache_hash: &str,
     format: GeneratedImageFormat,
     content: &str,
     dimensions: Option<(u32, u32)>,
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
 ) -> Result<GeneratedImageAsset, String> {
-    cache_asset_bytes(
+    cache_asset_bytes_with_cancellation(
         cache_root,
         cache_available,
         cache_hash,
         format,
         content.as_bytes(),
         dimensions,
+        cancellation_token,
     )
 }
 
@@ -1294,7 +1542,11 @@ pub fn clear_generated_cache(
     Ok(generated_cache_summary(app_cache_dir))
 }
 
-fn write_cache_file(cache_file: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+fn write_cache_file(
+    cache_file: &Path,
+    bytes: &[u8],
+    cancellation_token: Option<&crate::media_executor::CancellationToken>,
+) -> Result<(), std::io::Error> {
     let Some(parent) = cache_file.parent() else {
         return fs::write(cache_file, bytes);
     };
@@ -1308,6 +1560,13 @@ fn write_cache_file(cache_file: &Path, bytes: &[u8]) -> Result<(), std::io::Erro
         tmp_suffix
     ));
     fs::write(&tmp_path, bytes)?;
+    if cancellation_token.is_some_and(|token| !token.try_commit()) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "operation canceled before cache publication",
+        ));
+    }
     fs::rename(&tmp_path, cache_file).or_else(|rename_error| {
         let _ = fs::remove_file(cache_file);
         fs::rename(&tmp_path, cache_file).map_err(|_| rename_error)
@@ -2023,7 +2282,10 @@ mod tests {
         let metadata = SourceMetadata { size_bytes: 1, modified_epoch_nanos: 1 };
 
         let error = get_or_create_thumbnail(&missing, &metadata, &cache_dir).unwrap_err();
-        assert!(error.contains("Failed to generate thumbnail"));
+        assert!(
+            error.contains("Failed to generate thumbnail")
+                || error.contains("Resource policy validation failed")
+        );
     }
 
     #[test]
@@ -2035,7 +2297,10 @@ mod tests {
         let metadata = resolve_source_metadata(&broken_jpg, None, None).unwrap();
 
         let error = get_or_create_thumbnail(&broken_jpg, &metadata, &cache_dir).unwrap_err();
-        assert!(error.contains("Failed to generate thumbnail"));
+        assert!(
+            error.contains("Failed to generate thumbnail")
+                || error.contains("Resource policy validation failed")
+        );
     }
 
     #[test]
@@ -2187,4 +2452,27 @@ mod tests {
 
         set_tile_source_cache_limit(default_limit);
     }
+}
+#[test]
+fn canceled_cache_publication_never_leaves_a_final_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("preview.jpg");
+    let token = crate::media_executor::CancellationToken::new();
+    assert!(token.cancel());
+
+    let error = write_cache_file(&target, b"preview-bytes", Some(&token)).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(!target.exists());
+    assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn cancellation_after_cache_commit_is_rejected_and_final_file_is_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("preview.jpg");
+    let token = crate::media_executor::CancellationToken::new();
+    write_cache_file(&target, b"complete-preview", Some(&token)).unwrap();
+
+    assert!(!token.cancel());
+    assert_eq!(fs::read(&target).unwrap(), b"complete-preview");
 }

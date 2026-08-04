@@ -8,6 +8,7 @@ import {
   writeImageCurationBatch,
   type ImageCurationUpdate,
 } from '../services/tauriCommands';
+import { pathIdentityKey } from '../services/pathIdentity';
 
 export type CurationIntent =
   | { kind: 'toggleFavorite'; filePath: string }
@@ -58,7 +59,7 @@ type CurationIndex = {
 };
 
 function normalizePathKey(path: string): string {
-  return path.trim().replace(/\\/g, '/').toLowerCase();
+  return pathIdentityKey(path.trim());
 }
 
 function createCurationIndex(entries: Record<string, ImageCuration>): CurationIndex {

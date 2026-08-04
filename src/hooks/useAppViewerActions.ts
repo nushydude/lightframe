@@ -1,10 +1,14 @@
 import { useCallback, useMemo } from 'react';
-import { confirm } from '@tauri-apps/plugin-dialog';
-import type { Window } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
+import type { RuntimeWindow } from '../services/runtime/types';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { CurationFilter } from '../services/curationFilter';
 import { createViewerCommands, type ViewerCommand } from '../services/commandRegistry';
-import { closeSecondaryWindow, openSecondaryWindow } from '../services/tauriCommands';
+import {
+  closeSecondaryWindow,
+  openRecentFolderSession,
+  openSecondaryWindow,
+} from '../services/tauriCommands';
 import {
   resetPerformanceTelemetry,
   setPerformanceTelemetryEnabled,
@@ -20,7 +24,7 @@ import {
 } from '../services/viewerActions';
 
 type AppViewerActionsOptions = {
-  appWindow: Window;
+  appWindow: RuntimeWindow;
   currentImagePath: string | null;
   isFullscreen: boolean;
   isSecondary: boolean;
@@ -39,7 +43,7 @@ type AppViewerActionsOptions = {
   reset: () => void;
 };
 
-async function toggleFullscreen(appWindow: Window, setFullscreen: (value: boolean) => void) {
+async function toggleFullscreen(appWindow: RuntimeWindow, setFullscreen: (value: boolean) => void) {
   const nextFullscreen = !useViewerStore.getState().isFullscreen;
   try {
     await appWindow.setFullscreen(nextFullscreen);
@@ -58,10 +62,10 @@ async function exitGridView(
     return true;
   }
 
-  const confirmed = await confirm('Leaving grid view will close projector mode. Continue?', {
-    title: 'Projector mode',
-    kind: 'warning',
-  });
+  const confirmed = await getRuntime().confirm(
+    'Leaving grid view will close projector mode. Continue?',
+    { title: 'Projector mode', kind: 'warning' }
+  );
   if (!confirmed) return false;
 
   await closeSecondaryWindow();
@@ -167,6 +171,7 @@ export function useAppViewerActions({
 
   const handleOpenRecentFolder = useCallback(
     async (folderPath: string, filter: CurationFilter = 'all') => {
+      await openRecentFolderSession(folderPath);
       await openFolder(folderPath, { curationFilter: filter });
     },
     [openFolder]

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getRuntime } from '../services/runtime/runtime';
 import type { SlideshowDirection } from '../types/settings';
 import {
   acquireSlideshowDisplayInhibition,
@@ -205,7 +205,7 @@ export function useSlideshow() {
     }
 
     try {
-      const appWindow = getCurrentWindow();
+      const appWindow = getRuntime().window;
       await appWindow.setFullscreen(false);
       setFullscreen(false);
     } catch (err) {
@@ -396,7 +396,7 @@ export function useSlideshow() {
     // Auto-fullscreen if setting is enabled
     if (autoFullscreenOnSlideshow && !isFullscreen) {
       try {
-        const appWindow = getCurrentWindow();
+        const appWindow = getRuntime().window;
         await appWindow.setFullscreen(true);
         setFullscreen(true);
       } catch (err) {

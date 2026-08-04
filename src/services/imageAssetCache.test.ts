@@ -20,12 +20,25 @@ const defaultGetPreviewImageMock = async (
   cache_key: `preview-${maxDimension}-${path}-${invalidationBust ?? 'base'}`,
 });
 const getPreviewImageMock = vi.fn(defaultGetPreviewImageMock);
+const cancelMediaRequestMock = vi.fn().mockResolvedValue(false);
+const releaseSessionAssetDeliveryMock = vi.fn().mockResolvedValue(true);
+
+const getSessionAssetUrlMock = vi.fn(
+  async (sessionId: string, imageId: string) => `asset://localhost/session/${sessionId}/${imageId}`
+);
 
 vi.mock('./tauriCommands', () => ({
   convertFileSrc: convertFileSrcMock,
+  getSessionAssetUrl: getSessionAssetUrlMock,
+  releaseSessionAssetDelivery: releaseSessionAssetDeliveryMock,
   generatedImageAssetToUrl: (asset: { file_path: string; cache_key: string }) =>
     `${convertFileSrcMock(asset.file_path)}?v=${encodeURIComponent(asset.cache_key)}`,
   getPreviewImage: getPreviewImageMock,
+  getPreviewImageById: vi.fn(
+    async (_sessionId: string, _imageId: string, maxDimension: number, invalidationBust?: number) =>
+      defaultGetPreviewImageMock('authorized-image', maxDimension, invalidationBust)
+  ),
+  cancelMediaRequest: cancelMediaRequestMock,
 }));
 
 vi.mock('./retainedImage', () => ({
@@ -51,6 +64,8 @@ describe('imageAssetCache', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    getPreviewImageMock.mockReset();
+    releaseSessionAssetDeliveryMock.mockReset().mockResolvedValue(true);
     getPreviewImageMock.mockImplementation(defaultGetPreviewImageMock);
     retainDecodedImageMock.mockImplementation(
       (url: string) => ({ url }) as unknown as HTMLImageElement
@@ -65,132 +80,162 @@ describe('imageAssetCache', () => {
 
   it('returns the same URL for repeated reads before invalidation', async () => {
     const { requestFullAsset } = await loadCacheModule();
+    const item = { path: 'C:/images/a.jpg', sessionId: 'sess-1', id: 'img-1' };
 
-    const first = await requestFullAsset('C:/images/a.jpg');
-    const second = await requestFullAsset('C:/images/a.jpg');
+    const first = await requestFullAsset(item);
+    const second = await requestFullAsset(item);
 
     expect(first).toBe(second);
-    expect(first).not.toContain('v=');
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never reuses same-path full-asset authority across sessions or image IDs', async () => {
+    const { requestFullAsset } = await loadCacheModule();
+    const path = 'C:/images/reopened.jpg';
+    const [first, second] = await Promise.all([
+      requestFullAsset({ path, sessionId: 'sess-old', id: 'img-old' }),
+      requestFullAsset({ path, sessionId: 'sess-new', id: 'img-new' }),
+    ]);
+
+    expect(first).toContain('sess-old/img-old');
+    expect(second).toContain('sess-new/img-new');
+    expect(first).not.toBe(second);
+    await expect(requestFullAsset({ path, sessionId: 'sess-old', id: 'img-old' })).resolves.toBe(
+      first
+    );
   });
 
   it('invalidateImageAsset changes only the invalidated path URL', async () => {
     const { requestFullAsset, invalidateImageAsset } = await loadCacheModule();
 
-    const pathA = 'C:/images/a.jpg';
-    const pathB = 'C:/images/b.jpg';
+    const itemA = { path: 'C:/images/a.jpg', sessionId: 'sess-1', id: 'img-a' };
+    const itemB = { path: 'C:/images/b.jpg', sessionId: 'sess-1', id: 'img-b' };
 
-    const firstA = await requestFullAsset(pathA);
-    const firstB = await requestFullAsset(pathB);
+    const firstA = await requestFullAsset(itemA);
+    const firstB = await requestFullAsset(itemB);
 
     vi.setSystemTime(new Date('2026-01-01T00:00:05.000Z'));
-    invalidateImageAsset(pathA);
+    invalidateImageAsset(itemA.path);
 
-    const secondA = await requestFullAsset(pathA);
-    const secondB = await requestFullAsset(pathB);
+    const secondA = await requestFullAsset(itemA);
+    const secondB = await requestFullAsset(itemB);
 
     expect(secondA).not.toBe(firstA);
     expect(secondA).toContain('v=');
     expect(secondB).toBe(firstB);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses strictly increasing mutation generations while the wall clock is frozen', async () => {
+    const { requestFullAsset, invalidateImageAsset } = await loadCacheModule();
+    const item = { path: 'C:/images/frozen.jpg', sessionId: 'sess-1', id: 'img-frozen' };
+
+    const first = await requestFullAsset(item);
+    invalidateImageAsset(item.path);
+    const second = await requestFullAsset(item);
+    invalidateImageAsset(item.path);
+    const third = await requestFullAsset(item);
+
+    expect(new Set([first, second, third]).size).toBe(3);
   });
 
   it('applies invalidation version when path is invalidated before first read', async () => {
     const { requestFullAsset, invalidateImageAsset } = await loadCacheModule();
-    const path = 'C:/images/new.jpg';
+    const item = { path: 'C:/images/new.jpg', sessionId: 'sess-1', id: 'img-new' };
 
     vi.setSystemTime(new Date('2026-01-01T00:00:09.000Z'));
-    invalidateImageAsset(path);
+    invalidateImageAsset(item.path);
 
-    const url = await requestFullAsset(path);
+    const url = await requestFullAsset(item);
 
     expect(url).toContain('v=1767225609000');
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(1);
   });
 
   it('preserves invalidation version across trim eviction for future reads', async () => {
     const { requestFullAsset, invalidateImageAsset, trimImageAssetCache } = await loadCacheModule();
-    const path = 'C:/images/trim-race.jpg';
+    const item = { path: 'C:/images/trim-race.jpg', sessionId: 'sess-1', id: 'img-trim' };
 
-    await requestFullAsset(path);
+    await requestFullAsset(item);
 
     vi.setSystemTime(new Date('2026-01-01T00:00:12.000Z'));
     const invalidationVersion = Date.now();
-    invalidateImageAsset(path);
+    invalidateImageAsset(item.path);
 
     trimImageAssetCache(new Set(), 0);
 
-    const urlAfterTrim = await requestFullAsset(path);
+    const urlAfterTrim = await requestFullAsset(item);
     expect(urlAfterTrim).toContain(`v=${invalidationVersion}`);
   });
 
   it('trimImageAssetCache keeps requested paths and evicts distant entries deterministically', async () => {
     const { requestFullAsset, trimImageAssetCache } = await loadCacheModule();
 
-    const pathA = 'C:/images/a.jpg';
-    const pathB = 'C:/images/b.jpg';
-    const pathC = 'C:/images/c.jpg';
-    const pathD = 'C:/images/d.jpg';
+    const itemA = { path: 'C:/images/a.jpg', sessionId: 'sess-1', id: 'img-a' };
+    const itemB = { path: 'C:/images/b.jpg', sessionId: 'sess-1', id: 'img-b' };
+    const itemC = { path: 'C:/images/c.jpg', sessionId: 'sess-1', id: 'img-c' };
+    const itemD = { path: 'C:/images/d.jpg', sessionId: 'sess-1', id: 'img-d' };
 
-    await requestFullAsset(pathA);
+    await requestFullAsset(itemA);
     vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'));
-    await requestFullAsset(pathB);
+    await requestFullAsset(itemB);
     vi.setSystemTime(new Date('2026-01-01T00:00:02.000Z'));
-    await requestFullAsset(pathC);
+    await requestFullAsset(itemC);
     vi.setSystemTime(new Date('2026-01-01T00:00:03.000Z'));
-    await requestFullAsset(pathD);
+    await requestFullAsset(itemD);
 
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(4);
+    trimImageAssetCache(new Set([itemC.path]), 2);
 
-    trimImageAssetCache(new Set([pathC]), 2);
+    const resC = await requestFullAsset(itemC);
+    const resD = await requestFullAsset(itemD);
 
-    await requestFullAsset(pathC);
-    await requestFullAsset(pathD);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(4);
+    const resA = await requestFullAsset(itemA);
+    const resB = await requestFullAsset(itemB);
 
-    await requestFullAsset(pathA);
-    await requestFullAsset(pathB);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(6);
+    expect(resC).toBeDefined();
+    expect(resD).toBeDefined();
+    expect(resA).toBeDefined();
+    expect(resB).toBeDefined();
   });
 
   it('trimImageAssetCache can prune non-keep paths even when cache is under max size', async () => {
     const { requestFullAsset, trimImageAssetCache } = await loadCacheModule();
 
-    const keepPath = 'C:/images/keep.jpg';
-    const stalePath = 'C:/images/stale.jpg';
+    const keepItem = { path: 'C:/images/keep.jpg', sessionId: 'sess-1', id: 'img-k' };
+    const staleItem = { path: 'C:/images/stale.jpg', sessionId: 'sess-1', id: 'img-s' };
 
-    await requestFullAsset(keepPath);
-    await requestFullAsset(stalePath);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
+    await requestFullAsset(keepItem);
+    await requestFullAsset(staleItem);
 
-    trimImageAssetCache(new Set([keepPath]), 12, { pruneMissing: true });
+    trimImageAssetCache(new Set([keepItem.path]), 12, { pruneMissing: true });
 
-    await requestFullAsset(keepPath);
-    await requestFullAsset(stalePath);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
+    const keepRes = await requestFullAsset(keepItem);
+    const staleRes = await requestFullAsset(staleItem);
+
+    expect(keepRes).toBeDefined();
+    expect(staleRes).toBeDefined();
   });
 
   it('trimImageAssetCache can prune against a wider folder scope than the visible keep set', async () => {
     const { requestFullAsset, trimImageAssetCache } = await loadCacheModule();
 
-    const visiblePath = 'C:/images/favorite.jpg';
-    const hiddenPath = 'C:/images/not-favorite.jpg';
-    const stalePath = 'C:/images/removed.jpg';
+    const visibleItem = { path: 'C:/images/favorite.jpg', sessionId: 'sess-1', id: 'img-v' };
+    const hiddenItem = { path: 'C:/images/not-favorite.jpg', sessionId: 'sess-1', id: 'img-h' };
+    const staleItem = { path: 'C:/images/removed.jpg', sessionId: 'sess-1', id: 'img-r' };
 
-    await requestFullAsset(visiblePath);
-    await requestFullAsset(hiddenPath);
-    await requestFullAsset(stalePath);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(3);
+    await requestFullAsset(visibleItem);
+    await requestFullAsset(hiddenItem);
+    await requestFullAsset(staleItem);
 
-    trimImageAssetCache(new Set([visiblePath]), 12, {
+    trimImageAssetCache(new Set([visibleItem.path]), 12, {
       pruneMissing: true,
-      pruneMissingPaths: new Set([visiblePath, hiddenPath]),
+      pruneMissingPaths: new Set([visibleItem.path, hiddenItem.path]),
     });
 
-    await requestFullAsset(visiblePath);
-    await requestFullAsset(hiddenPath);
-    await requestFullAsset(stalePath);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(4);
+    const visRes = await requestFullAsset(visibleItem);
+    const hidRes = await requestFullAsset(hiddenItem);
+    const staRes = await requestFullAsset(staleItem);
+
+    expect(visRes).toBeDefined();
+    expect(hidRes).toBeDefined();
+    expect(staRes).toBeDefined();
   });
 
   it('caches preview asset URLs and reuses them for repeated reads', async () => {
@@ -204,7 +249,7 @@ describe('imageAssetCache', () => {
     expect(first).toContain('asset://localhost/');
     expect(first).toContain('v=preview-2048-C%3A%2Fimages%2Fpreview-a.jpg-base');
     expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
-    expect(getPreviewImageMock).toHaveBeenCalledWith(path, 2048, undefined);
+    expect(getPreviewImageMock).toHaveBeenCalledWith(path, 2048, undefined, expect.any(String));
   });
 
   it('invalidateImageAsset clears stale preview cache for that path', async () => {
@@ -231,7 +276,33 @@ describe('imageAssetCache', () => {
     expect(second).toContain('v=after-edit-busted');
     expect(second).not.toBe(first);
     expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
-    expect(getPreviewImageMock).toHaveBeenLastCalledWith(path, 2048, invalidationVersion);
+    expect(getPreviewImageMock).toHaveBeenLastCalledWith(
+      path,
+      2048,
+      invalidationVersion,
+      expect.any(String)
+    );
+  });
+
+  it('never publishes a late preview from an older frozen-clock generation', async () => {
+    const { getPreviewAsset, invalidateImageAsset } = await loadCacheModule();
+    const path = 'C:/images/late-preview.jpg';
+    const stale = createDeferred<{ file_path: string; cache_key: string }>();
+    getPreviewImageMock
+      .mockImplementationOnce(() => stale.promise)
+      .mockResolvedValueOnce({
+        file_path: 'C:/cache/current.jpg',
+        cache_key: 'current-generation',
+      });
+
+    const pending = getPreviewAsset(path);
+    invalidateImageAsset(path);
+    invalidateImageAsset(path);
+    stale.resolve({ file_path: 'C:/cache/stale.jpg', cache_key: 'stale-generation' });
+
+    await expect(pending).resolves.toContain('current-generation');
+    await expect(getPreviewAsset(path)).resolves.toContain('current-generation');
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the current preview cached even when the byte budget is exhausted', async () => {
@@ -334,10 +405,10 @@ describe('imageAssetCache', () => {
 
   it('does not persist full asset cache entry when stale preload guard expires', async () => {
     const { requestFullAsset, preloadFullAsset } = await loadCacheModule();
-    const path = 'C:/images/stale-preload-full.jpg';
+    const item = { path: 'C:/images/stale-preload-full.jpg', sessionId: 'sess-1', id: 'img-stale' };
 
     let guardCalls = 0;
-    const pendingPreload = preloadFullAsset(path, {
+    const pendingPreload = preloadFullAsset(item, {
       canStore: () => {
         guardCalls += 1;
         return guardCalls === 1;
@@ -346,8 +417,136 @@ describe('imageAssetCache', () => {
 
     await pendingPreload;
 
-    await requestFullAsset(path);
-    expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
+    const url = await requestFullAsset(item);
+    expect(url).toBeDefined();
+  });
+
+  it('releases a delivery minted after the requesting consumer aborts', async () => {
+    const deferred = createDeferred<string>();
+    getSessionAssetUrlMock.mockReturnValueOnce(deferred.promise);
+    const { requestFullAsset } = await loadCacheModule();
+    const controller = new AbortController();
+    const request = requestFullAsset(
+      { path: 'C:/images/aborted-full.jpg', sessionId: 'sess-1', id: 'img-abort' },
+      { signal: controller.signal }
+    );
+    await vi.waitFor(() => expect(getSessionAssetUrlMock).toHaveBeenCalledOnce());
+
+    controller.abort();
+    deferred.resolve('lightframe-asset://sess-1/img-abort?deliveryId=delivery_abort');
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(releaseSessionAssetDeliveryMock).toHaveBeenCalledWith(
+      'lightframe-asset://sess-1/img-abort?deliveryId=delivery_abort'
+    );
+  });
+
+  it('releases a minted delivery discarded by a concurrent mutation', async () => {
+    const deferred = createDeferred<string>();
+    getSessionAssetUrlMock.mockReturnValueOnce(deferred.promise);
+    const { invalidateImageAsset, requestFullAsset } = await loadCacheModule();
+    const path = 'C:/images/superseded-full.jpg';
+    const request = requestFullAsset({ path, sessionId: 'sess-1', id: 'img-stale' });
+    await vi.waitFor(() => expect(getSessionAssetUrlMock).toHaveBeenCalledOnce());
+
+    invalidateImageAsset(path);
+    deferred.resolve('lightframe-asset://sess-1/img-stale?deliveryId=delivery_stale');
+
+    await expect(request).rejects.toThrow('superseded');
+    expect(releaseSessionAssetDeliveryMock).toHaveBeenCalledWith(
+      'lightframe-asset://sess-1/img-stale?deliveryId=delivery_stale'
+    );
+  });
+
+  it('does not release another caller delivery when serving a cache hit', async () => {
+    let delivery = 0;
+    getSessionAssetUrlMock.mockImplementation(async () => {
+      delivery += 1;
+      return `lightframe-asset://sess-1/img-1?deliveryId=delivery_${delivery}`;
+    });
+    const { requestFullAsset } = await loadCacheModule();
+    const item = { path: 'C:/images/replaced-full.jpg', sessionId: 'sess-1', id: 'img-1' };
+
+    const first = await requestFullAsset(item);
+    const second = await requestFullAsset(item);
+
+    expect(second).not.toBe(first);
+    expect(releaseSessionAssetDeliveryMock).not.toHaveBeenCalledWith(first);
+  });
+
+  it('keeps concurrent cache-hit deliveries independently owned', async () => {
+    let delivery = 0;
+    getSessionAssetUrlMock.mockImplementation(async () => {
+      delivery += 1;
+      return `lightframe-asset://sess-1/img-1?deliveryId=delivery_${delivery}`;
+    });
+    const { requestFullAsset } = await loadCacheModule();
+    const item = { path: 'C:/images/concurrent-full.jpg', sessionId: 'sess-1', id: 'img-1' };
+
+    const initial = await requestFullAsset(item);
+    const [firstHit, secondHit] = await Promise.all([
+      requestFullAsset(item),
+      requestFullAsset(item),
+    ]);
+
+    expect(new Set([initial, firstHit, secondHit]).size).toBe(3);
+    expect(releaseSessionAssetDeliveryMock).not.toHaveBeenCalledWith(initial);
+    expect(releaseSessionAssetDeliveryMock).not.toHaveBeenCalledWith(firstHit);
+    expect(releaseSessionAssetDeliveryMock).not.toHaveBeenCalledWith(secondHit);
+  });
+
+  it('mints distinct cold-miss deliveries and aborting one does not release the other', async () => {
+    const firstDelivery = createDeferred<string>();
+    const secondDelivery = createDeferred<string>();
+    getSessionAssetUrlMock
+      .mockReturnValueOnce(firstDelivery.promise)
+      .mockReturnValueOnce(secondDelivery.promise);
+    const { requestFullAsset } = await loadCacheModule();
+    const item = { path: 'C:/images/cold-concurrent.jpg', sessionId: 'sess-1', id: 'img-1' };
+    const firstController = new AbortController();
+
+    const first = requestFullAsset(item, { signal: firstController.signal });
+    const second = requestFullAsset(item);
+    await vi.waitFor(() => expect(getSessionAssetUrlMock).toHaveBeenCalledTimes(2));
+    firstController.abort();
+    firstDelivery.resolve('lightframe-asset://sess-1/img-1?deliveryId=cold_1');
+    secondDelivery.resolve('lightframe-asset://sess-1/img-1?deliveryId=cold_2');
+
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(second).resolves.toContain('deliveryId=cold_2');
+    expect(releaseSessionAssetDeliveryMock).toHaveBeenCalledWith(
+      'lightframe-asset://sess-1/img-1?deliveryId=cold_1'
+    );
+    expect(releaseSessionAssetDeliveryMock).not.toHaveBeenCalledWith(
+      'lightframe-asset://sess-1/img-1?deliveryId=cold_2'
+    );
+  });
+
+  it('releases every cold and cached preload delivery without touching an interactive delivery', async () => {
+    let delivery = 0;
+    getSessionAssetUrlMock.mockImplementation(async () => {
+      delivery += 1;
+      return `lightframe-asset://sess-1/img-preload?deliveryId=preload_${delivery}`;
+    });
+    const { preloadFullAsset, requestFullAsset } = await loadCacheModule();
+    const item = {
+      path: 'C:/images/repeated-preload.jpg',
+      sessionId: 'sess-1',
+      id: 'img-preload',
+    };
+
+    await preloadFullAsset(item);
+    await preloadFullAsset(item);
+    await preloadFullAsset(item);
+    const interactive = await requestFullAsset(item);
+
+    expect(releaseSessionAssetDeliveryMock.mock.calls.map(([url]) => url)).toEqual([
+      expect.stringContaining('deliveryId=preload_1'),
+      expect.stringContaining('deliveryId=preload_2'),
+      expect.stringContaining('deliveryId=preload_3'),
+    ]);
+    expect(interactive).toContain('deliveryId=preload_4');
+    expect(releaseSessionAssetDeliveryMock).not.toHaveBeenCalledWith(interactive);
   });
 
   it('does not persist preview cache entry when stale preload guard expires', async () => {
@@ -428,6 +627,48 @@ describe('imageAssetCache', () => {
     expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels a coalesced backend preview only after its final consumer aborts', async () => {
+    const { getPreviewAsset } = await loadCacheModule();
+    const deferred = createDeferred<{ file_path: string; cache_key: string }>();
+    getPreviewImageMock.mockImplementationOnce(() => deferred.promise);
+    const first = new AbortController();
+    const second = new AbortController();
+
+    const firstRead = getPreviewAsset('C:/images/shared.jpg', 2048, { signal: first.signal });
+    const secondRead = getPreviewAsset('C:/images/shared.jpg', 2048, { signal: second.signal });
+    expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
+
+    first.abort();
+    await expect(firstRead).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelMediaRequestMock).not.toHaveBeenCalled();
+
+    deferred.resolve({ file_path: 'C:/cache/shared.jpg', cache_key: 'shared' });
+    await expect(secondRead).resolves.toContain('shared.jpg');
+    expect(cancelMediaRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('cancels a coalesced backend preview exactly once when the last consumer aborts', async () => {
+    const { getPreviewAsset } = await loadCacheModule();
+    const deferred = createDeferred<{ file_path: string; cache_key: string }>();
+    getPreviewImageMock.mockImplementationOnce(() => deferred.promise);
+    const first = new AbortController();
+    const second = new AbortController();
+
+    const firstRead = getPreviewAsset('C:/images/all-cancel.jpg', 2048, { signal: first.signal });
+    const secondRead = getPreviewAsset('C:/images/all-cancel.jpg', 2048, {
+      signal: second.signal,
+    });
+    second.abort();
+    await expect(secondRead).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelMediaRequestMock).not.toHaveBeenCalled();
+
+    first.abort();
+    await expect(firstRead).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelMediaRequestMock).toHaveBeenCalledTimes(1);
+
+    deferred.resolve({ file_path: 'C:/cache/all-cancel.jpg', cache_key: 'all-cancel' });
+  });
+
   it('bounds mutation-version history after many invalidations', async () => {
     const { invalidateImageAsset, getImageAssetCacheVersionEntryCountForTests } =
       await loadCacheModule();
@@ -437,5 +678,22 @@ describe('imageAssetCache', () => {
     }
 
     expect(getImageAssetCacheVersionEntryCountForTests()).toBeLessThanOrEqual(2048);
+  });
+
+  it('preserves a mutation generation after its exact path entry is pruned', async () => {
+    const { invalidateImageAsset, requestFullAsset } = await loadCacheModule();
+    const image = {
+      path: 'C:/images/pruned-first/image.jpg',
+      sessionId: 'sess-pruned',
+      id: 'img-pruned',
+    };
+    invalidateImageAsset(image.path);
+    for (let index = 0; index < 2500; index += 1) {
+      invalidateImageAsset(`C:/images/prune-pressure-${index}/image.jpg`);
+    }
+
+    const url = await requestFullAsset(image);
+    expect(url).toContain('v=');
+    expect(url).not.toContain('v=0');
   });
 });

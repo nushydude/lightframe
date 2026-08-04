@@ -1,25 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Monitor } from '@tauri-apps/api/window';
 import { DEFAULT_SETTINGS } from '../types/settings';
 import { displayKeyFromMonitor } from './windowBounds';
 import { restoreMainWindowBounds } from './mainWindowRestore';
-
-vi.mock('@tauri-apps/api/window', () => ({
-  availableMonitors: vi.fn(),
-  currentMonitor: vi.fn(),
-  PhysicalPosition: class PhysicalPosition {
-    constructor(
-      public x: number,
-      public y: number
-    ) {}
-  },
-  PhysicalSize: class PhysicalSize {
-    constructor(
-      public width: number,
-      public height: number
-    ) {}
-  },
-}));
 
 const monitor = {
   name: 'Primary',
@@ -30,7 +12,7 @@ const monitor = {
     size: { width: 1920, height: 1040 },
   },
   scaleFactor: 1,
-} as unknown as Monitor;
+};
 
 function restoreSettings() {
   const displayKey = displayKeyFromMonitor(monitor);

@@ -6,10 +6,13 @@ to split it further because the code diff becomes too broad.
 
 ## Current Audit
 
-The current feature, performance, bug, and UI/UX audit is
-[`AUDIT-2026-07-14.md`](AUDIT-2026-07-14.md). It records the audited version and evidence, distinguishes
-features that already exist from missing behavior, assigns priorities, and defines the recommended
-execution order for active work.
+The current product, architecture, performance, maintainability, and security audit is
+[`AUDIT-2026-07-26.md`](AUDIT-2026-07-26.md). It records the audited baseline and evidence, explains
+the product and platform findings, maps dependencies, and defines the implementation protocol and
+recommended execution program for tasks 50-66.
+
+The previous feature and UI/UX audit remains available as
+[`AUDIT-2026-07-14.md`](AUDIT-2026-07-14.md) for historical context and tasks 42-49.
 
 Tasks 01-41 are the original roadmap and audit backlog; some have already been implemented even
 though their task files remain as design history. Before starting any task, compare its “Current
@@ -25,6 +28,26 @@ Tasks 42-49 were created by the July 2026 audit:
 47. `tasks/47-keyboard-accessible-image-collections.md`
 48. `tasks/48-settings-validation-and-save-recovery.md`
 49. `tasks/49-slideshow-display-sleep-inhibition.md`
+
+Tasks 50-66 were created by the July 26, 2026 product and architecture audit:
+
+50. `tasks/50-remove-vulnerable-quick-xml.md`
+51. `tasks/51-folder-session-path-authority.md`
+52. `tasks/52-tauri-capability-and-asset-isolation.md`
+53. `tasks/53-native-decode-and-edit-guardrails.md`
+54. `tasks/54-bounded-native-media-executor.md`
+55. `tasks/55-browser-compatible-runtime-boundary-and-e2e.md`
+56. `tasks/56-version-lock-and-release-gate-correctness.md`
+57. `tasks/57-release-supply-chain-and-windows-trust.md`
+58. `tasks/58-typed-ipc-and-rust-domain-modules.md`
+59. `tasks/59-unified-action-model-and-viewer-decomposition.md`
+60. `tasks/60-viewer-workspace-information-architecture.md`
+61. `tasks/61-review-session-curation-model.md`
+62. `tasks/62-guided-review-session-workflow.md`
+63. `tasks/63-settings-information-architecture-and-accessibility.md`
+64. `tasks/64-contact-sheet-density-and-bulk-review.md`
+65. `tasks/65-paged-folder-catalog.md`
+66. `tasks/66-support-privacy-update-and-crash-recovery.md`
 
 ## Execution Order
 
@@ -72,8 +95,10 @@ Use this order unless the user explicitly reprioritizes work:
 40. `tasks/40-tauri-capability-scope-hardening.md`
 41. `tasks/41-edit-queue-immutable-state-updates.md`
 
-For new work, use the priority order in `AUDIT-2026-07-14.md` instead of assuming numeric task order
-means unimplemented work.
+For new work, use the dependency-aware program in `AUDIT-2026-07-26.md` instead of assuming numeric
+task order means unimplemented work. In summary: remove P0 native risks first (50, 53, 51, 52), make
+the platform bounded and verifiable (56, 55, 54, 58, 57), establish the product architecture (59,
+60, 61, 62, 63, 64), then complete the scale and trust work (65, 66).
 
 ## Shared Ground Rules
 

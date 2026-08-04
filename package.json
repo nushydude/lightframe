@@ -1,7 +1,7 @@
 {
   "name": "lightframe",
   "private": true,
-  "version": "8.7.5",
+  "version": "8.7.6",
   "type": "module",
   "packageManager": "pnpm@10.33.2",
   "scripts": {
@@ -25,19 +25,24 @@
     "quality:health": "fallow health",
     "quality:discovery": "node scripts/check-quality-discovery.mjs",
     "quality:version": "node scripts/check-version-sync.mjs",
+    "version:set": "node scripts/set-version.mjs",
+    "test:version": "node --test scripts/version-contract.test.mjs",
+    "test:release-supply-chain": "node --test scripts/generate-release-sbom.test.mjs scripts/verify-release-artifacts.test.mjs scripts/verify-release-artifacts.cli.test.mjs scripts/finalize-updater-release.test.mjs scripts/verify-uploaded-release-assets.test.mjs",
+    "verify:release-artifacts": "node scripts/verify-release-artifacts.mjs",
     "quality:fallow-directives": "node scripts/check-fallow-directives.mjs",
     "quality:secondary-chunks": "node scripts/check-secondary-chunks.mjs",
     "agent:task": "node ./scripts/agent-task.mjs",
-    "ci:frontend": "pnpm run quality:discovery && pnpm run format:check && pnpm run lint && pnpm run test:run && pnpm run build && pnpm run quality:secondary-chunks && pnpm run quality:version && pnpm run quality:fallow-directives && pnpm run quality:audit:ci",
+    "ci:frontend": "pnpm run quality:discovery && pnpm run format:check && pnpm run lint && pnpm run test:e2e-helper && pnpm run test:version && pnpm run test:release-supply-chain && pnpm run test:run && pnpm run build && pnpm run quality:secondary-chunks && pnpm run quality:version && pnpm run quality:fallow-directives && pnpm run quality:audit:ci",
     "commit:gate": "node ./scripts/run-commit-gate.mjs",
     "commit:message:check": "node ./scripts/check-commit-message.mjs",
-    "ci:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
+    "ci:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml && cargo fmt --manifest-path tools/updater-signature-verifier/Cargo.toml -- --check && cargo clippy --locked --manifest-path tools/updater-signature-verifier/Cargo.toml -- -D warnings && cargo test --locked --manifest-path tools/updater-signature-verifier/Cargo.toml",
     "smoke:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke/windows-launch-smoke.ps1",
+    "e2e:windows": "node scripts/e2e/windows-tauri-e2e.mjs",
+    "test:e2e-helper": "node --test scripts/e2e/cdp-client.test.mjs scripts/e2e/windows-tauri-e2e.test.mjs",
     "ci:local": "pnpm run ci:frontend && pnpm run ci:rust"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-cli": "^2.4.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
@@ -71,7 +76,10 @@
   },
   "pnpm": {
     "overrides": {
-      "esbuild": "0.28.1"
+      "esbuild": "0.28.1",
+      "brace-expansion": "5.0.9",
+      "postcss": "8.5.25",
+      "undici": "7.29.0"
     },
     "onlyBuiltDependencies": [
       "esbuild",

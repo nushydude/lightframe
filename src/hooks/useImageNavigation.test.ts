@@ -9,12 +9,14 @@ import {
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
+  selectFileSession,
 } from '../services/tauriCommands';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { mainWindowTitle } from '../services/windowTitle';
-import { open } from '@tauri-apps/plugin-dialog';
 import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 
@@ -29,10 +31,7 @@ vi.mock('../services/tauriCommands', () => ({
   unwatchFolder: vi.fn().mockResolvedValue(undefined),
   listenToFolderWatcherChanges: vi.fn().mockResolvedValue(vi.fn()),
   getParentFolder: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: vi.fn(),
+  selectFileSession: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -74,6 +73,11 @@ const mockAudioContext = {
 
 describe('useImageNavigation', () => {
   beforeEach(() => {
+    initializeRuntime(
+      createTestRuntimeAdapter({
+        window: { ...createTestRuntimeAdapter().window, label: 'main', setTitle: mockSetTitle },
+      })
+    );
     useViewerStore.getState().reset();
     useSettingsStore.setState({
       settings: {
@@ -159,16 +163,13 @@ describe('useImageNavigation', () => {
     expect(result.current.openFolder).toBe(initialOpenFolder);
   });
 
-  it('offers every supported image extension in the file picker', async () => {
-    vi.mocked(open).mockResolvedValue(null);
+  it('delegates file selection to the trusted native session picker', async () => {
+    vi.mocked(selectFileSession).mockResolvedValue(null);
     const { result } = renderHook(() => useImageNavigation());
 
     await act(async () => result.current.openFilePicker());
 
-    expect(open).toHaveBeenCalledWith({
-      multiple: false,
-      filters: [{ name: 'Images', extensions: [...SUPPORTED_IMAGE_EXTENSIONS] }],
-    });
+    expect(selectFileSession).toHaveBeenCalledOnce();
     expect(SUPPORTED_IMAGE_EXTENSIONS).toEqual(
       expect.arrayContaining(['dng', 'cr3', 'nef', 'arw'])
     );

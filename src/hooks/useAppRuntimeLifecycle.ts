@@ -1,5 +1,4 @@
 import { useRef, useState } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useImageNavigation } from './useImageNavigation';
 import { useSlideshow } from './useSlideshow';
 import { useAppKeyboardShortcuts } from './useAppKeyboardShortcuts';
@@ -8,8 +7,11 @@ import { useProjectorSyncLifecycle } from './useProjectorSyncLifecycle';
 import { useAppLifecycleEffects } from './useAppLifecycleEffects';
 import { useAppViewerActions } from './useAppViewerActions';
 import { useSettingsStore } from '../state/settingsStore';
+import { useViewerStore } from '../state/viewerStore';
+
 import type { ImageCuration } from '../types/curation';
 import type { AppSettings, PerformanceMode, RecentFolder } from '../types/settings';
+import { getRuntime } from '../services/runtime/runtime';
 
 export function useAppRuntimeLifecycle({
   currentImagePath,
@@ -91,17 +93,25 @@ export function useAppRuntimeLifecycle({
     togglePause: toggleSlideshowPause,
   } = useSlideshow();
   const [isDragOver, setIsDragOver] = useState(false);
-  const appWindowRef = useRef(getCurrentWindow());
+  const appWindowRef = useRef(getRuntime().window);
   const isMainWindowRef = useRef(appWindowRef.current.label === 'main');
   const settingsRef = useRef(useSettingsStore.getState().settings);
   const settingsLoadedRef = useRef(isLoaded);
+  const activeSessionId = useViewerStore((s) => s.activeSessionId);
+  const activeImageId = useViewerStore((s) => s.images[s.currentIndex]?.id ?? null);
+  const openImageById = useViewerStore((s) => s.openImageById);
+
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
   const isProjectorWindow = appWindowRef.current.label === 'secondary';
   const isSecondary = useProjectorSyncLifecycle({
     appWindow: appWindowRef.current,
     currentImagePath,
+    activeSessionId,
+    activeImageId,
     openImage,
+    onSyncImageId: openImageById,
   });
+
   const handleMouseMove = useAppLifecycleEffects({
     appWindow: appWindowRef.current,
     isMainWindow: isMainWindowRef.current,

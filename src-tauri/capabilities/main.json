@@ -1,11 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main", "secondary"],
+  "identifier": "main",
+  "description": "Full capabilities for the primary application window",
+  "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:allow-reveal-item-in-dir",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -14,8 +13,9 @@
         { "url": "https://www.microsoft.com/store/*" }
       ]
     },
-    "dialog:default",
-    "cli:default",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "dialog:allow-ask",
     "core:window:allow-close",
     "core:window:allow-show",
     "core:window:allow-set-focus",

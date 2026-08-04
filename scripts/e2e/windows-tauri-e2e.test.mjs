@@ -1,0 +1,369 @@
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import test from 'node:test';
+import {
+  cleanupHarness,
+  closeOwnedSession,
+  failureConsoleMessage,
+  finalizeHarness,
+  launch,
+  redactedFailureReport,
+  redactDiagnostic,
+  removeSandboxDirectory,
+} from './windows-tauri-e2e.mjs';
+
+function createChild({ exitCode = null, signalCode = null } = {}) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = exitCode;
+  child.signalCode = signalCode;
+  return child;
+}
+
+test('launch terminates its owned child when CDP attachment fails', async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  const killSignals = [];
+  child.kill = (signal = 'SIGTERM') => {
+    killSignals.push(signal);
+    child.exitCode = 1;
+    child.signalCode = signal;
+    queueMicrotask(() => child.emit('exit', 1, signal));
+    return true;
+  };
+  const launches = [];
+  let owned;
+  let closePipeCalls = 0;
+
+  await assert.rejects(
+    () =>
+      launch([], { webviewUserData: 'C:/sandbox/webview2' }, launches, {
+        findPort: async () => 9222,
+        executable: () => 'C:/LightFrame.exe',
+        spawnProcess: () => child,
+        pollEndpoint: async () => {
+          throw new Error('CDP unavailable');
+        },
+        createDebuggerPipe: async () => ({
+          target: new Promise(() => {}),
+          close: async () => {
+            closePipeCalls += 1;
+          },
+        }),
+        onOwned: (session) => {
+          owned = session;
+        },
+      }),
+    /CDP unavailable/
+  );
+
+  assert.equal(owned.closed, true);
+  assert.deepEqual(killSignals, ['SIGTERM']);
+  assert.equal(launches.length, 1);
+  assert.match(launches[0].attachFailure, /CDP unavailable/);
+  assert.deepEqual(launches[0].exit, { code: 1, signal: 'SIGTERM' });
+  assert.equal(closePipeCalls, 1);
+});
+
+test('launch does not kill an already-exited owned child after attach failure', async () => {
+  const child = createChild({ exitCode: 1 });
+  child.kill = () => assert.fail('already-exited child must not be killed');
+  await assert.rejects(
+    () =>
+      launch([], {}, [], {
+        findPort: async () => 9222,
+        executable: () => 'C:/LightFrame.exe',
+        spawnProcess: () => child,
+        pollEndpoint: async () => {
+          throw new Error('attach failed');
+        },
+        createDebuggerPipe: async () => ({
+          target: new Promise(() => {}),
+          close: async () => undefined,
+        }),
+      }),
+    /attach failed/
+  );
+});
+
+test('owned process-tree termination failure is surfaced without killing another process', async () => {
+  const child = createChild();
+  child.kill = () => assert.fail('child.kill must not run after taskkill failure');
+  const session = {
+    child,
+    cdp: null,
+    entry: {},
+    terminateProcessTree: async (ownedChild) => {
+      assert.equal(ownedChild, child);
+      throw new Error('taskkill failed for owned parent tree');
+    },
+  };
+
+  await assert.rejects(() => closeOwnedSession(session), /taskkill failed for owned parent tree/);
+  assert.equal(session.closed, undefined);
+});
+
+test('owned process tree cleanup observes an exit set without a later exit event', async () => {
+  const child = createChild();
+  child.kill = () => assert.fail('an exited child must not be killed');
+  const session = {
+    child,
+    cdp: null,
+    entry: {},
+    terminateProcessTree: async () => {
+      child.exitCode = 23;
+    },
+    waitForChildExit: async () => assert.fail('already-exited child must not be awaited'),
+  };
+
+  await closeOwnedSession(session);
+
+  assert.equal(session.closed, true);
+  assert.deepEqual(session.entry.exit, { code: 23, signal: null });
+});
+
+test('attach failure retains its cause when owned process cleanup also fails', async () => {
+  const child = createChild();
+  child.kill = () => assert.fail('child.kill must not run after taskkill failure');
+
+  await assert.rejects(
+    () =>
+      launch([], {}, [], {
+        findPort: async () => 9222,
+        executable: () => 'C:/LightFrame.exe',
+        spawnProcess: () => child,
+        pollEndpoint: async () => {
+          throw new Error('CDP unavailable');
+        },
+        createDebuggerPipe: async () => ({
+          target: new Promise(() => {}),
+          close: async () => undefined,
+        }),
+        terminateProcessTree: async () => {
+          throw new Error('taskkill failed for owned parent tree');
+        },
+      }),
+    (error) => {
+      assert.match(error.message, /CDP unavailable/);
+      assert.match(error.message, /Cleanup failed: Error: taskkill failed for owned parent tree/);
+      return true;
+    }
+  );
+});
+
+test('sandbox/profile cleanup failure is surfaced', async () => {
+  const error = await cleanupHarness(undefined, undefined, 'C:/lightframe-e2e/userprofile', {
+    removeSandbox: async (path) => {
+      assert.equal(path, 'C:/lightframe-e2e/userprofile');
+      throw new Error('EPERM: sandbox profile remains in use');
+    },
+  });
+
+  assert.match(error.message, /Cleanup failed: Error: EPERM: sandbox profile remains in use/);
+});
+
+test('residual owned process cleanup failure is surfaced', async () => {
+  const child = createChild();
+  const killSignals = [];
+  child.kill = (signal = 'SIGTERM') => {
+    killSignals.push(signal);
+    return true;
+  };
+  const session = {
+    child,
+    cdp: null,
+    entry: {},
+    terminateProcessTree: async () => undefined,
+    waitForChildExit: async () => null,
+  };
+
+  const error = await cleanupHarness(undefined, session, 'C:/lightframe-e2e', {
+    removeSandbox: async () => undefined,
+  });
+
+  assert.match(error.message, /Cleanup failed: Error: Owned process <unknown> did not exit/);
+  assert.deepEqual(killSignals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(session.closed, undefined);
+});
+
+test('cleanup failure details are retained alongside the original journey error', async () => {
+  const journeyError = new Error('navigation journey failed');
+  const error = await cleanupHarness(journeyError, { child: null }, 'C:/lightframe-e2e', {
+    closeOwnedSession: async () => {
+      throw new Error('owned process remained');
+    },
+    removeSandbox: async () => {
+      throw new Error('sandbox remained');
+    },
+  });
+
+  assert.equal(error, journeyError);
+  assert.match(error.message, /navigation journey failed/);
+  assert.match(error.message, /Cleanup failed: Error: owned process remained/);
+  assert.match(error.message, /Cleanup failed: Error: sandbox remained/);
+});
+
+test('successful and already-exited owned cleanup remain green', async () => {
+  const child = createChild({ exitCode: 0 });
+  child.kill = () => assert.fail('already-exited child must not be killed');
+  const session = { child, cdp: null, entry: {} };
+  let removed = false;
+
+  const error = await cleanupHarness(undefined, session, 'C:/lightframe-e2e', {
+    removeSandbox: async () => {
+      removed = true;
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(session.closed, true);
+  assert.deepEqual(session.entry.exit, { code: 0, signal: null });
+  assert.equal(removed, true);
+});
+
+test('attach failure before launch returns still clears and verifies its sandbox', async () => {
+  const child = createChild();
+  child.kill = (signal = 'SIGTERM') => {
+    child.exitCode = 1;
+    child.signalCode = signal;
+    queueMicrotask(() => child.emit('exit', 1, signal));
+    return true;
+  };
+  let owned;
+  let attachError;
+  try {
+    await launch([], {}, [], {
+      findPort: async () => 9222,
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: () => child,
+      pollEndpoint: async () => {
+        throw new Error('CDP unavailable');
+      },
+      createDebuggerPipe: async () => ({
+        target: new Promise(() => {}),
+        close: async () => undefined,
+      }),
+      onOwned: (session) => {
+        owned = session;
+      },
+    });
+  } catch (error) {
+    attachError = error;
+  }
+
+  let sandboxExists = true;
+  let attributesCleared = false;
+  let removed = false;
+  const cleanupError = await cleanupHarness(
+    attachError,
+    owned,
+    'C:/Users/ExampleUser/AppData/Local/Temp/lightframe-e2e-test',
+    {
+      removeSandbox: (sandbox) =>
+        removeSandboxDirectory(sandbox, {
+          pathExists: () => sandboxExists,
+          clearAttributes: async () => {
+            attributesCleared = true;
+          },
+          removeDirectory: async () => {
+            removed = true;
+            sandboxExists = false;
+          },
+        }),
+    }
+  );
+
+  assert.equal(cleanupError, attachError);
+  assert.equal(owned.closed, true);
+  assert.equal(attributesCleared, true);
+  assert.equal(removed, true);
+  assert.equal(sandboxExists, false);
+});
+
+test('sandbox cleanup reports a directory that remains after removal', async () => {
+  await assert.rejects(
+    () =>
+      removeSandboxDirectory('C:/lightframe-e2e-remains', {
+        pathExists: () => true,
+        clearAttributes: async () => undefined,
+        removeDirectory: async () => undefined,
+      }),
+    /sandbox remains after cleanup/
+  );
+});
+
+test('successful result writing waits for cleanup and is skipped when cleanup fails', async () => {
+  const result = { completedAt: '2026-08-04T00:00:00.000Z' };
+  const cleanupFailure = new Error('sandbox remains after cleanup');
+  const failedOrder = [];
+  const failure = await finalizeHarness(result, undefined, undefined, 'C:/sandbox', {
+    cleanup: async () => {
+      failedOrder.push('cleanup');
+      return cleanupFailure;
+    },
+    writeResult: async () => failedOrder.push('result'),
+  });
+
+  assert.equal(failure, cleanupFailure);
+  assert.deepEqual(failedOrder, ['cleanup']);
+
+  const successfulOrder = [];
+  const successfulFailure = await finalizeHarness(result, undefined, undefined, 'C:/sandbox', {
+    cleanup: async () => {
+      successfulOrder.push('cleanup');
+      return undefined;
+    },
+    writeResult: async () => successfulOrder.push('result'),
+  });
+
+  assert.equal(successfulFailure, undefined);
+  assert.deepEqual(successfulOrder, ['cleanup', 'result']);
+});
+
+test('failure reports redact Windows paths while preserving CDP WebSocket URLs', () => {
+  const error = new Error('CDP failure at C:/Users/ExampleUser/Projects/lightframe/secret');
+  error.stack =
+    'Error: CDP failure\n    at main (file:///C:/Users/ExampleUser/Projects/lightframe/scripts/e2e/windows-tauri-e2e.mjs:1:1)';
+  const report = redactedFailureReport(
+    {
+      launches: [
+        {
+          attachFailure: 'profile C:/Users/ExampleUser/AppData/Local/Temp/lightframe-e2e-private',
+          logs: 'CDP ws://localhost:9222/devtools/page/id from "C:\\Program Files (x86)\\Example User\\LightFrame\\app.exe" and C:\\Users\\ExampleUser\\Workspace Folder\\viewer.mjs',
+        },
+      ],
+    },
+    error,
+    { files: ['launch-logs.json'], captureErrors: ['C:/Users/ExampleUser/diagnostic failure'] }
+  );
+  const serialized = JSON.stringify(report);
+  const consoleMessage = failureConsoleMessage(error);
+
+  assert.doesNotMatch(serialized, /C:[\\/]Users[\\/]ExampleUser/i);
+  assert.doesNotMatch(serialized, /C:\\Program Files \(x86\)\\Example User/i);
+  assert.doesNotMatch(serialized, /\(x86\)/i);
+  assert.match(serialized, /<redacted-path>/);
+  assert.match(serialized, /ws:\/\/localhost:9222\/devtools\/page\/id/);
+  assert.doesNotMatch(consoleMessage, /C:[\\/]/);
+  assert.match(consoleMessage, /inspect artifacts\/windows-e2e/);
+});
+
+test('diagnostic redaction handles UNC paths with spaces without changing WebSocket URLs', () => {
+  const diagnostic =
+    'ws://localhost:9222/devtools/page/id could not read \\\\fileserver\\\\Shared Folder\\\\WebView Cache\\\\data';
+  const redacted = redactDiagnostic(diagnostic);
+
+  assert.match(redacted, /ws:\/\/localhost:9222\/devtools\/page\/id/);
+  assert.doesNotMatch(redacted, /\\\\fileserver\\Shared Folder/i);
+  assert.match(redacted, /<redacted-path>/);
+
+  const pathThenWebSocket = redactDiagnostic(
+    'C:\\Program Files\\Example User\\LightFrame\\app.exe ws://localhost:9222/devtools/page/id'
+  );
+  assert.match(pathThenWebSocket, /ws:\/\/localhost:9222\/devtools\/page\/id/);
+  assert.doesNotMatch(pathThenWebSocket, /C:\\Program Files/i);
+});

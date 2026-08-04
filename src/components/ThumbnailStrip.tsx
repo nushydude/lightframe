@@ -200,6 +200,8 @@ export function ThumbnailStrip() {
     preloadThumbnails(
       visibleImages.map((image) => ({
         path: image.path,
+        sessionId: image.sessionId,
+        imageId: image.id,
         sizeBytes: image.size_bytes,
         modifiedAt: image.modified_at,
       })),
@@ -337,6 +339,8 @@ export function ThumbnailStrip() {
           const isActive = index === currentIndex;
           const url = getCachedThumbnail({
             path: image.path,
+            sessionId: image.sessionId,
+            imageId: image.id,
             sizeBytes: image.size_bytes,
             modifiedAt: image.modified_at,
           });

@@ -197,6 +197,8 @@ function AppRuntime() {
   return (
     <div
       className={containerClasses}
+      data-testid="native-app-root"
+      data-runtime-ready={isLoaded ? 'true' : 'false'}
       onMouseMove={handleMouseMove}
       onDoubleClick={handleDoubleClick}
     >

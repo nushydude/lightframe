@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
+import { initializeRuntime } from '../services/runtime/runtime';
+import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 describe('useKeyboardShortcuts', () => {
   const handlers = {
@@ -365,13 +367,12 @@ describe('useKeyboardShortcuts', () => {
   });
 
   it('closes the window when Escape is pressed twice without another higher-priority action', async () => {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const closeSpy = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(getCurrentWindow).mockReturnValue({
-      setFullscreen: vi.fn(),
-      setTitle: vi.fn(),
-      close: closeSpy,
-    } as never);
+    initializeRuntime(
+      createTestRuntimeAdapter({
+        window: { ...createTestRuntimeAdapter().window, close: closeSpy },
+      })
+    );
 
     renderHook(() => useKeyboardShortcuts(handlers));
 
@@ -388,13 +389,12 @@ describe('useKeyboardShortcuts', () => {
   });
 
   it('does not close the window on the second Escape if the first one reset zoom', async () => {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const closeSpy = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(getCurrentWindow).mockReturnValue({
-      setFullscreen: vi.fn(),
-      setTitle: vi.fn(),
-      close: closeSpy,
-    } as never);
+    initializeRuntime(
+      createTestRuntimeAdapter({
+        window: { ...createTestRuntimeAdapter().window, close: closeSpy },
+      })
+    );
     useViewerStore.setState({ zoomMode: 'actual' });
 
     renderHook(() => useKeyboardShortcuts(handlers));

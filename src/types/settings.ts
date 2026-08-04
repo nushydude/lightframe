@@ -1,5 +1,6 @@
 import { isPerformanceMode } from '../services/performanceMode';
 import { isCurationFilter, type CurationFilter } from '../services/curationFilter';
+import { pathIdentityKey } from '../services/pathIdentity';
 
 export interface QuickDestination {
   id: string;
@@ -386,7 +387,7 @@ function parsePersistedMarkedFolders(raw: unknown): PersistedMarkedFolder[] {
       continue;
     }
 
-    const normalizedKey = folderPath.replace(/\\/g, '/').toLowerCase();
+    const normalizedKey = pathIdentityKey(folderPath);
     if (seen.has(normalizedKey)) {
       continue;
     }
@@ -396,11 +397,10 @@ function parsePersistedMarkedFolders(raw: unknown): PersistedMarkedFolder[] {
           .map((path) => String(path ?? '').trim())
           .filter(Boolean)
           .filter((path, index, array) => {
-            const normalizedPath = path.replace(/\\/g, '/').toLowerCase();
+            const normalizedPath = pathIdentityKey(path);
             return (
-              array.findIndex(
-                (candidate) => candidate.replace(/\\/g, '/').toLowerCase() === normalizedPath
-              ) === index
+              array.findIndex((candidate) => pathIdentityKey(candidate) === normalizedPath) ===
+              index
             );
           })
       : [];
@@ -473,7 +473,7 @@ export function rememberRecentFolder(
     return settings.recentFolders;
   }
 
-  const normalizedKey = normalizedPath.replace(/\\/g, '/').toLowerCase();
+  const normalizedKey = pathIdentityKey(normalizedPath);
   const nextFolder: RecentFolder = {
     path: normalizedPath,
     label: folderLabelFromPath(normalizedPath),
@@ -482,8 +482,6 @@ export function rememberRecentFolder(
 
   return [
     nextFolder,
-    ...settings.recentFolders.filter(
-      (folder) => folder.path.replace(/\\/g, '/').toLowerCase() !== normalizedKey
-    ),
+    ...settings.recentFolders.filter((folder) => pathIdentityKey(folder.path) !== normalizedKey),
   ].slice(0, MAX_RECENT_FOLDERS);
 }
