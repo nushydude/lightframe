@@ -122,13 +122,18 @@ export async function authenticodeStatus(artifact) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
+    let errorOutput = '';
     child.stdout.on('data', (chunk) => (output += chunk));
+    child.stderr.on('data', (chunk) => (errorOutput += chunk));
     child.on('error', reject);
-    child.on('close', (code) =>
-      code === 0
-        ? resolve(output.trim() || 'UnknownError')
-        : reject(new Error(`Authenticode check failed (${code})`))
-    );
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(output.trim() || 'UnknownError');
+        return;
+      }
+      const detail = errorOutput.trim();
+      reject(new Error(`Authenticode check failed (${code})${detail ? `: ${detail}` : ''}`));
+    });
   });
 }
 
@@ -136,15 +141,25 @@ export async function assertAuthenticode({
   artifactDirectory,
   required,
   getStatus = authenticodeStatus,
+  reportStatus = console.log,
+  reportWarning = console.warn,
 }) {
   const entries = await fs.readdir(artifactDirectory);
   const installers = entries.filter((entry) => /\.(msi|exe)$/i.test(entry));
   assert.ok(installers.length > 0, 'No Windows installer found for Authenticode verification');
-  const statuses = await Promise.all(
-    installers.map(async (entry) => [entry, await getStatus(path.join(artifactDirectory, entry))])
-  );
-  for (const [entry, status] of statuses) {
-    console.log(`Authenticode ${entry}: ${status}`);
+  for (const entry of installers) {
+    let status;
+    try {
+      status = await getStatus(path.join(artifactDirectory, entry));
+    } catch (error) {
+      if (required) {
+        throw new Error(`Authenticode probe failed for ${entry}`, { cause: error });
+      }
+      status = 'UnknownError';
+      reportWarning(`Authenticode ${entry}: ${status} (${error.message})`);
+      continue;
+    }
+    reportStatus(`Authenticode ${entry}: ${status}`);
     if (required)
       assert.equal(status, 'Valid', `Authenticode is required but ${entry} is ${status}`);
   }

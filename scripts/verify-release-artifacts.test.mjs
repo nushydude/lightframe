@@ -105,3 +105,42 @@ test('Authenticode accurately permits unsigned artifacts only when not required'
     await fs.rm(folder, { recursive: true, force: true });
   }
 });
+
+test('optional Authenticode reports probe errors while required policy fails closed', async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'lightframe-authenticode-error-'));
+  try {
+    await fs.writeFile(path.join(folder, 'LightFrame_8.7.6_x64-setup.exe'), 'artifact');
+    await fs.writeFile(path.join(folder, 'LightFrame_8.7.6_x64_en-US.msi'), 'artifact');
+    const probeError = new Error('PowerShell status probe failed');
+    const statuses = [];
+    const warnings = [];
+    await assert.doesNotReject(
+      assertAuthenticode({
+        artifactDirectory: folder,
+        required: false,
+        getStatus: async (artifact) => {
+          if (artifact.endsWith('.exe')) throw probeError;
+          return 'NotSigned';
+        },
+        reportStatus: (message) => statuses.push(message),
+        reportWarning: (message) => warnings.push(message),
+      })
+    );
+    assert.deepEqual(warnings, [
+      'Authenticode LightFrame_8.7.6_x64-setup.exe: UnknownError (PowerShell status probe failed)',
+    ]);
+    assert.deepEqual(statuses, ['Authenticode LightFrame_8.7.6_x64_en-US.msi: NotSigned']);
+    await assert.rejects(
+      assertAuthenticode({
+        artifactDirectory: folder,
+        required: true,
+        getStatus: async () => {
+          throw probeError;
+        },
+      }),
+      /Authenticode probe failed for LightFrame_8\.7\.6_/
+    );
+  } finally {
+    await fs.rm(folder, { recursive: true, force: true });
+  }
+});
