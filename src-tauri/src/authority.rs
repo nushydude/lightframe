@@ -5132,9 +5132,12 @@ mod tests {
 
         fs::rename(&image, dir.path().join("original.jpg")).unwrap();
         fs::write(&image, b"replacement-bytes").unwrap();
-        let snapshot = lease
+        let snapshot = match lease
             .snapshot_for_path_consumer(crate::image_resource_policy::OperationClass::Preview)
-            .unwrap_err();
+        {
+            Ok(_) => panic!("replacement identity unexpectedly produced a snapshot"),
+            Err(error) => error,
+        };
         assert!(snapshot.contains("identity changed") || snapshot.contains("path"));
 
         let mut pinned = lease.try_clone_file().unwrap();
@@ -5351,8 +5354,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let original = dir.path().join("A photo.jpg");
         let info = dir.path().join("entry.trashinfo");
+        let original_text = original.to_string_lossy();
         let encoded = percent_encoding::utf8_percent_encode(
-            &original.to_string_lossy(),
+            &original_text,
             percent_encoding::NON_ALPHANUMERIC,
         );
         fs::write(
@@ -5428,8 +5432,9 @@ mod tests {
         let error = lease
             .trash_with_action(|source| {
                 fs::rename(source, &moved).map_err(|error| error.to_string())?;
+                let original_text = original.to_string_lossy();
                 let encoded = percent_encoding::utf8_percent_encode(
-                    &original.to_string_lossy(),
+                    &original_text,
                     percent_encoding::NON_ALPHANUMERIC,
                 );
                 fs::write(
