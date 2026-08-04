@@ -238,6 +238,195 @@ fn linux_rename_noreplace(
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
+struct LinuxHandoffAliasIsolation {
+    recovery_name: std::ffi::OsString,
+    identity: LinuxIsolationIdentity,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxIsolationIdentity {
+    Unknown,
+    Exact,
+    Mismatched,
+}
+
+#[cfg(target_os = "linux")]
+type LinuxPreservedRecoveryArtifact = (PathBuf, &'static str);
+
+#[cfg(target_os = "linux")]
+fn linux_record_preserved_recovery_artifact(
+    artifacts: &std::cell::RefCell<Vec<LinuxPreservedRecoveryArtifact>>,
+    path: PathBuf,
+    kind: &'static str,
+) {
+    let mut artifacts = artifacts.borrow_mut();
+    if !artifacts.iter().any(|(existing, _)| existing == &path) {
+        artifacts.push((path, kind));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_report_preserved_recovery_artifacts(
+    error: String,
+    artifacts: &[LinuxPreservedRecoveryArtifact],
+) -> String {
+    if artifacts.is_empty() {
+        error
+    } else {
+        let paths = artifacts
+            .iter()
+            .map(|(path, kind)| format!("{kind} '{}'", path.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{error}; preserved recovery artifacts: {paths}")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_finalize_authoritative_trash<BeforeRename, BeforeVerification>(
+    directory: &fs::File,
+    canonical_folder: &Path,
+    isolation: &std::cell::RefCell<Option<LinuxHandoffAliasIsolation>>,
+    recovery_alias: &std::ffi::OsStr,
+    expected: &fs::File,
+    before_rename: BeforeRename,
+    before_verification: BeforeVerification,
+) -> TrashCommitOutcome
+where
+    BeforeRename: FnOnce() -> Result<(), String>,
+    BeforeVerification: FnOnce() -> Result<(), String>,
+{
+    let isolation_result = linux_isolate_handoff_alias(
+        isolation,
+        directory,
+        recovery_alias,
+        expected,
+        before_rename,
+        before_verification,
+        |_| Ok(()),
+    );
+
+    let preservation = match isolation_result {
+        Ok(isolation) => {
+            let retained_kind = match isolation.identity {
+                LinuxIsolationIdentity::Exact => {
+                    "exact retained committed trash recovery link"
+                }
+                LinuxIsolationIdentity::Mismatched => {
+                    "identity-mismatched retained committed trash recovery link"
+                }
+                LinuxIsolationIdentity::Unknown => {
+                    "unverified retained committed trash recovery link"
+                }
+            };
+            format!(
+                "{retained_kind} '{}' was preserved",
+                canonical_folder.join(isolation.recovery_name).display()
+            )
+        }
+        Err(error) => match isolation.borrow().as_ref() {
+            Some(isolation) => format!(
+                "unverified retained committed trash recovery link '{}' was preserved, but verification failed: {error}",
+                canonical_folder.join(&isolation.recovery_name).display()
+            ),
+            None => format!(
+                "the recovery entry could not be isolated or verified; no stable recovery artifact path is claimed: {error}"
+            ),
+        },
+    };
+    let warning = match directory.sync_all() {
+        Ok(()) => format!(
+            "Trash committed: canonical source name is absent and the exact object is in authoritative trash; {preservation}"
+        ),
+        Err(error) => format!(
+            "Trash committed: canonical source name is absent and the exact object is in authoritative trash; {preservation}, but source-directory durability could not be confirmed: {error}"
+        ),
+    };
+    TrashCommitOutcome::with_warning(warning)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_isolate_handoff_alias<BeforeRename, BeforeVerification, AfterVerification>(
+    isolation: &std::cell::RefCell<Option<LinuxHandoffAliasIsolation>>,
+    directory: &fs::File,
+    alias: &std::ffi::OsStr,
+    expected: &fs::File,
+    before_rename: BeforeRename,
+    before_verification: BeforeVerification,
+    after_verification: AfterVerification,
+) -> Result<LinuxHandoffAliasIsolation, String>
+where
+    BeforeRename: FnOnce() -> Result<(), String>,
+    BeforeVerification: FnOnce() -> Result<(), String>,
+    AfterVerification: FnOnce(&std::ffi::OsStr) -> Result<(), String>,
+{
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    if let Some(existing) = isolation.borrow().as_ref() {
+        return Ok(existing.clone());
+    }
+    let alias = std::ffi::CString::new(alias.as_bytes())
+        .map_err(|_| "Trash handoff alias contains NUL".to_string())?;
+    let isolated = std::ffi::CString::new(format!(
+        ".lightframe-isolated-trash-handoff-{}",
+        uuid::Uuid::new_v4()
+    ))
+    .expect("generated recovery name has no NUL");
+
+    before_rename()?;
+    // Commit point: atomically isolate the discovered alias before inspecting it. The recovered
+    // name is retained for audit/recovery regardless of which identity was found there.
+    linux_rename_noreplace(directory.as_raw_fd(), &alias, &isolated)
+        .map_err(|error| format!("failed to isolate trash handoff alias: {error}"))?;
+
+    let recovery_name = std::ffi::OsStr::from_bytes(isolated.to_bytes()).to_os_string();
+    *isolation.borrow_mut() = Some(LinuxHandoffAliasIsolation {
+        recovery_name: recovery_name.clone(),
+        identity: LinuxIsolationIdentity::Unknown,
+    });
+    before_verification().map_err(|error| {
+        format!(
+            "isolated handoff alias '{}' was retained but could not be verified: {error}",
+            recovery_name.to_string_lossy()
+        )
+    })?;
+
+    let isolated_file =
+        linux_open_named_nofollow(directory.as_raw_fd(), &isolated).map_err(|error| {
+            format!(
+                "isolated handoff alias '{}' was retained but could not be verified: {error}",
+                recovery_name.to_string_lossy()
+            )
+        })?;
+    let metadata = isolated_file.metadata().map_err(|error| {
+        format!(
+            "isolated handoff alias '{}' was retained but could not be verified: {error}",
+            recovery_name.to_string_lossy()
+        )
+    })?;
+    let expected_metadata = expected.metadata().map_err(|error| {
+        format!(
+            "isolated handoff alias '{}' was retained but could not be verified: {error}",
+            recovery_name.to_string_lossy()
+        )
+    })?;
+    let identity =
+        if metadata.dev() == expected_metadata.dev() && metadata.ino() == expected_metadata.ino() {
+            LinuxIsolationIdentity::Exact
+        } else {
+            LinuxIsolationIdentity::Mismatched
+        };
+    *isolation.borrow_mut() =
+        Some(LinuxHandoffAliasIsolation { recovery_name: recovery_name.clone(), identity });
+    after_verification(&recovery_name)?;
+    Ok(isolation.borrow().as_ref().expect("isolated alias outcome was recorded").clone())
+}
+
+#[cfg(target_os = "linux")]
 fn linux_open_named_nofollow(
     directory_fd: std::os::fd::RawFd,
     name: &std::ffi::CStr,
@@ -1382,6 +1571,9 @@ impl ImageAuthorityLease {
             .canonical_path
             .file_name()
             .ok_or_else(|| "Authorized trash source has no file name".to_string())?;
+        #[cfg(target_os = "linux")]
+        let quarantine_name = format!(".lightframe-trash-recovery-{}", uuid::Uuid::new_v4());
+        #[cfg(not(target_os = "linux"))]
         let quarantine_name = format!(
             ".lightframe-trash-{}--{}",
             uuid::Uuid::new_v4(),
@@ -1629,34 +1821,72 @@ impl ImageAuthorityLease {
                 CString::new(format!(".lightframe-rejected-trash-{}", uuid::Uuid::new_v4()))
                     .unwrap();
             let trash_handoff_handle = std::cell::RefCell::new(None::<fs::File>);
+            let preserved_recovery_artifacts =
+                std::cell::RefCell::new(Vec::<LinuxPreservedRecoveryArtifact>::new());
+            let handoff_isolation = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+            let quarantine_isolation = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+            let report_preserved_recovery_artifacts = |error: String| {
+                let artifacts = preserved_recovery_artifacts.borrow();
+                linux_report_preserved_recovery_artifacts(error, &artifacts)
+            };
             let mut trash_transaction = SourceReplacementRecovery::new(|reason| {
                 if let Some(handoff) = trash_handoff_handle.borrow().as_ref() {
                     if let Ok(link) =
                         fs::read_link(format!("/proc/self/fd/{}", handoff.as_raw_fd()))
                     {
                         let link_display = link.to_string_lossy();
+                        let quarantine_path =
+                            self.canonical_folder.join(quarantine.to_string_lossy().as_ref());
                         if !link_display.ends_with(" (deleted)")
                             && link != self.canonical_path
-                            && link.parent() != Some(self.canonical_folder.as_path())
+                            && link != quarantine_path
                         {
-                            let exact = fs::File::open(&link).and_then(|file| {
-                                let metadata = file.metadata()?;
-                                if metadata.dev() == pinned.dev() && metadata.ino() == pinned.ino()
+                            if link.parent() == Some(self.canonical_folder.as_path()) {
+                                let isolation = linux_isolate_handoff_alias(
+                                    &handoff_isolation,
+                                    &self.directory_handle,
+                                    link.file_name().ok_or_else(|| {
+                                        format!("{reason}; handoff alias has no file name")
+                                    })?,
+                                    handoff,
+                                    || Ok(()),
+                                    || Ok(()),
+                                    |_| Ok(()),
+                                )
+                                .map_err(|error| format!("{reason}; {error}"))?;
+                                let identity = if isolation.identity
+                                    == LinuxIsolationIdentity::Exact
                                 {
-                                    Ok(())
+                                    "exact handoff alias"
+                                } else if isolation.identity == LinuxIsolationIdentity::Mismatched {
+                                    "identity-mismatched handoff alias"
                                 } else {
-                                    Err(std::io::Error::other(
-                                        "trash recovery path identity changed",
-                                    ))
-                                }
-                            });
-                            if exact.is_ok() {
-                                fs::remove_file(&link).map_err(|error| {
-                                    format!(
-                                        "{reason}; exact rejected trash object '{}' could not be removed: {error}",
-                                        link.display()
-                                    )
-                                })?;
+                                    "unverified handoff alias"
+                                };
+                                linux_record_preserved_recovery_artifact(
+                                    &preserved_recovery_artifacts,
+                                    self.canonical_folder.join(isolation.recovery_name),
+                                    identity,
+                                );
+                            } else {
+                                let identity = open_readonly_nofollow_file(
+                                    &link,
+                                    "Outside-canonical trash handoff",
+                                )
+                                .and_then(|candidate| linux_same_file(handoff, &candidate))
+                                .map(|is_exact| {
+                                    if is_exact {
+                                        "exact outside-canonical handoff path"
+                                    } else {
+                                        "identity-mismatched outside-canonical handoff path"
+                                    }
+                                })
+                                .unwrap_or("unverified outside-canonical handoff path");
+                                linux_record_preserved_recovery_artifact(
+                                    &preserved_recovery_artifacts,
+                                    link,
+                                    identity,
+                                );
                             }
                         }
                     }
@@ -1674,23 +1904,30 @@ impl ImageAuthorityLease {
                     if current_metadata.dev() == pinned.dev()
                         && current_metadata.ino() == pinned.ino()
                     {
-                        let extra = unsafe {
-                            libc::unlinkat(
-                                self.directory_handle.as_raw_fd(),
-                                quarantine.as_ptr(),
-                                0,
-                            )
+                        let isolation = linux_isolate_handoff_alias(
+                            &quarantine_isolation,
+                            &self.directory_handle,
+                            std::ffi::OsStr::from_bytes(quarantine.to_bytes()),
+                            &self.file_handle,
+                            || Ok(()),
+                            || Ok(()),
+                            |_| Ok(()),
+                        )
+                        .map_err(|error| {
+                            format!("{reason}; failed to preserve trash recovery link: {error}")
+                        })?;
+                        let identity = if isolation.identity == LinuxIsolationIdentity::Exact {
+                            "exact retained trash recovery link"
+                        } else if isolation.identity == LinuxIsolationIdentity::Mismatched {
+                            "identity-mismatched retained trash recovery link"
+                        } else {
+                            "unverified retained trash recovery link"
                         };
-                        if extra != 0
-                            && std::io::Error::last_os_error().kind()
-                                != std::io::ErrorKind::NotFound
-                        {
-                            return Err(format!(
-                                "{reason}; exact source is canonical but recovery link '{}' was retained: {}",
-                                quarantine.to_string_lossy(),
-                                std::io::Error::last_os_error()
-                            ));
-                        }
+                        linux_record_preserved_recovery_artifact(
+                            &preserved_recovery_artifacts,
+                            self.canonical_folder.join(isolation.recovery_name),
+                            identity,
+                        );
                         self.directory_handle.sync_all().map_err(|error| {
                             format!("{reason}; restored trash source sync failed: {error}")
                         })?;
@@ -1699,6 +1936,11 @@ impl ImageAuthorityLease {
                     rename(&source, &rejected).map_err(|error| {
                         format!("{reason}; failed to preserve trash decoy: {error}")
                     })?;
+                    linux_record_preserved_recovery_artifact(
+                        &preserved_recovery_artifacts,
+                        self.canonical_folder.join(rejected.to_string_lossy().as_ref()),
+                        "canonical-name collision",
+                    );
                 }
                 rename(&quarantine, &source).map_err(|error| {
                     format!("{reason}; failed to restore exact trash source: {error}")
@@ -1712,25 +1954,13 @@ impl ImageAuthorityLease {
                 {
                     return Err(format!("{reason}; canonical trash rollback identity mismatch"));
                 }
-                let removed_rejected = unsafe {
-                    libc::unlinkat(self.directory_handle.as_raw_fd(), rejected.as_ptr(), 0)
-                };
-                if removed_rejected != 0
-                    && std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound
-                {
-                    return Err(format!(
-                        "{reason}; exact source restored but rejected artifact '{}' retained: {}",
-                        rejected.to_string_lossy(),
-                        std::io::Error::last_os_error()
-                    ));
-                }
                 self.directory_handle.sync_all().map_err(|error| {
                     format!("{reason}; exact trash rollback sync failed: {error}")
                 })?;
                 Ok(())
             });
-            let handoff_handle =
-                trash_transaction.mutate("Failed to quarantine trash source", || {
+            let handoff_handle = trash_transaction
+                .mutate("Failed to quarantine trash source", || {
                     rename(&source, &quarantine).map_err(|error| error.to_string())?;
                     let quarantine_handle =
                         linux_open_named_nofollow(self.directory_handle.as_raw_fd(), &quarantine)
@@ -1768,12 +1998,14 @@ impl ImageAuthorityLease {
                         .sync_all()
                         .map_err(|error| format!("Failed to sync trash recovery link: {error}"))?;
                     Ok(handoff)
-                })?;
+                })
+                .map_err(|error| report_preserved_recovery_artifacts(error))?;
             let retained_handoff = match handoff_handle.try_clone() {
                 Ok(handle) => handle,
                 Err(error) => {
                     return trash_transaction
                         .fail(format!("Failed to retain trash handoff proof: {error}"))
+                        .map_err(|error| report_preserved_recovery_artifacts(error))
                 }
             };
             *trash_handoff_handle.borrow_mut() = Some(retained_handoff);
@@ -1872,32 +2104,26 @@ impl ImageAuthorityLease {
             };
             match trash_action(&self.canonical_path) {
                 Ok(()) if exact_object_was_trashed() => {
-                    let removed = unsafe {
-                        libc::unlinkat(
-                            self.directory_handle.as_raw_fd(),
-                            quarantine.as_ptr(),
-                            0,
-                        )
-                    };
-                    if removed != 0 {
-                        return trash_transaction.fail(format!(
-                            "Trash handoff succeeded but recovery-link commit failed: {}",
-                            std::io::Error::last_os_error()
-                        ));
-                    }
                     trash_transaction.commit();
-                    if let Err(error) = self.directory_handle.sync_all() {
-                        return Ok(TrashCommitOutcome::with_warning(format!(
-                            "Trash committed, but source-directory durability could not be confirmed: {error}"
-                        )));
-                    }
-                    Ok(TrashCommitOutcome::durable())
+                    Ok(linux_finalize_authoritative_trash(
+                        &self.directory_handle,
+                        &self.canonical_folder,
+                        &quarantine_isolation,
+                        std::ffi::OsStr::from_bytes(quarantine.to_bytes()),
+                        &self.file_handle,
+                        || Ok(()),
+                        || Ok(()),
+                    ))
                 }
-                Ok(()) => trash_transaction.fail(
-                    "Trash handoff did not produce authoritative trash metadata for the exact object"
-                        .into(),
-                ),
-                Err(error) => trash_transaction.fail(error),
+                Ok(()) => trash_transaction
+                    .fail(
+                        "Trash handoff did not produce authoritative trash metadata for the exact object"
+                            .into(),
+                    )
+                    .map_err(|error| report_preserved_recovery_artifacts(error)),
+                Err(error) => trash_transaction
+                    .fail(error)
+                    .map_err(|error| report_preserved_recovery_artifacts(error)),
             }
         }
 
@@ -4935,7 +5161,10 @@ mod tests {
                     assert_eq!(fs::read(&source_path).unwrap(), b"authorized-move-bytes");
                     assert!(!target_path.exists());
                     assert!(recovery_entries.is_empty());
-                    assert!(error.contains("original source name was restored"));
+                    assert!(
+                        error.contains("exact original restored"),
+                        "{failure:?} did not report exact recovery: {error}"
+                    );
                 }
             }
         }
@@ -5388,6 +5617,161 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn linux_trash_rollback_preserves_a_replaced_recovery_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("photo.jpg");
+        let moved_exact = dir.path().join("moved-recovery-link.jpg");
+        fs::write(&image, b"authorized-original").unwrap();
+        let manager = SessionManager::new();
+        let session = manager.open_folder_session(dir.path(), Some("main")).unwrap();
+        let lease =
+            manager.lease_image(&session.session_id, &session.images[0].id, Some("main")).unwrap();
+
+        let error = lease
+            .trash_with_action(|source| {
+                let recovery_link = fs::read_dir(source.parent().unwrap())
+                    .map_err(|error| error.to_string())?
+                    .filter_map(Result::ok)
+                    .find(|entry| {
+                        entry.file_name().to_string_lossy().starts_with(".lightframe-trash-")
+                    })
+                    .ok_or_else(|| "missing recovery link".to_string())?
+                    .path();
+                fs::rename(&recovery_link, &moved_exact).map_err(|error| error.to_string())?;
+                fs::write(&recovery_link, b"unrelated-sentinel")
+                    .map_err(|error| error.to_string())?;
+                Err("injected trash failure".into())
+            })
+            .unwrap_err();
+
+        let retained = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".lightframe-isolated-trash-handoff-")
+            })
+            .expect("preserved replaced recovery link");
+        assert!(error.contains("exact original restored"));
+        assert!(error.contains("identity-mismatched retained trash recovery link"));
+        assert!(error.contains(&retained.path().to_string_lossy().to_string()));
+        assert_eq!(fs::read(&image).unwrap(), b"authorized-original");
+        assert_eq!(fs::read(retained.path()).unwrap(), b"unrelated-sentinel");
+        assert_eq!(fs::read(&moved_exact).unwrap(), b"authorized-original");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_trash_commit_preserves_a_replaced_recovery_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let authoritative_trash_object = dir.path().join("authoritative-trash-object.jpg");
+        let recovery_link = dir.path().join(".lightframe-trash-recovery");
+        let moved_exact = dir.path().join("moved-recovery-link.jpg");
+        fs::write(&authoritative_trash_object, b"authorized-original").unwrap();
+        fs::hard_link(&authoritative_trash_object, &recovery_link).unwrap();
+        let expected = fs::File::open(&authoritative_trash_object).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let isolation = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+
+        let outcome = linux_finalize_authoritative_trash(
+            &directory,
+            dir.path(),
+            &isolation,
+            recovery_link.file_name().unwrap(),
+            &expected,
+            || {
+                fs::rename(&recovery_link, &moved_exact).map_err(|error| error.to_string())?;
+                fs::write(&recovery_link, b"unrelated-sentinel").map_err(|error| error.to_string())
+            },
+            || Ok(()),
+        );
+
+        assert!(outcome.committed);
+        let warning = outcome.warning.expect("retained recovery-link warning");
+        assert!(warning.contains("canonical source name is absent"));
+        assert!(warning.contains("exact object is in authoritative trash"));
+        assert!(warning.contains("identity-mismatched"));
+        let isolated = dir.path().join(&isolation.borrow().as_ref().unwrap().recovery_name);
+        assert!(warning.contains(isolated.to_string_lossy().as_ref()));
+        assert_eq!(fs::read(&isolated).unwrap(), b"unrelated-sentinel");
+        assert_eq!(fs::read(&moved_exact).unwrap(), b"authorized-original");
+        assert_eq!(fs::read(&authoritative_trash_object).unwrap(), b"authorized-original");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_authoritative_trash_pre_rename_failure_remains_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical_source = dir.path().join("photo.jpg");
+        let authoritative_trash_object = dir.path().join("authoritative-trash-object.jpg");
+        let recovery_link = dir.path().join(".lightframe-trash-recovery");
+        fs::write(&authoritative_trash_object, b"authorized-original").unwrap();
+        fs::hard_link(&authoritative_trash_object, &recovery_link).unwrap();
+        let expected = fs::File::open(&authoritative_trash_object).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let isolation = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+
+        let outcome = linux_finalize_authoritative_trash(
+            &directory,
+            dir.path(),
+            &isolation,
+            recovery_link.file_name().unwrap(),
+            &expected,
+            || Err("injected pre-rename failure".into()),
+            || Ok(()),
+        );
+
+        assert!(outcome.committed);
+        assert!(!canonical_source.exists());
+        assert_eq!(fs::read(&authoritative_trash_object).unwrap(), b"authorized-original");
+        assert_eq!(fs::read(&recovery_link).unwrap(), b"authorized-original");
+        assert!(isolation.borrow().is_none());
+        let warning = outcome.warning.unwrap();
+        assert!(warning.contains("exact object is in authoritative trash"));
+        assert!(warning.contains("no stable recovery artifact path is claimed"));
+        assert!(warning.contains("injected pre-rename failure"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_authoritative_trash_pre_verification_failure_remains_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical_source = dir.path().join("photo.jpg");
+        let authoritative_trash_object = dir.path().join("authoritative-trash-object.jpg");
+        let recovery_link = dir.path().join(".lightframe-trash-recovery");
+        fs::write(&authoritative_trash_object, b"authorized-original").unwrap();
+        fs::hard_link(&authoritative_trash_object, &recovery_link).unwrap();
+        let expected = fs::File::open(&authoritative_trash_object).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let isolation = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+
+        let outcome = linux_finalize_authoritative_trash(
+            &directory,
+            dir.path(),
+            &isolation,
+            recovery_link.file_name().unwrap(),
+            &expected,
+            || Ok(()),
+            || Err("injected pre-verification failure".into()),
+        );
+
+        assert!(outcome.committed);
+        assert!(!canonical_source.exists());
+        assert_eq!(fs::read(&authoritative_trash_object).unwrap(), b"authorized-original");
+        let isolated = dir.path().join(&isolation.borrow().as_ref().unwrap().recovery_name);
+        assert_eq!(fs::read(&isolated).unwrap(), b"authorized-original");
+        assert!(!recovery_link.exists());
+        let warning = outcome.warning.unwrap();
+        assert!(warning.contains("exact object is in authoritative trash"));
+        assert!(warning.contains("unverified retained committed trash recovery link"));
+        assert!(warning.contains(isolated.to_string_lossy().as_ref()));
+        assert!(warning.contains("injected pre-verification failure"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn identity_bound_trash_rejects_trash_lookalike_path_and_restores_exact_source() {
         let dir = tempfile::tempdir().unwrap();
         let image = dir.path().join("photo.jpg");
@@ -5407,6 +5791,18 @@ mod tests {
         assert!(error.contains("exact original restored"));
         assert_eq!(fs::read(&image).unwrap(), b"authorized-original");
         assert!(!lookalike.exists());
+        let preserved = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".lightframe-isolated-trash-handoff-")
+            })
+            .expect("preserved exact handoff alias");
+        assert_eq!(fs::read(preserved.path()).unwrap(), b"authorized-original");
+        assert!(error.contains(&preserved.path().to_string_lossy().to_string()));
     }
 
     #[cfg(target_os = "linux")]
@@ -5447,10 +5843,184 @@ mod tests {
 
         assert!(error.contains("authoritative trash metadata"));
         assert_eq!(fs::read(image).unwrap(), b"authorized-original");
-        assert!(!moved.exists());
+        assert_eq!(fs::read(&moved).unwrap(), b"authorized-original");
+        assert!(error.contains(&moved.to_string_lossy().to_string()));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_handoff_alias_isolation_preserves_raced_sentinel() {
+        let dir = tempfile::tempdir().unwrap();
+        let exact = dir.path().join("photo.jpg");
+        let handoff = dir.path().join("handoff.jpg");
+        let recovered_exact = dir.path().join("recovered-exact.jpg");
+        fs::write(&exact, b"authorized-original").unwrap();
+        fs::hard_link(&exact, &handoff).unwrap();
+        let expected = fs::File::open(&exact).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let cache = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+
+        let isolation = linux_isolate_handoff_alias(
+            &cache,
+            &directory,
+            std::ffi::OsStr::new("handoff.jpg"),
+            &expected,
+            || {
+                fs::rename(&handoff, &recovered_exact).map_err(|error| error.to_string())?;
+                fs::write(&handoff, b"unrelated-sentinel").map_err(|error| error.to_string())
+            },
+            || Ok(()),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(isolation.identity, LinuxIsolationIdentity::Mismatched);
+        let isolated = dir.path().join(&isolation.recovery_name);
+        assert_eq!(fs::read(&isolated).unwrap(), b"unrelated-sentinel");
+        assert_eq!(fs::read(&exact).unwrap(), b"authorized-original");
+        assert_eq!(fs::read(&recovered_exact).unwrap(), b"authorized-original");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_handoff_alias_isolation_preserves_post_verification_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let exact = dir.path().join("photo.jpg");
+        let handoff = dir.path().join("handoff.jpg");
+        let moved_exact = dir.path().join("moved-exact.jpg");
+        fs::write(&exact, b"authorized-original").unwrap();
+        fs::hard_link(&exact, &handoff).unwrap();
+        let expected = fs::File::open(&exact).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let cache = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+
+        let isolation = linux_isolate_handoff_alias(
+            &cache,
+            &directory,
+            std::ffi::OsStr::new("handoff.jpg"),
+            &expected,
+            || Ok(()),
+            || Ok(()),
+            |recovery_name| {
+                let isolated = dir.path().join(recovery_name);
+                fs::rename(&isolated, &moved_exact).map_err(|error| error.to_string())?;
+                fs::write(&isolated, b"unrelated-sentinel").map_err(|error| error.to_string())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(isolation.identity, LinuxIsolationIdentity::Exact);
+        let preserved = dir.path().join(&isolation.recovery_name);
+        assert_eq!(fs::read(&preserved).unwrap(), b"unrelated-sentinel");
+        assert_eq!(fs::read(&exact).unwrap(), b"authorized-original");
+        assert_eq!(fs::read(&moved_exact).unwrap(), b"authorized-original");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_handoff_alias_isolation_retains_unknown_outcome_after_verification_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let exact = dir.path().join("photo.jpg");
+        let handoff = dir.path().join("handoff.jpg");
+        fs::write(&exact, b"authorized-original").unwrap();
+        fs::hard_link(&exact, &handoff).unwrap();
+        let expected = fs::File::open(&exact).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let cache = std::cell::RefCell::new(None::<LinuxHandoffAliasIsolation>);
+
+        let error = linux_isolate_handoff_alias(
+            &cache,
+            &directory,
+            std::ffi::OsStr::new("handoff.jpg"),
+            &expected,
+            || Ok(()),
+            || Err("injected verification failure".into()),
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        let retained = dir.path().join(&cache.borrow().as_ref().unwrap().recovery_name);
+        assert!(error.contains(retained.to_string_lossy().as_ref()));
+        assert_eq!(cache.borrow().as_ref().unwrap().identity, LinuxIsolationIdentity::Unknown);
+        assert!(retained.exists());
+
+        let retried = linux_isolate_handoff_alias(
+            &cache,
+            &directory,
+            std::ffi::OsStr::new("handoff.jpg"),
+            &expected,
+            || panic!("cached retry must not rename again"),
+            || panic!("cached retry must not verify again"),
+            |_| panic!("cached retry must not run hooks"),
+        )
+        .unwrap();
+        assert_eq!(retried.identity, LinuxIsolationIdentity::Unknown);
+        assert_eq!(retried.recovery_name.as_os_str(), retained.file_name().unwrap());
+        assert_eq!(fs::read(retained).unwrap(), b"authorized-original");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_handoff_alias_isolation_is_reused_after_a_recovery_retry() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let exact = dir.path().join("photo.jpg");
+        let handoff = dir.path().join("handoff.jpg");
+        fs::write(&exact, b"authorized-original").unwrap();
+        fs::hard_link(&exact, &handoff).unwrap();
+        let expected = fs::File::open(&exact).unwrap();
+        let directory = fs::File::open(dir.path()).unwrap();
+        let directory_path = dir.path().to_path_buf();
+        let isolation = Rc::new(RefCell::new(None::<LinuxHandoffAliasIsolation>));
+        let artifacts = Rc::new(RefCell::new(Vec::<LinuxPreservedRecoveryArtifact>::new()));
+        let fail_once = Rc::new(RefCell::new(true));
+        let recovery_attempts = Rc::new(RefCell::new(0_usize));
+        let reported_path = {
+            let isolation = Rc::clone(&isolation);
+            let artifacts = Rc::clone(&artifacts);
+            let fail_once = Rc::clone(&fail_once);
+            let recovery_attempts = Rc::clone(&recovery_attempts);
+            let mut recovery = SourceReplacementRecovery::new(move |_| {
+                *recovery_attempts.borrow_mut() += 1;
+                let outcome = linux_isolate_handoff_alias(
+                    &isolation,
+                    &directory,
+                    std::ffi::OsStr::new("handoff.jpg"),
+                    &expected,
+                    || Ok(()),
+                    || Ok(()),
+                    |_| Ok(()),
+                )?;
+                let path = directory_path.join(&outcome.recovery_name);
+                linux_record_preserved_recovery_artifact(
+                    &artifacts,
+                    path.clone(),
+                    "exact handoff alias",
+                );
+                if std::mem::replace(&mut *fail_once.borrow_mut(), false) {
+                    return Err("injected post-isolation recovery failure".into());
+                }
+                Ok(())
+            });
+            let error = recovery
+                .mutate::<()>("injected mutation", || Err("operation failed".into()))
+                .unwrap_err();
+            let report = linux_report_preserved_recovery_artifacts(error, &artifacts.borrow());
+            let path = artifacts.borrow()[0].0.clone();
+            assert!(report.contains(path.to_string_lossy().as_ref()));
+            assert!(report.contains("source recovery incomplete"));
+            path
+        };
+
+        assert_eq!(*recovery_attempts.borrow(), 2);
+        assert_eq!(artifacts.borrow().len(), 1);
+        assert!(reported_path.exists());
+        assert_eq!(fs::read(&reported_path).unwrap(), b"authorized-original");
+        assert!(!handoff.exists());
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn identity_bound_trash_restores_exact_source_when_handoff_path_is_swapped() {
         let dir = tempfile::tempdir().unwrap();
@@ -5469,15 +6039,33 @@ mod tests {
                 Err("injected trash failure".into())
             })
             .unwrap_err();
-        assert!(error.contains("original restored"));
+        assert!(error.contains("exact original restored"));
         assert_eq!(fs::read(&image).unwrap(), b"authorized-original");
-        assert!(!stolen.exists());
-        let recovery = fs::read_dir(dir.path())
+        let recovered = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
-            .find(|entry| entry.file_name().to_string_lossy().starts_with(".lightframe-trash-"))
-            .expect("authorized recovery file");
-        assert_eq!(fs::read(recovery.path()).unwrap(), b"collision-sentinel");
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".lightframe-"))
+            .collect::<Vec<_>>();
+        assert_eq!(recovered.len(), 2, "exact handoff and collision must both survive");
+        let exact_handoff = recovered
+            .iter()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".lightframe-isolated-trash-handoff-")
+            })
+            .expect("preserved exact handoff alias");
+        let collision = recovered
+            .iter()
+            .find(|entry| {
+                entry.file_name().to_string_lossy().starts_with(".lightframe-rejected-trash-")
+            })
+            .expect("preserved canonical-name collision");
+        assert_eq!(fs::read(exact_handoff.path()).unwrap(), b"authorized-original");
+        assert_eq!(fs::read(collision.path()).unwrap(), b"collision-sentinel");
+        assert!(error.contains(&exact_handoff.path().to_string_lossy().to_string()));
+        assert!(error.contains(&collision.path().to_string_lossy().to_string()));
     }
 
     #[cfg(windows)]
@@ -5688,9 +6276,18 @@ mod tests {
 
     #[test]
     fn test_path_containment_prevents_prefix_collisions() {
-        let parent = Path::new(r"C:\photos");
-        let valid_child = Path::new(r"C:\photos\vacation\img1.jpg");
-        let invalid_prefix_collision = Path::new(r"C:\photos-private\secret.jpg");
+        #[cfg(windows)]
+        let (parent, valid_child, invalid_prefix_collision) = (
+            Path::new(r"C:\photos"),
+            Path::new(r"C:\photos\vacation\img1.jpg"),
+            Path::new(r"C:\photos-private\secret.jpg"),
+        );
+        #[cfg(not(windows))]
+        let (parent, valid_child, invalid_prefix_collision) = (
+            Path::new("/photos"),
+            Path::new("/photos/vacation/img1.jpg"),
+            Path::new("/photos-private/secret.jpg"),
+        );
 
         assert!(is_path_contained_in(valid_child, parent));
         assert!(!is_path_contained_in(invalid_prefix_collision, parent));

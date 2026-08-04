@@ -1253,9 +1253,9 @@ export async function clearImageCuration(filePath: string): Promise<void> {
   return clearImageCurationById(session.session_id, session.requested_image_id);
 }
 
-export async function moveToTrash(filePath: string): Promise<void> {
+export async function moveToTrash(filePath: string): Promise<TrashCommitOutcome | void> {
   const session = await openFileSession(filePath);
-  await trashImageById(session.session_id, session.requested_image_id);
+  return trashImageById(session.session_id, session.requested_image_id);
 }
 
 export async function copyImageToClipboard(filePath: string): Promise<void> {

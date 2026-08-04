@@ -43,7 +43,7 @@ describe('viewerActions', () => {
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
     initializeRuntime(createTestRuntimeAdapter({ confirm: confirmMock }));
-    moveToTrashMock.mockResolvedValue(undefined);
+    moveToTrashMock.mockResolvedValue({ committed: true });
     useToastStore.getState().clearToasts();
     useSettingsStore.getState().updateSettings = vi.fn().mockResolvedValue(undefined);
     useSettingsStore.setState((state) => ({
@@ -146,6 +146,29 @@ describe('viewerActions', () => {
     expect(removeImage).not.toHaveBeenCalled();
   });
 
+  it('surfaces a committed single-delete warning', async () => {
+    moveToTrashMock.mockResolvedValue({
+      committed: true,
+      warning: 'Retained recovery link.',
+    });
+    const removeImage = vi.fn();
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/test.jpg',
+      currentIndex: 1,
+      removeImage,
+    });
+
+    expect(removeImage).toHaveBeenCalledWith(1);
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Image deleted with a warning',
+        kind: 'warning',
+        detail: 'Retained recovery link.',
+      })
+    );
+  });
+
   it('deletes multiple images and removes successful paths in one pass', async () => {
     const removeImagesByPaths = vi.fn();
 
@@ -164,6 +187,62 @@ describe('viewerActions', () => {
       expect.objectContaining({
         title: 'Images deleted',
         kind: 'success',
+      })
+    );
+  });
+
+  it('surfaces a committed bulk-delete warning', async () => {
+    moveToTrashMock.mockResolvedValue({
+      committed: true,
+      warning: 'Retained recovery link.',
+    });
+    const removeImagesByPaths = vi.fn();
+
+    await deleteImages({
+      imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      removeImagesByPaths,
+    });
+
+    expect(removeImagesByPaths).toHaveBeenCalledWith(['c:/images/one.jpg', 'c:/images/two.jpg']);
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Images deleted with a warning',
+        kind: 'warning',
+        detail: 'Retained recovery link.',
+      })
+    );
+  });
+
+  it('aggregates distinct committed bulk-delete warnings', async () => {
+    moveToTrashMock
+      .mockResolvedValueOnce({ committed: true, warning: 'Recovery link one.' })
+      .mockResolvedValueOnce({ committed: true, warning: 'Recovery link two.' });
+    await deleteImages({
+      imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      removeImagesByPaths: vi.fn(),
+    });
+
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Images deleted with a warning',
+        detail: 'Recovery link one.\nRecovery link two.',
+      })
+    );
+  });
+
+  it('keeps committed warnings in a mixed bulk-delete result', async () => {
+    moveToTrashMock
+      .mockResolvedValueOnce({ committed: true, warning: 'Recovery link retained.' })
+      .mockRejectedValueOnce(new Error('locked'));
+    await deleteImages({
+      imagePaths: ['c:/images/one.jpg', 'c:/images/two.jpg'],
+      removeImagesByPaths: vi.fn(),
+    });
+
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        title: 'Delete issues',
+        detail: 'Recovery link retained.\n\nc:/images/two.jpg\nlocked',
       })
     );
   });

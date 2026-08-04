@@ -6661,7 +6661,10 @@ mod tests {
                 "Outside sentinel file MUST remain 100% UNCHANGED by export attempt!"
             );
         }
+        #[cfg(windows)]
         fs::remove_dir(&target_path).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&target_path).unwrap();
         drop(mgr);
     }
 
@@ -6829,7 +6832,10 @@ mod tests {
             assert!(res_sym.is_err());
             assert_eq!(fs::read(&outside_sentinel).unwrap(), initial_secret);
         }
+        #[cfg(windows)]
         fs::remove_dir(&symlink_path).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&symlink_path).unwrap();
         drop(mgr);
     }
 
