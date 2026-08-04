@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_call:
   push:
     branches: ['main', 'codex/**', 'hotfix/**', 'release/**']
   pull_request:
@@ -77,11 +78,17 @@ jobs:
       - name: Run E2E helper tests
         run: pnpm run test:e2e-helper
 
+      - name: Run version contract tests
+        run: pnpm run test:version
+
       - name: Run Vitest suite
         run: pnpm run test:run
 
       - name: Build frontend
         run: pnpm run build
+
+      - name: Verify version metadata and Cargo.lock
+        run: pnpm run quality:version
 
       - name: Fetch pull request base branch
         if: github.event_name == 'pull_request'

@@ -1,24 +1,67 @@
 name: Release
+
 on:
   push:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  publish-tauri:
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [windows-2025]
+  version-tag-preflight:
+    name: Version and Tag Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
 
-    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # A tag push is immutable, but record the exact commit rather than checking out a branch.
+          ref: ${{ github.sha }}
+
+      - name: Verify tag matches every committed version record
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/check-version-sync.mjs
+
+      - id: version
+        name: Export verified version
+        shell: bash
+        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+  quality-gates:
+    name: Required Quality Gates
+    # Reusable local workflows are evaluated from this tagged commit, so every CI job tests the
+    # same SHA that will be packaged below. Branch-level green status is never consulted.
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      security-events: write
+    needs: version-tag-preflight
+    uses: ./.github/workflows/ci.yml
+
+  publish-tauri:
+    name: Build Draft Windows Release
+    needs: [version-tag-preflight, quality-gates]
+    permissions:
+      contents: write
+    runs-on: windows-2025
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -36,15 +79,49 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app
+      - name: Reject conflicting existing release ref or draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: node scripts/release-draft-guard.mjs pre "$TAG" "$SHA"
+
+      - id: tauri
+        name: Build signed Tauri artifacts as a draft
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: app-v__VERSION__
-          releaseName: 'LightFrame v__VERSION__'
-          releaseBody: 'See the assets to download the installer.'
+          tagName: app-v${{ needs.version-tag-preflight.outputs.version }}
+          releaseCommitish: ${{ github.sha }}
+          releaseName: LightFrame v${{ needs.version-tag-preflight.outputs.version }}
+          releaseBody: See the assets to download the installer.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Verify draft release remains pinned to gated SHA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
+          SHA: ${{ github.sha }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+        run: node scripts/release-draft-guard.mjs post "$TAG" "$SHA" "$RELEASE_ID"
+
+      - name: Verify produced application and updater artifact versions
+        shell: bash
+        env:
+          VERSION: ${{ needs.version-tag-preflight.outputs.version }}
+          REPORTED_VERSION: ${{ steps.tauri.outputs.appVersion }}
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p release-artifacts
+          gh release download "app-v$VERSION" --repo "$GH_REPO" --pattern latest.json --dir release-artifacts --clobber
+          node scripts/verify-release-artifacts.mjs --expected-version "$VERSION" --reported-version "$REPORTED_VERSION" --artifact-paths "$ARTIFACT_PATHS" --artifact-dir release-artifacts

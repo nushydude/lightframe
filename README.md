@@ -5,8 +5,9 @@ LightFrame is a fast, Windows-first desktop image viewer and photo review app bu
 startup, responsive keyboard navigation, large-folder review, and practical curation tools without
 turning the viewer into a full photo manager.
 
-The app version is maintained in `package.json` and synchronized with the native package and
-Tauri configuration by the frontend quality gate.
+`package.json` is the single declared app-version source. `pnpm run quality:version` verifies it
+against the native package, Tauri configuration, and the root `lightframe` package record in
+`src-tauri/Cargo.lock`.
 
 ## Current State
 
@@ -166,11 +167,24 @@ The repository installs local git hooks with `pnpm install`. The pre-commit hook
 
 ## Release Channels
 
-Stable releases use tags such as `v8.2.2`. The release workflow creates a draft GitHub release and
-the app's Stable update channel reads GitHub's latest published stable updater manifest.
+Set a release version with one reproducible command; it updates the three declared manifests, asks
+Cargo to refresh its lockfile, and validates the result:
 
-Preview releases use semver prerelease tags such as `v8.3.0-beta.1`. They are created as prerelease
-drafts; when a maintainer publishes one, `.github/workflows/preview-channel.yml` copies its
+```bash
+pnpm run version:set -- 8.7.6
+pnpm run quality:version
+```
+
+Stable releases use tags such as `v8.2.2`. A `v<semver>` tag first checks that the tag exactly
+matches every version record, then calls the complete CI workflow from that same tagged commit
+(frontend and Rust quality, JavaScript and Rust advisory checks, and Windows packaged-startup
+smoke). Only after those jobs pass does the release workflow create the draft Windows release and
+verify Tauri's reported artifact version. The app's Stable update channel reads GitHub's latest
+published stable updater manifest.
+
+Preview releases use semver prerelease tags such as `v8.3.0-beta.1`. They use the same same-SHA
+gate and are created as prerelease drafts; when a maintainer publishes one,
+`.github/workflows/preview-channel.yml` copies its
 `latest.json` into the fixed `app-preview-channel` prerelease. Users who opt into Preview in
 Settings check that manifest instead of the stable `/latest` release.
 
