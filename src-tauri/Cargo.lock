@@ -2435,9 +2435,9 @@ dependencies = [
 
 [[package]]
 name = "libjpeg-turbo-rs"
-version = "0.6.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ba8f0363f4f6f520a33e98dbc2b3ed4281d3186b8a698cfa54453c5cd20bb26"
+checksum = "a0d8a1c652b51dbb85c3c3164b1da63b88dafcc3fc12ecceb52f7577738c21f1"
 dependencies = [
  "thiserror 2.0.18",
 ]
