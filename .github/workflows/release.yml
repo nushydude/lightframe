@@ -101,7 +101,7 @@ jobs:
       - id: tauri
         name: Build signed Tauri artifacts as a draft
         # v1
-        uses: tauri-apps/tauri-action@944946e3e4cac6603d1fe8f514171e9ecd3c78aa
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
