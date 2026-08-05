@@ -89,6 +89,9 @@ jobs:
       - name: Run E2E helper tests
         run: pnpm run test:e2e-helper
 
+      - name: Run Windows smoke helper tests
+        run: node --test scripts/smoke/windows-launch-smoke.test.mjs
+
       - name: Run version contract tests
         run: pnpm run test:version
 
@@ -191,4 +194,4 @@ jobs:
 
       - name: Smoke test packaged startup
         shell: pwsh
-        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe
+        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5

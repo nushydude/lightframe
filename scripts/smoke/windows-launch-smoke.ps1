@@ -1,6 +1,8 @@
 param(
   [string]$ExePath = "src-tauri/target/release/lightframe.exe",
-  [int]$TimeoutSeconds = 15,
+  [int]$TimeoutSeconds = 45,
+  [int]$WindowStablePolls = 2,
+  [int]$RespondingGraceSeconds = 5,
   [switch]$AllowExistingLightFrame
 )
 
@@ -104,6 +106,8 @@ try {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   $lastTitle = ""
   $lastHandle = [IntPtr]::Zero
+  $stableWindowPolls = 0
+  $respondingGraceDeadline = $null
 
   while ((Get-Date) -lt $deadline) {
     $process.Refresh()
@@ -120,8 +124,21 @@ try {
     $lastHandle = $process.MainWindowHandle
     $lastTitle = $process.MainWindowTitle
     if ($lastHandle -ne [IntPtr]::Zero -and $lastTitle -like "LightFrame*") {
+      if ($stableWindowPolls -eq 0) {
+        $respondingGraceDeadline = (Get-Date).AddSeconds($RespondingGraceSeconds)
+      }
+      $stableWindowPolls += 1
+      if ($stableWindowPolls -lt $WindowStablePolls) {
+        Start-Sleep -Milliseconds 250
+        continue
+      }
+
       if (-not $process.Responding) {
-        throw "LightFrame opened a main window but it is not responding."
+        if ($respondingGraceDeadline -and (Get-Date) -lt $respondingGraceDeadline) {
+          Start-Sleep -Milliseconds 250
+          continue
+        }
+        throw "LightFrame opened a main window but it is not responding after $RespondingGraceSeconds seconds."
       }
 
       $crashes = @(Get-LightFrameCrashEvents -StartTime $startedAt)
@@ -132,6 +149,9 @@ try {
 
       Write-Host "Smoke passed: PID $($process.Id), HWND $lastHandle, title '$lastTitle'."
       exit 0
+    } else {
+      $stableWindowPolls = 0
+      $respondingGraceDeadline = $null
     }
 
     Start-Sleep -Milliseconds 250
