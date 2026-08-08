@@ -153,7 +153,7 @@ export function useAppRuntimeLifecycle({
     isFullscreen,
     isSecondary,
     isProjectorOpen,
-    openFolder,
+    applyFolderSessionSnapshot,
     openFilePicker,
     openFolderPicker,
     goNext: () => goNext(),

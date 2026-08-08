@@ -7,6 +7,7 @@ import {
   failureConsoleMessage,
   finalizeHarness,
   launch,
+  monitorImageDisplayBanners,
   redactedFailureReport,
   redactDiagnostic,
   removeSandboxDirectory,
@@ -366,4 +367,21 @@ test('diagnostic redaction handles UNC paths with spaces without changing WebSoc
   );
   assert.match(pathThenWebSocket, /ws:\/\/localhost:9222\/devtools\/page\/id/);
   assert.doesNotMatch(pathThenWebSocket, /C:\\Program Files/i);
+});
+
+test('rapid navigation banner monitor captures transient image display banners', async () => {
+  const samples = [null, 'Could not display image: C:/fixture/demo-02.png', null];
+  const waits = [];
+
+  const { hits, result } = await monitorImageDisplayBanners({}, async () => 'navigation-complete', {
+    evaluatePage: async () => samples.shift() ?? null,
+    wait: async (ms) => {
+      waits.push(ms);
+    },
+    sampleIntervalMs: 5,
+  });
+
+  assert.equal(result, 'navigation-complete');
+  assert.deepEqual(hits, ['Could not display image: C:/fixture/demo-02.png']);
+  assert.deepEqual(waits, [5]);
 });

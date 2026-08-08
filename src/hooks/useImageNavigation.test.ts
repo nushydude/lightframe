@@ -579,6 +579,32 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('c:/next/two.jpg');
   });
 
+  it('applies authorized recent-folder snapshots directly, including empty filtered results', async () => {
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.applyFolderSessionSnapshot(
+        {
+          session_id: 'sess_recent_empty',
+          canonical_folder: 'c:/empty-recent',
+          images: [],
+        },
+        { curationFilter: 'favorites' }
+      );
+    });
+
+    expect(readFolderIndex).not.toHaveBeenCalled();
+    expect(scanFolder).not.toHaveBeenCalled();
+    expect(refreshFolderIndex).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().curationFilter).toBe('favorites');
+    expect(useViewerStore.getState().folderPath).toBe('c:/empty-recent');
+    expect(useViewerStore.getState().images).toEqual([]);
+    expect(useViewerStore.getState().currentImagePath).toBeNull();
+    expect(useViewerStore.getState().errorMessage).toBe(
+      'No supported images found in the selected folder'
+    );
+  });
+
   it('shows cached folder entries before verified refresh finishes', async () => {
     const cachedImages = [
       {

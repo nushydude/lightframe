@@ -54,6 +54,35 @@ const viewerState = (cdp) =>
     cdp,
     '({ name: document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim(), index: document.querySelector("[data-testid=viewer-index]")?.dataset.index })'
   );
+const imageDisplayBannerExpression =
+  'Array.from(document.querySelectorAll("[role=alert], .error-banner")).map((node) => node.textContent?.trim() || "").find((text) => text.includes("Could not display image")) || null';
+
+export async function monitorImageDisplayBanners(cdp, during, dependencies = {}) {
+  const {
+    evaluatePage = evaluate,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sampleIntervalMs = 25,
+  } = dependencies;
+  const hits = [];
+  let done = false;
+  const monitor = (async () => {
+    while (!done) {
+      const banner = await evaluatePage(cdp, imageDisplayBannerExpression);
+      if (banner) hits.push(banner);
+      await wait(sampleIntervalMs);
+    }
+    const finalBanner = await evaluatePage(cdp, imageDisplayBannerExpression);
+    if (finalBanner) hits.push(finalBanner);
+  })();
+
+  try {
+    const result = await during();
+    return { result, hits };
+  } finally {
+    done = true;
+    await monitor;
+  }
+}
 
 function recordJourney(result, journey) {
   result.journeys.push(journey);
@@ -439,6 +468,25 @@ async function runNavigationGrid(session, result) {
   recordJourney(result, { name: 'navigation-grid', status: 'passed' });
 }
 
+async function runRapidOverlappingNavigation(session, result) {
+  await waitForSelector(session.cdp, '[data-testid="viewer-index"]');
+  const { hits } = await monitorImageDisplayBanners(session.cdp, async () => {
+    const navigationBursts = [
+      ...Array.from({ length: 8 }, () => keyChord(session.cdp, ['ArrowRight'])),
+      ...Array.from({ length: 8 }, () => keyChord(session.cdp, ['ArrowLeft'])),
+    ];
+    await Promise.all(navigationBursts);
+    await waitForExpression(
+      session.cdp,
+      'document.querySelector("[data-testid=viewer-index]")?.dataset.total === "4"'
+    );
+  });
+  if (hits.length) {
+    throw new Error(`Unexpected image display banner during rapid navigation: ${hits.join(' | ')}`);
+  }
+  recordJourney(result, { name: 'rapid-overlapping-navigation', status: 'passed' });
+}
+
 async function runCuration(session) {
   await click(session.cdp, '#btn-favorite');
   await click(session.cdp, '[aria-label="Set rating 4"]');
@@ -558,6 +606,7 @@ export async function main() {
     session = await launch(['--folder', fixture], paths, result.launches, { onOwned });
     await runFolderStartup(session, result);
     await runNavigationGrid(session, result);
+    await runRapidOverlappingNavigation(session, result);
     await runCuration(session);
     await closeOwnedSession(session);
     session = undefined;

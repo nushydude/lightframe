@@ -547,10 +547,13 @@ export function useImageNavigation() {
   );
 
   const applyFolderSessionSnapshot = useCallback(
-    async (session: FolderSessionSnapshot) => {
+    async (session: FolderSessionSnapshot, options?: { curationFilter?: CurationFilter }) => {
+      if (options?.curationFilter) {
+        prepareCurationFilter(options.curationFilter);
+      }
       await applySessionSnapshot(session, { selectionKind: 'folder-open' });
     },
-    [applySessionSnapshot]
+    [applySessionSnapshot, prepareCurationFilter]
   );
 
   const applyFileSessionSnapshot = useCallback(

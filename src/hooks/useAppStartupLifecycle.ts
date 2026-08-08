@@ -141,7 +141,7 @@ export function useAppStartupLifecycle({
         });
       } catch (error) {
         console.error('Failed to open startup session:', error);
-        setError(`Failed to open startup session: ${error}`);
+        setError(`Could not open startup file or folder: ${error}`);
       } finally {
         if (!isCancelled && !useViewerStore.getState().folderPath) {
           await loadCuration().catch((error: unknown) => {

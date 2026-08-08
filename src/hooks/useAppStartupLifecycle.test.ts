@@ -103,4 +103,28 @@ describe('useAppStartupLifecycle', () => {
       })
     );
   });
+
+  it('shows file and folder wording when startup session resolution is rejected', async () => {
+    mocks.consumeStartupSession.mockRejectedValue(new Error('Folder is not authorized'));
+
+    renderHook(() =>
+      useAppStartupLifecycle({
+        appWindow: { label: 'main', show: mocks.show } as never,
+        isMainWindow: true,
+        isProjectorWindow: false,
+        loadSettings: mocks.loadSettings,
+        loadCuration: mocks.loadCuration,
+        openImage: mocks.openImage,
+        applyFolderSessionSnapshot: mocks.applyFolderSessionSnapshot,
+        applyFileSessionSnapshot: mocks.applyFileSessionSnapshot,
+        setError: mocks.setError,
+      })
+    );
+
+    await waitFor(() =>
+      expect(mocks.setError).toHaveBeenCalledWith(
+        'Could not open startup file or folder: Error: Folder is not authorized'
+      )
+    );
+  });
 });

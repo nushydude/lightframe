@@ -444,8 +444,8 @@ async fn update_recent_folders_jump_list(
     app: tauri::AppHandle,
 ) -> Result<Vec<String>, String> {
     commands::enforce_main_window(&window)?;
-    let recent_folders = commands::settings_commands::trusted_recent_folders(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let recent_folders = commands::settings_commands::trusted_recent_folders(&app)?;
         windows_jump_list::update_recent_folders_jump_list(recent_folders)
     })
     .await
