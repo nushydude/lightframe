@@ -21,6 +21,19 @@ pub const fn runtime_path_case_semantics() -> PathCaseSemantics {
     }
 }
 
+#[cfg(windows)]
+fn is_known_unsupported_case_sensitivity_query_hresult(code: windows::core::HRESULT) -> bool {
+    matches!(
+        code.0 as u32,
+        0x8007_0057 // HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)
+            | 0x8007_0032 // HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)
+            | 0x8007_0001 // HRESULT_FROM_WIN32(ERROR_INVALID_FUNCTION)
+            | 0x0000_0057 // ERROR_INVALID_PARAMETER, for APIs that surface raw Win32 codes
+            | 0x0000_0032 // ERROR_NOT_SUPPORTED
+            | 0x0000_0001 // ERROR_INVALID_FUNCTION
+    )
+}
+
 pub fn directory_path_case_semantics(directory: &fs::File) -> Result<PathCaseSemantics, String> {
     #[cfg(windows)]
     {
@@ -32,15 +45,23 @@ pub fn directory_path_case_semantics(directory: &fs::File) -> Result<PathCaseSem
         use windows::Win32::System::SystemServices::FILE_CS_FLAG_CASE_SENSITIVE_DIR;
 
         let mut info = FILE_CASE_SENSITIVE_INFO::default();
-        unsafe {
+        let query_result = unsafe {
             GetFileInformationByHandleEx(
                 HANDLE(directory.as_raw_handle()),
                 FileCaseSensitiveInfo,
                 (&mut info as *mut FILE_CASE_SENSITIVE_INFO).cast(),
                 std::mem::size_of::<FILE_CASE_SENSITIVE_INFO>() as u32,
             )
+        };
+        if let Err(error) = query_result {
+            if is_known_unsupported_case_sensitivity_query_hresult(error.code()) {
+                // Older Windows/filesystem combinations can reject FileCaseSensitiveInfo even
+                // for otherwise valid directory handles. Fall back to the conservative identity
+                // model so containment checks never collapse two distinct spellings.
+                return Ok(PathCaseSemantics::Sensitive);
+            }
+            return Err(format!("Failed to query directory case-sensitivity: {error}"));
         }
-        .map_err(|error| format!("Failed to query directory case-sensitivity: {error}"))?;
         if info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0 {
             Ok(PathCaseSemantics::Sensitive)
         } else {
@@ -150,5 +171,28 @@ mod tests {
             serde_json::to_string(&PathCaseSemantics::Insensitive).unwrap(),
             "\"case-insensitive\""
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_known_case_query_compatibility_errors_are_classified() {
+        use windows::core::HRESULT;
+
+        for code in [
+            0x8007_0057u32,
+            0x8007_0032u32,
+            0x8007_0001u32,
+            0x0000_0057u32,
+            0x0000_0032u32,
+            0x0000_0001u32,
+        ] {
+            assert!(super::is_known_unsupported_case_sensitivity_query_hresult(HRESULT(
+                code as i32
+            )));
+        }
+
+        assert!(!super::is_known_unsupported_case_sensitivity_query_hresult(HRESULT(
+            0x8007_0005u32 as i32
+        )));
     }
 }

@@ -59,7 +59,7 @@ where
 }
 
 #[tauri::command]
-pub fn consume_startup_session(
+pub async fn consume_startup_session(
     app: AppHandle,
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
@@ -70,24 +70,30 @@ pub fn consume_startup_session(
         return Ok(StartupSessionSelection::Empty);
     }
 
+    let session_manager = session_manager.inner().clone();
+    let window_label = window.label().to_string();
     let (folder, file) = startup_target_from_args(std::env::args());
-    if let Some(folder) = folder {
-        let session = session_manager.open_folder_session(&folder, Some(window.label()))?;
-        settings_commands::record_trusted_recent_folder(
-            &app,
-            Path::new(&session.canonical_folder),
-        )?;
-        return Ok(StartupSessionSelection::Folder { session });
-    }
-    if let Some(file) = file {
-        let session = session_manager.open_file_session(&file, Some(window.label()))?;
-        settings_commands::record_trusted_recent_folder(
-            &app,
-            Path::new(&session.canonical_folder),
-        )?;
-        return Ok(StartupSessionSelection::Image { session });
-    }
-    Ok(StartupSessionSelection::Empty)
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(folder) = folder {
+            let session = session_manager.open_folder_session(&folder, Some(&window_label))?;
+            settings_commands::record_trusted_recent_folder(
+                &app,
+                Path::new(&session.canonical_folder),
+            )?;
+            return Ok(StartupSessionSelection::Folder { session });
+        }
+        if let Some(file) = file {
+            let session = session_manager.open_file_session(&file, Some(&window_label))?;
+            settings_commands::record_trusted_recent_folder(
+                &app,
+                Path::new(&session.canonical_folder),
+            )?;
+            return Ok(StartupSessionSelection::Image { session });
+        }
+        Ok(StartupSessionSelection::Empty)
+    })
+    .await
+    .map_err(|error| format!("Startup session worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -4821,7 +4827,30 @@ pub async fn close_projector_grant(
 
 #[tauri::command]
 pub async fn read_folder_index_by_session(
-    _app: tauri::AppHandle,
+    window: tauri::Window,
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    session_id: String,
+) -> Result<Vec<ImageFile>, String> {
+    enforce_main_window(&window)?;
+    let snapshot = session_manager.get_session_snapshot(&session_id, Some(window.label()))?;
+    Ok(snapshot
+        .images
+        .into_iter()
+        .map(|authorized| ImageFile {
+            id: Some(authorized.id),
+            session_id: Some(session_id.clone()),
+            path: authorized.path,
+            file_name: authorized.file_name,
+            extension: authorized.extension,
+            size_bytes: authorized.size_bytes,
+            modified_at: authorized.modified_at,
+            created_at: authorized.created_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn refresh_folder_index_by_session(
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     session_id: String,

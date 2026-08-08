@@ -730,6 +730,66 @@ describe('ImageCanvas', () => {
     expect(recordFullResolutionReadyTelemetryMock).not.toHaveBeenCalledWith('C:/images/next.jpg');
   });
 
+  it('ignores stale prior-image full asset errors after navigation', async () => {
+    getPreviewAssetMock.mockImplementation((async (target: string | { path: string }) => {
+      const path = typeof target === 'string' ? target : target.path;
+      return path === 'C:/images/next.jpg'
+        ? 'asset://localhost/cache/next-preview.jpg?v=next'
+        : 'asset://localhost/cache/current-preview.jpg?v=current';
+    }) as unknown as () => Promise<string>);
+    requestFullAssetMock.mockImplementation((async (target: string | { path: string }) => {
+      const p = typeof target === 'string' ? target : target.path;
+      return p === 'C:/images/next.jpg'
+        ? 'asset://localhost/next-full.jpg'
+        : 'asset://localhost/current-full.jpg';
+    }) as unknown as () => Promise<string>);
+
+    useViewerStore.setState({
+      currentImagePath: 'C:/images/current.jpg',
+      currentIndex: 0,
+      images: [
+        {
+          path: 'C:/images/current.jpg',
+          file_name: 'current.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { container } = render(<ImageCanvas />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const staleFullLoader = container.querySelector('img.image-full-loader');
+    expect(staleFullLoader?.getAttribute('src')).toBe('asset://localhost/current-full.jpg');
+
+    await act(async () => {
+      useViewerStore.getState().setCurrentImage('C:/images/next.jpg', 1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.error(staleFullLoader as HTMLImageElement);
+      await Promise.resolve();
+    });
+
+    expect(useViewerStore.getState().currentImagePath).toBe('C:/images/next.jpg');
+    expect(useViewerStore.getState().errorMessage).toBeNull();
+  });
+
   it('keeps the preview visible when the full asset cannot render', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/images/current.jpg',

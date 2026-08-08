@@ -10,6 +10,7 @@ import {
   refreshFolderIndex,
   scanFolder,
   selectFileSession,
+  selectFolderSession,
 } from '../services/tauriCommands';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
@@ -32,6 +33,8 @@ vi.mock('../services/tauriCommands', () => ({
   listenToFolderWatcherChanges: vi.fn().mockResolvedValue(vi.fn()),
   getParentFolder: vi.fn(),
   selectFileSession: vi.fn(),
+  selectFolderSession: vi.fn(),
+  closeFolderSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -173,6 +176,76 @@ describe('useImageNavigation', () => {
     expect(SUPPORTED_IMAGE_EXTENSIONS).toEqual(
       expect.arrayContaining(['dng', 'cr3', 'nef', 'arw'])
     );
+  });
+
+  it('applies native file snapshots directly with exact requested image ids', async () => {
+    vi.mocked(selectFileSession).mockResolvedValue({
+      session_id: 'sess_file',
+      session_instance_id: 'inst_file',
+      requested_image_id: 'img_requested',
+      canonical_folder: 'c:/native',
+      images: [
+        {
+          id: 'img_first',
+          path: 'c:/native/a-first.jpg',
+          file_name: 'a-first.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+        {
+          id: 'img_requested',
+          path: 'c:/native/z-requested.jpg',
+          file_name: 'z-requested.jpg',
+          extension: 'jpg',
+          size_bytes: 2,
+          modified_at: '2',
+        },
+      ],
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => result.current.openFilePicker());
+
+    expect(scanFolder).not.toHaveBeenCalled();
+    expect(readFolderIndex).not.toHaveBeenCalled();
+    expect(refreshFolderIndex).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().activeSessionId).toBe('sess_file');
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/native/z-requested.jpg');
+    expect(useViewerStore.getState().images).toEqual([
+      expect.objectContaining({ id: 'img_first', sessionId: 'sess_file' }),
+      expect.objectContaining({ id: 'img_requested', sessionId: 'sess_file' }),
+    ]);
+  });
+
+  it('applies native folder snapshots without an immediate disk refresh', async () => {
+    vi.mocked(selectFolderSession).mockResolvedValue({
+      session_id: 'sess_folder',
+      session_instance_id: 'inst_folder',
+      canonical_folder: 'c:/native-folder',
+      images: [
+        {
+          id: 'img_one',
+          path: 'c:/native-folder/one.jpg',
+          file_name: 'one.jpg',
+          extension: 'jpg',
+          size_bytes: 1,
+          modified_at: '1',
+        },
+      ],
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => result.current.openFolderPicker());
+
+    expect(readFolderIndex).not.toHaveBeenCalled();
+    expect(refreshFolderIndex).not.toHaveBeenCalled();
+    expect(scanFolder).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().folderPath).toBe('c:/native-folder');
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/native-folder/one.jpg');
+    expect(useViewerStore.getState().isFolderScanning).toBe(false);
   });
 
   it('returns to viewer mode when opening an image from grid mode', async () => {
