@@ -370,22 +370,35 @@ test('diagnostic redaction handles UNC paths with spaces without changing WebSoc
 });
 
 test('rapid navigation banner monitor captures transient image display banners', async () => {
-  const evaluations = [];
+  const operations = [];
+  let releaseWait;
 
-  const { hits, result } = await monitorImageDisplayBanners({}, async () => 'navigation-complete', {
+  const monitorPromise = monitorImageDisplayBanners({}, async () => 'navigation-complete', {
     evaluatePage: async (_cdp, expression) => {
-      evaluations.push(expression);
-      if (expression.includes('disconnect')) {
+      if (expression.includes('MutationObserver')) operations.push('install');
+      if (expression.includes('delete window')) {
+        operations.push('collect');
         return ['Could not display image: C:/fixture/demo-02.png'];
       }
       return true;
     },
+    wait: async (ms) => {
+      operations.push(`wait:${ms}`);
+      await new Promise((resolve) => {
+        releaseWait = resolve;
+      });
+      operations.push('wait-resolved');
+    },
   });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(operations, ['install', 'wait:1000']);
+  releaseWait?.();
+  const { hits, result } = await monitorPromise;
 
   assert.equal(result, 'navigation-complete');
   assert.deepEqual(hits, ['Could not display image: C:/fixture/demo-02.png']);
-  assert.equal(evaluations.length, 3);
-  assert.match(evaluations[0], /MutationObserver/);
+  assert.deepEqual(operations, ['install', 'wait:1000', 'wait-resolved', 'collect', 'collect']);
 });
 
 test('rapid navigation banner monitor captures persistent image display banners', async () => {
@@ -399,4 +412,29 @@ test('rapid navigation banner monitor captures persistent image display banners'
   });
 
   assert.deepEqual(hits, ['Could not display image: C:/fixture/demo-04.png']);
+});
+
+test('rapid navigation banner monitor cleans up while preserving navigation errors', async () => {
+  const operations = [];
+
+  await assert.rejects(
+    monitorImageDisplayBanners(
+      {},
+      async () => {
+        operations.push('during');
+        throw new Error('navigation failed');
+      },
+      {
+        evaluatePage: async (_cdp, expression) => {
+          if (expression.includes('MutationObserver')) operations.push('install');
+          if (expression.includes('delete window')) operations.push('collect');
+          return [];
+        },
+        wait: async () => operations.push('wait'),
+      }
+    ),
+    (error) => error instanceof Error && error.message === 'navigation failed'
+  );
+
+  assert.deepEqual(operations, ['install', 'during', 'collect']);
 });

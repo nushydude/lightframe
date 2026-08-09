@@ -107,11 +107,16 @@ const finalRapidNavigationImageExpression = `new Promise((resolve) => {
 })`;
 
 export async function monitorImageDisplayBanners(cdp, during, dependencies = {}) {
-  const { evaluatePage = evaluate } = dependencies;
+  const {
+    evaluatePage = evaluate,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    postSettleMs = 1_000,
+  } = dependencies;
   await evaluatePage(cdp, installImageDisplayBannerMonitorExpression);
 
   try {
     const result = await during();
+    await wait(postSettleMs);
     const hits = await evaluatePage(cdp, collectImageDisplayBannerMonitorExpression);
     return { result, hits };
   } finally {

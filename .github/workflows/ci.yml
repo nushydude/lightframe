@@ -195,3 +195,14 @@ jobs:
       - name: Smoke test packaged startup
         shell: pwsh
         run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
+
+      - name: Run Windows navigation E2E
+        run: pnpm run e2e:windows
+
+      - name: Upload Windows E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-e2e-diagnostics
+          path: artifacts/windows-e2e
+          if-no-files-found: warn
