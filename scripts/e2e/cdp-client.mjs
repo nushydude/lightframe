@@ -219,7 +219,10 @@ export async function evaluate(client, expression) {
     returnByValue: true,
     awaitPromise: true,
   });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  if (result.exceptionDetails) {
+    const detail = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
+    throw new Error(detail || 'CDP evaluation failed');
+  }
   return result.result.value;
 }
 

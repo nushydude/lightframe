@@ -606,6 +606,17 @@ async function captureFailureArtifacts(session, result) {
         JSON.stringify(redactDiagnostics(session.cdp.events), null, 2)
       )
     );
+    await capture('page-state.json', async () => {
+      const state = await session.cdp.command('Runtime.evaluate', {
+        expression:
+          'JSON.stringify({href: location.href, readyState: document.readyState, title: document.title, html: document.documentElement?.outerHTML ?? null})',
+        returnByValue: true,
+      });
+      await writeFile(
+        join(artifacts, 'page-state.json'),
+        redactDiagnostic(state.result?.value ?? JSON.stringify(state))
+      );
+    });
     await capture('failure.html', async () =>
       writeFile(join(artifacts, 'failure.html'), redactDiagnostic(await html(session.cdp)))
     );
