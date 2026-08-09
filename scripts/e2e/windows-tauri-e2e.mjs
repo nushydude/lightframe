@@ -419,8 +419,10 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
   const executablePath = executable();
   const pipeName = `lightframe-e2e-${process.pid}-${Date.now()}`;
   const debuggerPipe = await createDebuggerPipe(basename(executablePath), pipeName);
+  const baseEnv = { ...process.env };
+  delete baseEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
   const childEnv = {
-    ...process.env,
+    ...baseEnv,
     APPDATA: paths.appData,
     LOCALAPPDATA: paths.localAppData,
     USERPROFILE: paths.userProfile,

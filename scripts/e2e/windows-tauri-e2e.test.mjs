@@ -162,6 +162,47 @@ test('launch uses a valid configured CDP port and forwards it to WebView2', asyn
   assert.match(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /9555/);
 });
 
+test('launch omits inherited WebView2 browser arguments in config mode', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const previousConfigMode = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
+  const previousBrowserArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+  const child = createChild({ exitCode: 0 });
+  let spawnedEnvironment;
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
+  process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = '1';
+  process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--stale-argument';
+
+  try {
+    await launch([], {}, [], {
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: (_path, _args, options) => {
+        spawnedEnvironment = options.env;
+        return child;
+      },
+      pollEndpoint: async () => ({
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured',
+      }),
+      createDebuggerPipe: async () => ({
+        target: new Promise(() => {}),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+    if (previousConfigMode === undefined) delete process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
+    else process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = previousConfigMode;
+    if (previousBrowserArgs === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+    else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
+  }
+
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, undefined);
+});
+
 test('launch ignores invalid configured CDP ports and uses the free-port provider', async () => {
   const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
   const child = createChild({ exitCode: 0 });
