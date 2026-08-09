@@ -189,6 +189,17 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Configure Windows E2E browser arguments
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $configPath = './src-tauri/tauri.conf.json'
+          $config = Get-Content -Raw $configPath | ConvertFrom-Json
+          foreach ($window in $config.app.windows) {
+            $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue '--remote-debugging-port=9222 --remote-allow-origins=*' -Force
+          }
+          $config | ConvertTo-Json -Depth 100 | Set-Content -Encoding utf8 $configPath
+
       - name: Build unpackaged Tauri release executable
         run: pnpm tauri build --no-bundle --ci
 
@@ -196,95 +207,11 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
 
-      - name: Configure WebView2 CDP policy
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $registryPath = 'Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
-          $baseKey = [Microsoft.Win32.Registry]::CurrentUser
-          $policyKey = $baseKey.OpenSubKey($registryPath, $true)
-          $policyKeyExisted = $null -ne $policyKey
-          $policyValueExisted = $false
-          $policyValue = $null
-          $policyValueKind = $null
-          if ($policyKeyExisted) {
-            $policyValueExisted = $policyKey.GetValueNames() -contains '*'
-            if ($policyValueExisted) {
-              $policyValue = [string]$policyKey.GetValue('*', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-              $policyValueKind = [int]$policyKey.GetValueKind('*')
-            }
-            $policyKey.Close()
-          }
-          "LIGHTFRAME_E2E_POLICY_KEY_EXISTED=$([int]$policyKeyExisted)" >> $env:GITHUB_ENV
-          "LIGHTFRAME_E2E_POLICY_VALUE_EXISTED=$([int]$policyValueExisted)" >> $env:GITHUB_ENV
-          if ($policyValueExisted) {
-            $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyValue))
-            "LIGHTFRAME_E2E_POLICY_VALUE_B64=$encoded" >> $env:GITHUB_ENV
-            "LIGHTFRAME_E2E_POLICY_VALUE_KIND=$policyValueKind" >> $env:GITHUB_ENV
-          }
-          'LIGHTFRAME_E2E_POLICY_SNAPSHOT_READY=1' >> $env:GITHUB_ENV
-          $policyKey = $baseKey.CreateSubKey($registryPath)
-          $policyKey.SetValue('*', '--remote-debugging-port=9222 --remote-allow-origins=*', [Microsoft.Win32.RegistryValueKind]::String)
-          $policyKey.Close()
-
       - name: Run Windows navigation E2E
         env:
           LIGHTFRAME_E2E_CDP_PORT: '9222'
         shell: pwsh
         run: pnpm run e2e:windows
-
-      - name: Remove WebView2 CDP policy
-        if: always()
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:LIGHTFRAME_E2E_POLICY_SNAPSHOT_READY -ne '1') {
-            Write-Host 'WebView2 CDP policy snapshot was not completed; leaving registry state unchanged.'
-            exit 0
-          }
-          $registryPath = 'Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
-          $baseKey = [Microsoft.Win32.Registry]::CurrentUser
-          if ($env:LIGHTFRAME_E2E_POLICY_VALUE_EXISTED -eq '1') {
-            $value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:LIGHTFRAME_E2E_POLICY_VALUE_B64))
-            $valueKind = [Microsoft.Win32.RegistryValueKind]$env:LIGHTFRAME_E2E_POLICY_VALUE_KIND
-            $policyKey = $baseKey.CreateSubKey($registryPath)
-            $policyKey.SetValue('*', $value, $valueKind)
-            $policyKey.Close()
-            $restoredKey = $baseKey.OpenSubKey($registryPath, $false)
-            if ($null -eq $restoredKey -or -not ($restoredKey.GetValueNames() -contains '*')) {
-              throw 'WebView2 CDP policy value was not restored'
-            }
-            $restoredValue = [string]$restoredKey.GetValue('*', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            $restoredKind = $restoredKey.GetValueKind('*')
-            $restoredKey.Close()
-            if ($restoredValue -ne $value -or $restoredKind -ne $valueKind) {
-              throw 'WebView2 CDP policy value was restored with different contents or type'
-            }
-          } else {
-            $policyKey = $baseKey.OpenSubKey($registryPath, $true)
-            if ($null -ne $policyKey) {
-              if ($policyKey.GetValueNames() -contains '*') {
-                $policyKey.DeleteValue('*', $false)
-              }
-              if ($policyKey.GetValueNames() -contains '*') {
-                $policyKey.Close()
-                throw 'WebView2 CDP wildcard policy value remains after cleanup'
-              }
-              $policyKey.Close()
-            }
-            if ($env:LIGHTFRAME_E2E_POLICY_KEY_EXISTED -ne '1') {
-              $remainingKey = $baseKey.OpenSubKey($registryPath, $true)
-              if ($null -ne $remainingKey) {
-                if ($remainingKey.GetValueNames().Count -eq 0) {
-                  $remainingKey.Close()
-                  $baseKey.DeleteSubKeyTree($registryPath, $false)
-                } else {
-                  $remainingKey.Close()
-                  throw 'WebView2 CDP policy key still contains values after cleanup'
-                }
-              }
-            }
-          }
 
       - name: Upload Windows E2E diagnostics
         if: always()
