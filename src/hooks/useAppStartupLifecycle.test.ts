@@ -127,4 +127,42 @@ describe('useAppStartupLifecycle', () => {
       )
     );
   });
+
+  it('shows file and folder wording with backend detail when startup folder snapshot application is rejected', async () => {
+    const startupSession = {
+      session_id: 'sess_startup_folder',
+      canonical_folder: 'C:/Photos',
+      images: [],
+    };
+    mocks.consumeStartupSession.mockResolvedValue({
+      mode: 'folder',
+      session: startupSession,
+    });
+    mocks.applyFolderSessionSnapshot.mockRejectedValue(
+      new Error('Folder session grant expired for C:/Photos')
+    );
+
+    renderHook(() =>
+      useAppStartupLifecycle({
+        appWindow: { label: 'main', show: mocks.show } as never,
+        isMainWindow: true,
+        isProjectorWindow: false,
+        loadSettings: mocks.loadSettings,
+        loadCuration: mocks.loadCuration,
+        openImage: mocks.openImage,
+        applyFolderSessionSnapshot: mocks.applyFolderSessionSnapshot,
+        applyFileSessionSnapshot: mocks.applyFileSessionSnapshot,
+        setError: mocks.setError,
+      })
+    );
+
+    await waitFor(() =>
+      expect(mocks.applyFolderSessionSnapshot).toHaveBeenCalledWith(startupSession)
+    );
+    await waitFor(() =>
+      expect(mocks.setError).toHaveBeenCalledWith(
+        'Could not open startup file or folder: Error: Folder session grant expired for C:/Photos'
+      )
+    );
+  });
 });

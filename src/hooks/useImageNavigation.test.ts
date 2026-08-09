@@ -2,10 +2,12 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { useImageNavigation } from './useImageNavigation';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { useCurationStore } from '../state/curationStore';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import {
   getParentFolder,
   listenToFolderWatcherChanges,
+  readCurationMetadataForPaths,
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
@@ -25,6 +27,7 @@ const mockSetTitle = vi.fn().mockResolvedValue(undefined);
 vi.mock('../services/tauriCommands', () => ({
   scanFolder: vi.fn(),
   readFolderIndex: vi.fn(),
+  readCurationMetadata: vi.fn().mockResolvedValue({}),
   readCurationMetadataForPaths: vi.fn().mockResolvedValue({}),
   refreshFolderIndex: vi.fn(),
   writeSettings: vi.fn().mockResolvedValue(undefined),
@@ -82,6 +85,18 @@ describe('useImageNavigation', () => {
       })
     );
     useViewerStore.getState().reset();
+    useCurationStore.setState({
+      curationByPath: {},
+      curationView: {},
+      favoritePaths: new Set(),
+      isLoaded: false,
+      loadStatus: 'idle',
+      loadError: null,
+      mutationStatus: 'idle',
+      mutationError: null,
+      failedOperation: null,
+      errorDismissed: false,
+    });
     useSettingsStore.setState({
       settings: {
         ...useSettingsStore.getState().settings,
@@ -92,6 +107,7 @@ describe('useImageNavigation', () => {
     vi.clearAllMocks();
     mockSetTitle.mockResolvedValue(undefined);
     (listenToFolderWatcherChanges as any).mockResolvedValue(vi.fn());
+    (readCurationMetadataForPaths as any).mockResolvedValue({});
   });
 
   it('should open an image and scan the folder', async () => {
@@ -603,6 +619,74 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().errorMessage).toBe(
       'No supported images found in the selected folder'
     );
+  });
+
+  it('applies recent-folder snapshot filters after delayed curation metadata hydrates', async () => {
+    let resolveCuration:
+      | ((
+          metadata: Record<string, { favorite: boolean; rating: number; updated_at: number }>
+        ) => void)
+      | undefined;
+    (readCurationMetadataForPaths as any).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCuration = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useImageNavigation());
+    let snapshotPromise: Promise<void> | undefined;
+
+    act(() => {
+      snapshotPromise = result.current.applyFolderSessionSnapshot(
+        {
+          session_id: 'sess_recent_filtered',
+          canonical_folder: 'c:/recent-filtered',
+          images: [
+            {
+              id: 'img_one',
+              path: 'c:/recent-filtered/one.jpg',
+              file_name: 'one.jpg',
+              extension: 'jpg',
+              size_bytes: 100,
+            },
+            {
+              id: 'img_two',
+              path: 'c:/recent-filtered/two.jpg',
+              file_name: 'two.jpg',
+              extension: 'jpg',
+              size_bytes: 200,
+            },
+          ],
+        },
+        { curationFilter: 'rated5' }
+      );
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().folderPath).toBe('c:/recent-filtered');
+    });
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/recent-filtered/one.jpg',
+      'c:/recent-filtered/two.jpg',
+    ]);
+
+    await act(async () => {
+      resolveCuration?.({
+        'c:/recent-filtered/two.jpg': { favorite: false, rating: 5, updated_at: 20 },
+      });
+      await snapshotPromise;
+    });
+
+    expect(readCurationMetadataForPaths).toHaveBeenCalledWith([
+      'c:/recent-filtered/one.jpg',
+      'c:/recent-filtered/two.jpg',
+    ]);
+    expect(useViewerStore.getState().curationFilter).toBe('rated5');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/recent-filtered/two.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/recent-filtered/two.jpg');
   });
 
   it('shows cached folder entries before verified refresh finishes', async () => {

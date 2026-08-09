@@ -54,33 +54,68 @@ const viewerState = (cdp) =>
     cdp,
     '({ name: document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim(), index: document.querySelector("[data-testid=viewer-index]")?.dataset.index })'
   );
-const imageDisplayBannerExpression =
-  'Array.from(document.querySelectorAll("[role=alert], .error-banner")).map((node) => node.textContent?.trim() || "").find((text) => text.includes("Could not display image")) || null';
+const imageDisplayBannerMonitorKey = '__lightframeImageDisplayBannerMonitor';
+const installImageDisplayBannerMonitorExpression = `(() => {
+  const key = ${JSON.stringify(imageDisplayBannerMonitorKey)};
+  window[key]?.disconnect?.();
+  const hits = [];
+  const record = () => {
+    const banners = Array.from(document.querySelectorAll("[role=alert], .error-banner"))
+      .map((node) => node.textContent?.trim() || "")
+      .filter((text) => text.includes("Could not display image"));
+    for (const banner of banners) hits.push(banner);
+  };
+  const observer = new MutationObserver(record);
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+  record();
+  window[key] = {
+    disconnect: () => {
+      observer.disconnect();
+      record();
+      return hits.slice();
+    },
+  };
+  return true;
+})()`;
+const collectImageDisplayBannerMonitorExpression = `(() => {
+  const monitor = window[${JSON.stringify(imageDisplayBannerMonitorKey)}];
+  if (!monitor) return [];
+  const hits = monitor.disconnect();
+  delete window[${JSON.stringify(imageDisplayBannerMonitorKey)}];
+  return hits;
+})()`;
+const finalRapidNavigationImageExpression = `new Promise((resolve) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const filename = document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim();
+    const index = document.querySelector("[data-testid=viewer-index]")?.dataset.index;
+    const total = document.querySelector("[data-testid=viewer-index]")?.dataset.total;
+    const image = document.querySelector(".image-canvas img");
+    resolve(
+      filename === "demo-01.png" &&
+        index === "1" &&
+        total === "4" &&
+        Boolean(image) &&
+        image.complete === true &&
+        image.naturalWidth > 0 &&
+        !image.classList.contains("loading")
+    );
+  }));
+})`;
 
 export async function monitorImageDisplayBanners(cdp, during, dependencies = {}) {
-  const {
-    evaluatePage = evaluate,
-    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    sampleIntervalMs = 25,
-  } = dependencies;
-  const hits = [];
-  let done = false;
-  const monitor = (async () => {
-    while (!done) {
-      const banner = await evaluatePage(cdp, imageDisplayBannerExpression);
-      if (banner) hits.push(banner);
-      await wait(sampleIntervalMs);
-    }
-    const finalBanner = await evaluatePage(cdp, imageDisplayBannerExpression);
-    if (finalBanner) hits.push(finalBanner);
-  })();
+  const { evaluatePage = evaluate } = dependencies;
+  await evaluatePage(cdp, installImageDisplayBannerMonitorExpression);
 
   try {
     const result = await during();
+    const hits = await evaluatePage(cdp, collectImageDisplayBannerMonitorExpression);
     return { result, hits };
   } finally {
-    done = true;
-    await monitor;
+    await evaluatePage(cdp, collectImageDisplayBannerMonitorExpression).catch(() => undefined);
   }
 }
 
@@ -476,15 +511,17 @@ async function runRapidOverlappingNavigation(session, result) {
       ...Array.from({ length: 8 }, () => keyChord(session.cdp, ['ArrowLeft'])),
     ];
     await Promise.all(navigationBursts);
-    await waitForExpression(
-      session.cdp,
-      'document.querySelector("[data-testid=viewer-index]")?.dataset.total === "4"'
-    );
+    await waitForExpression(session.cdp, finalRapidNavigationImageExpression, {
+      description: 'settled rapid-navigation final image',
+    });
   });
   if (hits.length) {
     throw new Error(`Unexpected image display banner during rapid navigation: ${hits.join(' | ')}`);
   }
-  recordJourney(result, { name: 'rapid-overlapping-navigation', status: 'passed' });
+  const state = await viewerState(session.cdp);
+  assertEqual(state.name, 'demo-01.png', 'rapid navigation final filename');
+  assertEqual(state.index, '1', 'rapid navigation final index');
+  recordJourney(result, { name: 'rapid-overlapping-navigation', status: 'passed', state });
 }
 
 async function runCuration(session) {

@@ -133,6 +133,69 @@ function getNow(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
+async function applySnapshotCurationHydration({
+  curationLoad,
+  curationFilter,
+  folderImagesLength,
+  loadGeneration,
+  isCurrentGeneration,
+  prepareCurationFilter,
+  emptyFolderOpenMessage,
+  setError,
+}: {
+  curationLoad: Promise<unknown>;
+  curationFilter?: CurationFilter;
+  folderImagesLength: number;
+  loadGeneration: number;
+  isCurrentGeneration: (generation: number) => boolean;
+  prepareCurationFilter: (filter: CurationFilter) => void;
+  emptyFolderOpenMessage: string;
+  setError: (message: string | null) => void;
+}): Promise<boolean> {
+  if (!curationFilter) {
+    void curationLoad.catch(() => undefined);
+    return true;
+  }
+
+  await curationLoad.catch(() => undefined);
+  if (!isCurrentGeneration(loadGeneration)) return false;
+
+  const curationState = useCurationStore.getState();
+  prepareCurationFilter(curationFilter);
+  useViewerStore
+    .getState()
+    .syncFavoriteFilter(curationState.curationByPath, curationState.favoritePaths);
+  if (folderImagesLength === 0) {
+    setError(emptyFolderOpenMessage);
+  }
+  return true;
+}
+
+function requestedSnapshotImage(
+  session: FolderSessionSnapshot,
+  requestedImageId?: string
+): FolderSessionSnapshot['images'][number] | null {
+  if (!requestedImageId) return null;
+
+  const requestedImage = session.images.find((image) => image.id === requestedImageId);
+  if (!requestedImage) {
+    throw new Error('Native snapshot is missing the requested image');
+  }
+  return requestedImage;
+}
+
+function sessionSnapshotWindowTitle(
+  requestedImage: FolderSessionSnapshot['images'][number] | null,
+  nextFolderPath: string
+): string {
+  if (requestedImage) {
+    return mainWindowTitle(requestedImage.file_name || 'LightFrame');
+  }
+
+  const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
+  return mainWindowTitle(`[Folder] ${folderName}`);
+}
+
 /** Hook for image navigation and file opening */
 // fallow-ignore-next-line complexity -- navigation/session orchestration boundary
 export function useImageNavigation() {
@@ -475,16 +538,12 @@ export function useImageNavigation() {
       options?: {
         requestedImageId?: string;
         selectionKind?: 'folder-open' | 'open-image' | 'startup-open';
+        curationFilter?: CurationFilter;
       }
     ) => {
       const loadGeneration = beginLoadGeneration();
       const nextFolderPath = session.canonical_folder;
-      const requestedImage = options?.requestedImageId
-        ? session.images.find((image) => image.id === options.requestedImageId)
-        : null;
-      if (options?.requestedImageId && !requestedImage) {
-        throw new Error('Native snapshot is missing the requested image');
-      }
+      const requestedImage = requestedSnapshotImage(session, options?.requestedImageId);
 
       try {
         setFolderScanning(false);
@@ -507,17 +566,24 @@ export function useImageNavigation() {
           getPersistedMarkedPathsForFolder(useSettingsStore.getState().settings, nextFolderPath)
         );
         setFolderPath(nextFolderPath);
-        void useCurationStore
+        const curationLoad = useCurationStore
           .getState()
-          .loadCuration(folderImages.map((image) => image.path))
-          .catch(() => undefined);
+          .loadCuration(folderImages.map((image) => image.path));
+        const curationHydrated = await applySnapshotCurationHydration({
+          curationLoad,
+          curationFilter: options?.curationFilter,
+          folderImagesLength: folderImages.length,
+          loadGeneration,
+          isCurrentGeneration,
+          prepareCurationFilter,
+          emptyFolderOpenMessage,
+          setError,
+        });
+        if (!curationHydrated) return;
 
-        const title = requestedImage
-          ? mainWindowTitle(requestedImage.file_name || 'LightFrame')
-          : mainWindowTitle(
-              `[Folder] ${nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame'}`
-            );
-        await getRuntime().window.setTitle(title);
+        await getRuntime().window.setTitle(
+          sessionSnapshotWindowTitle(requestedImage, nextFolderPath)
+        );
         rememberOpenedFolder(nextFolderPath);
       } catch (err) {
         if (isCurrentGeneration(loadGeneration)) {
@@ -537,6 +603,7 @@ export function useImageNavigation() {
       emptyFolderOpenMessage,
       imagesFromSessionSnapshot,
       isCurrentGeneration,
+      prepareCurationFilter,
       setActiveSessionId,
       setError,
       setFolderPath,
@@ -548,12 +615,12 @@ export function useImageNavigation() {
 
   const applyFolderSessionSnapshot = useCallback(
     async (session: FolderSessionSnapshot, options?: { curationFilter?: CurationFilter }) => {
-      if (options?.curationFilter) {
-        prepareCurationFilter(options.curationFilter);
-      }
-      await applySessionSnapshot(session, { selectionKind: 'folder-open' });
+      await applySessionSnapshot(session, {
+        selectionKind: 'folder-open',
+        curationFilter: options?.curationFilter,
+      });
     },
-    [applySessionSnapshot, prepareCurationFilter]
+    [applySessionSnapshot]
   );
 
   const applyFileSessionSnapshot = useCallback(
