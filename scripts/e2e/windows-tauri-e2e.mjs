@@ -470,8 +470,13 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
 }
 
 async function runHomeStartup(session, result) {
-  await waitForSelector(session.cdp, '[data-testid="native-app-root"][data-runtime-ready="true"]');
-  await waitForSelector(session.cdp, '[data-testid="home-screen"]');
+  const startupWait = { timeoutMs: 30_000 };
+  await waitForSelector(
+    session.cdp,
+    '[data-testid="native-app-root"][data-runtime-ready="true"]',
+    startupWait
+  );
+  await waitForSelector(session.cdp, '[data-testid="home-screen"]', startupWait);
   recordJourney(result, { name: 'home', status: 'passed' });
   if (fatalCdpEvents(session.cdp.events).length) throw new Error('CDP error after home journey');
 }

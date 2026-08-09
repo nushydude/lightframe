@@ -196,7 +196,7 @@ jobs:
           $configPath = './src-tauri/tauri.conf.json'
           $config = Get-Content -Raw $configPath | ConvertFrom-Json
           foreach ($window in $config.app.windows) {
-            $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue '--remote-debugging-port=9222 --remote-allow-origins=*' -Force
+            $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=9222 --remote-allow-origins=*' -Force
           }
           $config | ConvertTo-Json -Depth 100 | Set-Content -Encoding utf8 $configPath
 
