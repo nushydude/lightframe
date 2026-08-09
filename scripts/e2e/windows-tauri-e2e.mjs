@@ -413,7 +413,8 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
     terminateProcessTree = terminateOwnedProcessTree,
     waitForChildExit = waitForExit,
   } = dependencies;
-  const port = await findPort();
+  const configuredPort = Number.parseInt(process.env.LIGHTFRAME_E2E_CDP_PORT ?? '', 10);
+  const port = configuredPort > 0 && configuredPort <= 65_535 ? configuredPort : await findPort();
   const executablePath = executable();
   const pipeName = `lightframe-e2e-${process.pid}-${Date.now()}`;
   const debuggerPipe = await createDebuggerPipe(basename(executablePath), pipeName);

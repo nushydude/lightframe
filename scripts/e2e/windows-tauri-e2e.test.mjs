@@ -120,6 +120,80 @@ test('launch falls back to the polled CDP endpoint after an early debugger-pipe 
   assert.equal(connectedPages.at(-1), endpointPage);
 });
 
+test('launch uses a valid configured CDP port and forwards it to WebView2', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const child = createChild({ exitCode: 0 });
+  let polledPort;
+  let spawnedEnvironment;
+  let findPortCalls = 0;
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
+
+  try {
+    await launch([], {}, [], {
+      findPort: async () => {
+        findPortCalls += 1;
+        return 9444;
+      },
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: (_path, _args, options) => {
+        spawnedEnvironment = options.env;
+        return child;
+      },
+      pollEndpoint: async (port) => {
+        polledPort = port;
+        return { webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured' };
+      },
+      createDebuggerPipe: async () => ({
+        target: new Promise(() => {}),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+  }
+
+  assert.equal(findPortCalls, 0);
+  assert.equal(polledPort, 9555);
+  assert.match(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /9555/);
+});
+
+test('launch ignores invalid configured CDP ports and uses the free-port provider', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const child = createChild({ exitCode: 0 });
+  const selectedPorts = [];
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '70000';
+
+  try {
+    await launch([], {}, [], {
+      findPort: async () => 9444,
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: () => child,
+      pollEndpoint: async (port) => {
+        selectedPorts.push(port);
+        return { webSocketDebuggerUrl: 'ws://127.0.0.1:9444/devtools/page/fallback' };
+      },
+      createDebuggerPipe: async () => ({
+        target: new Promise(() => {}),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+  }
+
+  assert.deepEqual(selectedPorts, [9444]);
+});
+
 test('owned process-tree termination failure is surfaced without killing another process', async () => {
   const child = createChild();
   child.kill = () => assert.fail('child.kill must not run after taskkill failure');

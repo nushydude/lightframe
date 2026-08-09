@@ -196,8 +196,48 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
 
+      - name: Configure WebView2 CDP policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $policyPath = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $policyKeyExisted = Test-Path $policyPath
+          $policyValue = Get-ItemProperty -Path $policyPath -Name 'lightframe.exe' -ErrorAction SilentlyContinue
+          $policyValueExisted = $null -ne $policyValue
+          "LIGHTFRAME_E2E_POLICY_KEY_EXISTED=$([int]$policyKeyExisted)" >> $env:GITHUB_ENV
+          "LIGHTFRAME_E2E_POLICY_VALUE_EXISTED=$([int]$policyValueExisted)" >> $env:GITHUB_ENV
+          if ($policyValueExisted) {
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$policyValue.'lightframe.exe'))
+            "LIGHTFRAME_E2E_POLICY_VALUE_B64=$encoded" >> $env:GITHUB_ENV
+          }
+          New-Item -Path $policyPath -Force | Out-Null
+          New-ItemProperty -Path $policyPath -Name 'lightframe.exe' -Value '--remote-debugging-port=9222 --remote-allow-origins=*' -PropertyType String -Force | Out-Null
+
       - name: Run Windows navigation E2E
+        env:
+          LIGHTFRAME_E2E_CDP_PORT: '9222'
+        shell: pwsh
         run: pnpm run e2e:windows
+
+      - name: Remove WebView2 CDP policy
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $policyPath = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          if ($env:LIGHTFRAME_E2E_POLICY_VALUE_EXISTED -eq '1') {
+            $value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:LIGHTFRAME_E2E_POLICY_VALUE_B64))
+            New-Item -Path $policyPath -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name 'lightframe.exe' -Value $value -PropertyType String -Force | Out-Null
+          } else {
+            $current = Get-ItemProperty -Path $policyPath -Name 'lightframe.exe' -ErrorAction SilentlyContinue
+            if ($null -ne $current) {
+              Remove-ItemProperty -Path $policyPath -Name 'lightframe.exe'
+            }
+            if ($env:LIGHTFRAME_E2E_POLICY_KEY_EXISTED -ne '1' -and (Test-Path $policyPath)) {
+              Remove-Item -Path $policyPath -Force
+            }
+          }
 
       - name: Upload Windows E2E diagnostics
         if: always()
