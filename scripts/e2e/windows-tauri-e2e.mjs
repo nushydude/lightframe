@@ -591,22 +591,33 @@ async function runShortcutDialogs(session, result) {
 async function captureFailureArtifacts(session, result) {
   const captureErrors = [];
   const files = [];
-  try {
-    if (session?.cdp) {
-      await writeFile(join(artifacts, 'failure.html'), redactDiagnostic(await html(session.cdp)));
-      files.push('failure.html');
-      await writeFile(
-        join(artifacts, 'failure.png'),
-        Buffer.from(await screenshot(session.cdp), 'base64')
-      );
-      files.push('failure.png');
-      await writeFile(
+  const capture = async (name, action) => {
+    try {
+      await action();
+      files.push(name);
+    } catch (captureError) {
+      captureErrors.push(`${name}: ${redactDiagnostic(captureError)}`);
+    }
+  };
+  if (session?.cdp) {
+    await capture('cdp-events.json', () =>
+      writeFile(
         join(artifacts, 'cdp-events.json'),
         JSON.stringify(redactDiagnostics(session.cdp.events), null, 2)
-      );
-      files.push('cdp-events.json');
-    }
-    await writeFile(
+      )
+    );
+    await capture('failure.html', async () =>
+      writeFile(join(artifacts, 'failure.html'), redactDiagnostic(await html(session.cdp)))
+    );
+    await capture('failure.png', async () =>
+      writeFile(
+        join(artifacts, 'failure.png'),
+        Buffer.from(await screenshot(session.cdp), 'base64')
+      )
+    );
+  }
+  await capture('launch-logs.json', () =>
+    writeFile(
       join(artifacts, 'launch-logs.json'),
       JSON.stringify(
         redactDiagnostics(
@@ -615,11 +626,8 @@ async function captureFailureArtifacts(session, result) {
         null,
         2
       )
-    );
-    files.push('launch-logs.json');
-  } catch (captureError) {
-    captureErrors.push(redactDiagnostic(captureError));
-  }
+    )
+  );
   return { captureErrors, files };
 }
 
