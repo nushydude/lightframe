@@ -210,6 +210,7 @@ jobs:
       - name: Run Windows navigation E2E
         env:
           LIGHTFRAME_E2E_CDP_PORT: '9222'
+          LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG: '1'
         shell: pwsh
         run: pnpm run e2e:windows
 

@@ -415,21 +415,27 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
   } = dependencies;
   const configuredPort = Number.parseInt(process.env.LIGHTFRAME_E2E_CDP_PORT ?? '', 10);
   const port = configuredPort > 0 && configuredPort <= 65_535 ? configuredPort : await findPort();
+  const browserArgsInConfig = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG === '1';
   const executablePath = executable();
   const pipeName = `lightframe-e2e-${process.pid}-${Date.now()}`;
   const debuggerPipe = await createDebuggerPipe(basename(executablePath), pipeName);
+  const childEnv = {
+    ...process.env,
+    APPDATA: paths.appData,
+    LOCALAPPDATA: paths.localAppData,
+    USERPROFILE: paths.userProfile,
+    TEMP: paths.temp,
+    TMP: paths.temp,
+    WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,
+    WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER: pipeName,
+    ...(browserArgsInConfig
+      ? {}
+      : {
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --remote-allow-origins=*`,
+        }),
+  };
   const child = spawnProcess(executablePath, args, {
-    env: {
-      ...process.env,
-      APPDATA: paths.appData,
-      LOCALAPPDATA: paths.localAppData,
-      USERPROFILE: paths.userProfile,
-      TEMP: paths.temp,
-      TMP: paths.temp,
-      WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,
-      WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER: pipeName,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --remote-allow-origins=*`,
-    },
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logs = '';
