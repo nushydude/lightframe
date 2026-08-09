@@ -204,16 +204,16 @@ jobs:
       - name: Build unpackaged Tauri release executable
         run: pnpm tauri build --no-bundle --ci
 
-      - name: Smoke test packaged startup
-        shell: pwsh
-        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
-
       - name: Run Windows navigation E2E
         env:
           LIGHTFRAME_E2E_CDP_PORT: '9222'
           LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG: '1'
         shell: pwsh
         run: pnpm run e2e:windows
+
+      - name: Smoke test packaged startup
+        shell: pwsh
+        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
 
       - name: Upload Windows E2E diagnostics
         if: always()

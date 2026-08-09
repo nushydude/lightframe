@@ -28,7 +28,7 @@ test('Windows smoke runner preserves process, crash, and settings cleanup safegu
   assert.match(source, /Get-LightFrameCrashEvents -StartTime \$startedAt/);
   assert.match(source, /LightFrame exited before showing a main window/);
   assert.match(source, /fresh crash-reporting events were recorded/);
-  assert.match(source, /Stop-Process -Id \$process\.Id -Force/);
+  assert.match(source, /taskkill\.exe \/PID \$process\.Id \/T \/F/);
   assert.match(source, /Move-Item -LiteralPath \$backupPath -Destination \$settingsPath -Force/);
   assert.match(source, /Remove-Item -LiteralPath \$settingsPath -Force/);
 });

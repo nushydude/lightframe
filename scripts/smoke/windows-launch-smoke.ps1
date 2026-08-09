@@ -160,7 +160,7 @@ try {
   throw "Timed out after $TimeoutSeconds seconds waiting for LightFrame to show a main window. Last HWND: $lastHandle, title: '$lastTitle'."
 } finally {
   if ($process -and -not $process.HasExited) {
-    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
   }
 
   if ($backupPath -and (Test-Path -LiteralPath $backupPath)) {
