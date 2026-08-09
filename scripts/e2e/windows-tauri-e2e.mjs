@@ -363,6 +363,10 @@ async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClien
   ]);
   if (!page.pipeTarget) return connectClient(page);
 
+  if (process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG === '1') {
+    return connectClient(await endpointPage);
+  }
+
   try {
     return await connectPipeTarget(page.pipeTarget, port, connectClient, session.entry);
   } catch (pipeError) {
