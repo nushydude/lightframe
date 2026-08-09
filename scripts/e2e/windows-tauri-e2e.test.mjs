@@ -91,6 +91,35 @@ test('launch does not kill an already-exited owned child after attach failure', 
   );
 });
 
+test('launch falls back to the polled CDP endpoint after an early debugger-pipe target', async () => {
+  const child = createChild({ exitCode: 0 });
+  const endpointPage = { webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/fallback' };
+  const connectedPages = [];
+  let resolveEndpoint;
+
+  const session = await launch([], {}, [], {
+    findPort: async () => 9222,
+    executable: () => 'C:/LightFrame.exe',
+    spawnProcess: () => child,
+    pollEndpoint: async () => new Promise((resolve) => (resolveEndpoint = resolve)),
+    createDebuggerPipe: async () => ({
+      target: Promise.resolve({ type: 'page', id: 'early-target' }),
+      close: async () => undefined,
+    }),
+    connectClient: async (page) => {
+      connectedPages.push(page);
+      if (page.webSocketDebuggerUrl.includes('early-target')) {
+        if (connectedPages.length === 3) resolveEndpoint(endpointPage);
+        throw new Error('CDP port not ready yet');
+      }
+      return { socket: { close: () => undefined }, events: { console: [], exceptions: [] } };
+    },
+  });
+
+  assert.equal(session.cdp.events.console.length, 0);
+  assert.equal(connectedPages.at(-1), endpointPage);
+});
+
 test('owned process-tree termination failure is surfaced without killing another process', async () => {
   const child = createChild();
   child.kill = () => assert.fail('child.kill must not run after taskkill failure');

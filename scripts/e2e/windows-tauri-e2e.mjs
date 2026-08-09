@@ -355,14 +355,23 @@ async function connectPipeTarget(target, port, connectClient, entry) {
 }
 
 async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient) {
+  const endpointPage = pollEndpoint(port, 15_000);
   const page = await Promise.race([
-    pollEndpoint(port, 15_000),
+    endpointPage,
     debuggerPipe.target.then((target) => ({ pipeTarget: target })),
     prematureExit(session.child),
   ]);
-  return page.pipeTarget
-    ? connectPipeTarget(page.pipeTarget, port, connectClient, session.entry)
-    : connectClient(page);
+  if (!page.pipeTarget) return connectClient(page);
+
+  try {
+    return await connectPipeTarget(page.pipeTarget, port, connectClient, session.entry);
+  } catch (pipeError) {
+    try {
+      return await connectClient(await endpointPage);
+    } catch {
+      throw pipeError;
+    }
+  }
 }
 
 function prematureExit(child) {
