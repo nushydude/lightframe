@@ -194,10 +194,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $configPath = './src-tauri/tauri.conf.json'
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $cdpPort = $listener.LocalEndpoint.Port
+          $listener.Stop()
+          "LIGHTFRAME_E2E_CDP_PORT=$cdpPort" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $browserArgs = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=$cdpPort --remote-allow-origins=*"
           $config = Get-Content -Raw $configPath | ConvertFrom-Json
           foreach ($window in $config.app.windows) {
             $window.visible = $true
-            $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=9222 --remote-allow-origins=*' -Force
+            $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue $browserArgs -Force
           }
           $config | ConvertTo-Json -Depth 100 | Set-Content -Encoding utf8 $configPath
 
@@ -206,7 +212,6 @@ jobs:
 
       - name: Run Windows navigation E2E
         env:
-          LIGHTFRAME_E2E_CDP_PORT: '9222'
           LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG: '1'
         shell: pwsh
         run: pnpm run e2e:windows
