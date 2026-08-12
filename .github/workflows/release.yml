@@ -215,13 +215,13 @@ jobs:
 
       - name: Attest final Windows artifacts and release evidence
         # v4
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: release-artifacts/**
 
       - name: Attest release SBOM
         # v4
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: release-artifacts/lightframe-${{ needs.version-tag-preflight.outputs.version }}.spdx.json
           sbom-path: release-artifacts/lightframe-${{ needs.version-tag-preflight.outputs.version }}.spdx.json
