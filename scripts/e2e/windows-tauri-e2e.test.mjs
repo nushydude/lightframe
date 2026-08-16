@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   cleanupHarness,
@@ -162,14 +164,12 @@ test('launch uses a valid configured CDP port and forwards it to WebView2', asyn
   assert.match(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /9555/);
 });
 
-test('launch omits inherited WebView2 browser arguments in config mode', async () => {
+test('launch overwrites inherited WebView2 browser arguments with its selected CDP port', async () => {
   const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
-  const previousConfigMode = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
   const previousBrowserArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
   const child = createChild({ exitCode: 0 });
   let spawnedEnvironment;
   process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
-  process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = '1';
   process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--stale-argument';
 
   try {
@@ -194,13 +194,15 @@ test('launch omits inherited WebView2 browser arguments in config mode', async (
   } finally {
     if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
     else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
-    if (previousConfigMode === undefined) delete process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
-    else process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = previousConfigMode;
     if (previousBrowserArgs === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
     else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
   }
 
-  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, undefined);
+  assert.equal(
+    spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS,
+    '--remote-debugging-port=9555 --remote-allow-origins=*'
+  );
+  assert.doesNotMatch(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /stale/);
 });
 
 test('launch ignores invalid configured CDP ports and uses the free-port provider', async () => {
@@ -233,6 +235,18 @@ test('launch ignores invalid configured CDP ports and uses the free-port provide
   }
 
   assert.deepEqual(selectedPorts, [9444]);
+});
+
+test('Windows CI E2E does not bake test-only WebView2 arguments into tauri config', async () => {
+  const workflow = await readFile(resolve(import.meta.dirname, '../../.github/workflows/ci.yml'), {
+    encoding: 'utf8',
+  });
+
+  assert.match(workflow, /pnpm tauri build --no-bundle --ci/);
+  assert.match(workflow, /pnpm run e2e:windows/);
+  assert.doesNotMatch(workflow, /additionalBrowserArgs/);
+  assert.doesNotMatch(workflow, /LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG/);
+  assert.doesNotMatch(workflow, /tauri\.conf\.json[\s\S]*remote-debugging-port/);
 });
 
 test('owned process-tree termination failure is surfaced without killing another process', async () => {

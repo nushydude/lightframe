@@ -334,6 +334,10 @@ function timedOutExit(child) {
   };
 }
 
+function webviewCdpBrowserArguments(port) {
+  return `--remote-debugging-port=${port} --remote-allow-origins=*`;
+}
+
 async function connectPipeTarget(target, port, connectClient, entry) {
   const urls = ['localhost', '127.0.0.1', '[::1]'].map((host) =>
     debuggerTargetUrl(target, port).replace('127.0.0.1', host)
@@ -419,7 +423,6 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
   } = dependencies;
   const configuredPort = Number.parseInt(process.env.LIGHTFRAME_E2E_CDP_PORT ?? '', 10);
   const port = configuredPort > 0 && configuredPort <= 65_535 ? configuredPort : await findPort();
-  const browserArgsInConfig = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG === '1';
   const executablePath = executable();
   const pipeName = `lightframe-e2e-${process.pid}-${Date.now()}`;
   const debuggerPipe = await createDebuggerPipe(basename(executablePath), pipeName);
@@ -434,11 +437,7 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
     TMP: paths.temp,
     WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,
     WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER: pipeName,
-    ...(browserArgsInConfig
-      ? {}
-      : {
-          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --remote-allow-origins=*`,
-        }),
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: webviewCdpBrowserArguments(port),
   };
   const child = spawnProcess(executablePath, args, {
     env: childEnv,
