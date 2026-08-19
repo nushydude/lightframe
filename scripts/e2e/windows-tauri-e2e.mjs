@@ -9,7 +9,6 @@ import {
   click,
   close,
   createDebuggerPipeServer,
-  debuggerTargetUrl,
   evaluate,
   fatalCdpEvents,
   getFreePort,
@@ -335,59 +334,83 @@ function timedOutExit(child) {
 }
 
 function webviewCdpBrowserArguments(port) {
-  return `--remote-debugging-port=${port} --remote-allow-origins=*`;
+  return `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=${port} --remote-allow-origins=*`;
 }
 
-async function connectPipeTarget(target, port, connectClient, entry) {
-  const urls = ['localhost', '127.0.0.1', '[::1]'].map((host) =>
-    debuggerTargetUrl(target, port).replace('127.0.0.1', host)
+function debuggerPipeTargetId(target) {
+  if (typeof target?.id === 'string' && target.id) return target.id;
+  if (typeof target?.webSocketDebuggerUrl === 'string') {
+    const match = new URL(target.webSocketDebuggerUrl).pathname.match(/\/devtools\/page\/([^/]+)$/);
+    if (match?.[1]) return match[1];
+  }
+  throw new Error('Debugger pipe target did not identify a page');
+}
+
+function remainingTime(deadline, now) {
+  return Math.max(0, deadline - now());
+}
+
+async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient, options = {}) {
+  const {
+    timeoutMs = 15_000,
+    connectAttemptTimeoutMs = 1_500,
+    retryDelayMs = 100,
+    now = Date.now,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = options;
+  const deadline = now() + timeoutMs;
+  const childExit = prematureExit(session.child);
+  const pipeTarget = await withTimeout(
+    Promise.race([debuggerPipe.target, childExit]),
+    remainingTime(deadline, now),
+    `Timed out waiting for the debugger-pipe target on port ${port}`
   );
-  const handshakeErrors = [];
-  for (const webSocketDebuggerUrl of urls) {
+  const targetId = debuggerPipeTargetId(pipeTarget);
+  const failures = [];
+  session.entry.exactTargetFailures = failures;
+  while (remainingTime(deadline, now) > 0) {
+    const remaining = remainingTime(deadline, now);
     try {
-      return await withTimeout(
-        connectClient({ ...target, webSocketDebuggerUrl }),
-        4_500,
-        `CDP WebSocket handshake timed out for ${webSocketDebuggerUrl}`
+      const exactPage = await withTimeout(
+        Promise.race([pollEndpoint(port, remaining, targetId), childExit]),
+        remaining,
+        `Timed out polling CDP target ${targetId} on port ${port}`
       );
-    } catch (handshakeError) {
-      handshakeErrors.push(redactDiagnostic(handshakeError));
+      return await withTimeout(
+        Promise.race([connectClient(exactPage), childExit]),
+        Math.min(connectAttemptTimeoutMs, remainingTime(deadline, now)),
+        `Timed out connecting to CDP target ${targetId} on port ${port}`
+      );
+    } catch (error) {
+      if (error?.code === 'LIGHTFRAME_PREMATURE_EXIT') {
+        throw error;
+      }
+      failures.push(redactDiagnostic(error));
     }
-  }
-  entry.pipeHandshakeErrors = handshakeErrors;
-  throw new Error(`CDP pipe target handshakes failed: ${handshakeErrors.join(' | ')}`);
-}
 
-async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient) {
-  const endpointPage = pollEndpoint(port, 15_000);
-  const page = await Promise.race([
-    endpointPage,
-    debuggerPipe.target.then((target) => ({ pipeTarget: target })),
-    prematureExit(session.child),
-  ]);
-  if (!page.pipeTarget) return connectClient(page);
-
-  if (process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG === '1') {
-    return connectClient(await endpointPage);
+    const remainingAfterAttempt = remainingTime(deadline, now);
+    if (remainingAfterAttempt <= 0) break;
+    await Promise.race([wait(Math.min(retryDelayMs, remainingAfterAttempt)), childExit]);
   }
-
-  try {
-    return await connectPipeTarget(page.pipeTarget, port, connectClient, session.entry);
-  } catch (pipeError) {
-    try {
-      return await connectClient(await endpointPage);
-    } catch {
-      throw pipeError;
-    }
-  }
+  throw new Error(
+    `Timed out attaching to CDP target ${targetId} on port ${port}: ${failures.at(-1) ?? 'target unavailable'}`
+  );
 }
 
 function prematureExit(child) {
   return new Promise((_, reject) => {
-    child.once('error', (error) => reject(new Error(`LightFrame spawn failed: ${error.message}`)));
-    child.once('exit', (code, signal) =>
-      reject(new Error(`LightFrame exited before CDP attach (code=${code}, signal=${signal})`))
-    );
+    child.once('error', (error) => {
+      const failure = new Error(`LightFrame spawn failed: ${error.message}`);
+      failure.code = 'LIGHTFRAME_PREMATURE_EXIT';
+      reject(failure);
+    });
+    child.once('exit', (code, signal) => {
+      const failure = new Error(
+        `LightFrame exited before CDP attach (code=${code}, signal=${signal})`
+      );
+      failure.code = 'LIGHTFRAME_PREMATURE_EXIT';
+      reject(failure);
+    });
   });
 }
 
@@ -420,9 +443,15 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
     onOwned = () => undefined,
     terminateProcessTree = terminateOwnedProcessTree,
     waitForChildExit = waitForExit,
+    attachTimeoutMs,
+    connectAttemptTimeoutMs,
+    retryDelayMs,
+    now,
+    wait,
   } = dependencies;
   const configuredPort = Number.parseInt(process.env.LIGHTFRAME_E2E_CDP_PORT ?? '', 10);
   const port = configuredPort > 0 && configuredPort <= 65_535 ? configuredPort : await findPort();
+  const browserArgsInConfig = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG === '1';
   const executablePath = executable();
   const pipeName = `lightframe-e2e-${process.pid}-${Date.now()}`;
   const debuggerPipe = await createDebuggerPipe(basename(executablePath), pipeName);
@@ -437,7 +466,9 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
     TMP: paths.temp,
     WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,
     WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER: pipeName,
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: webviewCdpBrowserArguments(port),
+    ...(browserArgsInConfig
+      ? {}
+      : { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: webviewCdpBrowserArguments(port) }),
   };
   const child = spawnProcess(executablePath, args, {
     env: childEnv,
@@ -466,7 +497,13 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
   launchLogs.push(entry);
   onOwned(session);
   try {
-    session.cdp = await attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient);
+    session.cdp = await attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient, {
+      timeoutMs: attachTimeoutMs,
+      connectAttemptTimeoutMs,
+      retryDelayMs,
+      now,
+      wait,
+    });
     return session;
   } catch (error) {
     try {

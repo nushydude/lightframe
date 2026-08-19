@@ -15,6 +15,9 @@ import {
   removeSandboxDirectory,
 } from './windows-tauri-e2e.mjs';
 
+const expectedBrowserArgs =
+  '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=9555 --remote-allow-origins=*';
+
 function createChild({ exitCode = null, signalCode = null } = {}) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
@@ -52,7 +55,7 @@ test('launch terminates its owned child when CDP attachment fails', async () => 
           throw new Error('CDP unavailable');
         },
         createDebuggerPipe: async () => ({
-          target: new Promise(() => {}),
+          target: Promise.reject(new Error('CDP unavailable')),
           close: async () => {
             closePipeCalls += 1;
           },
@@ -85,7 +88,7 @@ test('launch does not kill an already-exited owned child after attach failure', 
           throw new Error('attach failed');
         },
         createDebuggerPipe: async () => ({
-          target: new Promise(() => {}),
+          target: Promise.reject(new Error('attach failed')),
           close: async () => undefined,
         }),
       }),
@@ -93,33 +96,85 @@ test('launch does not kill an already-exited owned child after attach failure', 
   );
 });
 
-test('launch falls back to the polled CDP endpoint after an early debugger-pipe target', async () => {
+test('launch ignores another page and retries the exact debugger-pipe target until it connects', async () => {
   const child = createChild({ exitCode: 0 });
-  const endpointPage = { webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/fallback' };
   const connectedPages = [];
-  let resolveEndpoint;
+  const endpointSnapshots = [
+    [{ type: 'page', id: 'other-page' }],
+    [
+      { type: 'page', id: 'other-page' },
+      {
+        type: 'page',
+        id: 'exact-target',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/exact-target',
+      },
+    ],
+    [
+      {
+        type: 'page',
+        id: 'exact-target',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/exact-target',
+      },
+    ],
+  ];
+  let exactPollCalls = 0;
 
   const session = await launch([], {}, [], {
     findPort: async () => 9222,
     executable: () => 'C:/LightFrame.exe',
     spawnProcess: () => child,
-    pollEndpoint: async () => new Promise((resolve) => (resolveEndpoint = resolve)),
+    pollEndpoint: async (port, timeoutMs, targetId) => {
+      assert.equal(port, 9222);
+      assert.ok(timeoutMs > 0);
+      assert.equal(targetId, 'exact-target');
+      const pages = endpointSnapshots[exactPollCalls++] ?? endpointSnapshots.at(-1);
+      const exactPage = pages.find((page) => page.id === targetId);
+      if (!exactPage) throw new Error('Only another CDP page is available');
+      return exactPage;
+    },
     createDebuggerPipe: async () => ({
-      target: Promise.resolve({ type: 'page', id: 'early-target' }),
+      target: Promise.resolve({ type: 'page', id: 'exact-target' }),
       close: async () => undefined,
     }),
     connectClient: async (page) => {
       connectedPages.push(page);
-      if (page.webSocketDebuggerUrl.includes('early-target')) {
-        if (connectedPages.length === 3) resolveEndpoint(endpointPage);
-        throw new Error('CDP port not ready yet');
-      }
+      if (connectedPages.length === 1) throw new Error('Exact target handshake not ready');
       return { socket: { close: () => undefined }, events: { console: [], exceptions: [] } };
     },
+    retryDelayMs: 0,
   });
 
   assert.equal(session.cdp.events.console.length, 0);
-  assert.equal(connectedPages.at(-1), endpointPage);
+  assert.equal(exactPollCalls, 3);
+  assert.equal(connectedPages.length, 2);
+  assert.ok(connectedPages.every((page) => page.id === 'exact-target'));
+});
+
+test('exact debugger-pipe target polling stops when the LightFrame child exits', async () => {
+  const child = createChild();
+
+  await assert.rejects(
+    () =>
+      launch([], {}, [], {
+        findPort: async () => 9222,
+        executable: () => 'C:/LightFrame.exe',
+        spawnProcess: () => child,
+        pollEndpoint: async (_port, _timeoutMs, targetId) => {
+          if (targetId === undefined) return new Promise(() => {});
+          queueMicrotask(() => {
+            child.exitCode = 9;
+            child.emit('exit', 9, null);
+          });
+          return new Promise(() => {});
+        },
+        createDebuggerPipe: async () => ({
+          target: Promise.resolve({ type: 'page', id: 'exact-target' }),
+          close: async () => undefined,
+        }),
+        attachTimeoutMs: 1_000,
+      }),
+    /LightFrame exited before CDP attach \(code=9, signal=null\)/
+  );
 });
 
 test('launch uses a valid configured CDP port and forwards it to WebView2', async () => {
@@ -146,7 +201,7 @@ test('launch uses a valid configured CDP port and forwards it to WebView2', asyn
         return { webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured' };
       },
       createDebuggerPipe: async () => ({
-        target: new Promise(() => {}),
+        target: Promise.resolve({ type: 'page', id: 'configured' }),
         close: async () => undefined,
       }),
       connectClient: async () => ({
@@ -161,7 +216,7 @@ test('launch uses a valid configured CDP port and forwards it to WebView2', asyn
 
   assert.equal(findPortCalls, 0);
   assert.equal(polledPort, 9555);
-  assert.match(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /9555/);
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, expectedBrowserArgs);
 });
 
 test('launch overwrites inherited WebView2 browser arguments with its selected CDP port', async () => {
@@ -183,7 +238,7 @@ test('launch overwrites inherited WebView2 browser arguments with its selected C
         webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured',
       }),
       createDebuggerPipe: async () => ({
-        target: new Promise(() => {}),
+        target: Promise.resolve({ type: 'page', id: 'configured' }),
         close: async () => undefined,
       }),
       connectClient: async () => ({
@@ -198,11 +253,51 @@ test('launch overwrites inherited WebView2 browser arguments with its selected C
     else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
   }
 
-  assert.equal(
-    spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS,
-    '--remote-debugging-port=9555 --remote-allow-origins=*'
-  );
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, expectedBrowserArgs);
   assert.doesNotMatch(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /stale/);
+});
+
+test('config mode removes inherited WebView2 browser arguments from the child environment', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const previousConfigMode = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
+  const previousBrowserArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+  const child = createChild({ exitCode: 0 });
+  let spawnedEnvironment;
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
+  process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = '1';
+  process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--inherited-stale-argument';
+
+  try {
+    await launch([], {}, [], {
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: (_path, _args, options) => {
+        spawnedEnvironment = options.env;
+        return child;
+      },
+      pollEndpoint: async () => ({
+        type: 'page',
+        id: 'configured',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured',
+      }),
+      createDebuggerPipe: async () => ({
+        target: Promise.resolve({ type: 'page', id: 'configured' }),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+    if (previousConfigMode === undefined) delete process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
+    else process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = previousConfigMode;
+    if (previousBrowserArgs === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+    else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
+  }
+
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, undefined);
 });
 
 test('launch ignores invalid configured CDP ports and uses the free-port provider', async () => {
@@ -221,7 +316,7 @@ test('launch ignores invalid configured CDP ports and uses the free-port provide
         return { webSocketDebuggerUrl: 'ws://127.0.0.1:9444/devtools/page/fallback' };
       },
       createDebuggerPipe: async () => ({
-        target: new Promise(() => {}),
+        target: Promise.resolve({ type: 'page', id: 'fallback' }),
         close: async () => undefined,
       }),
       connectClient: async () => ({
@@ -237,16 +332,29 @@ test('launch ignores invalid configured CDP ports and uses the free-port provide
   assert.deepEqual(selectedPorts, [9444]);
 });
 
-test('Windows CI E2E does not bake test-only WebView2 arguments into tauri config', async () => {
+test('Windows CI E2E builds with an isolated test config and preserves the production config', async () => {
   const workflow = await readFile(resolve(import.meta.dirname, '../../.github/workflows/ci.yml'), {
     encoding: 'utf8',
   });
 
-  assert.match(workflow, /pnpm tauri build --no-bundle --ci/);
+  assert.match(workflow, /LIGHTFRAME_E2E_TAURI_CONFIG/);
+  assert.match(workflow, /pnpm tauri build --no-bundle --ci --config/);
   assert.match(workflow, /pnpm run e2e:windows/);
-  assert.doesNotMatch(workflow, /additionalBrowserArgs/);
-  assert.doesNotMatch(workflow, /LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG/);
-  assert.doesNotMatch(workflow, /tauri\.conf\.json[\s\S]*remote-debugging-port/);
+  assert.match(workflow, /additionalBrowserArgs/);
+  assert.match(workflow, /LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG/);
+  assert.match(workflow, /RUNNER_TEMP[\s\S]*lightframe-tauri-e2e\.conf\.json/);
+  assert.match(workflow, /--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection/);
+  assert.match(workflow, /--autoplay-policy=no-user-gesture-required/);
+  assert.match(workflow, /--remote-debugging-port=\$cdpPort --remote-allow-origins=\*/);
+  assert.doesNotMatch(workflow, /Set-Content[^\r\n]*tauri\.conf\.json/);
+
+  const listenerStart = workflow.indexOf('$listener.Start()');
+  const build = workflow.indexOf('pnpm tauri build --no-bundle --ci --config');
+  const listenerStop = workflow.indexOf('$listener.Stop()');
+  const e2e = workflow.indexOf('pnpm run e2e:windows');
+  assert.ok(listenerStart < build, 'CDP port reservation must start before the build');
+  assert.ok(build < listenerStop, 'CDP port reservation must remain held throughout the build');
+  assert.ok(listenerStop < e2e, 'CDP port reservation must be released immediately before E2E');
 });
 
 test('owned process-tree termination failure is surfaced without killing another process', async () => {
@@ -299,7 +407,7 @@ test('attach failure retains its cause when owned process cleanup also fails', a
           throw new Error('CDP unavailable');
         },
         createDebuggerPipe: async () => ({
-          target: new Promise(() => {}),
+          target: Promise.reject(new Error('CDP unavailable')),
           close: async () => undefined,
         }),
         terminateProcessTree: async () => {
@@ -403,7 +511,7 @@ test('attach failure before launch returns still clears and verifies its sandbox
         throw new Error('CDP unavailable');
       },
       createDebuggerPipe: async () => ({
-        target: new Promise(() => {}),
+        target: Promise.reject(new Error('CDP unavailable')),
         close: async () => undefined,
       }),
       onOwned: (session) => {

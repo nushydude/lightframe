@@ -135,7 +135,7 @@ export function keyDispatchParams(key, type, modifiers = 0) {
   };
 }
 
-export async function pollCdpEndpoint(port, timeoutMs = 10_000) {
+export async function pollCdpEndpoint(port, timeoutMs = 10_000, targetId) {
   return waitForCondition(
     async () => {
       const pages = await Promise.any(
@@ -145,9 +145,19 @@ export async function pollCdpEndpoint(port, timeoutMs = 10_000) {
           return response.json();
         })
       );
-      return pages.find((page) => page.type === 'page') ?? null;
+      return (
+        pages.find(
+          (page) => page.type === 'page' && (targetId === undefined || page.id === targetId)
+        ) ?? null
+      );
     },
-    { timeoutMs, description: `CDP endpoint on port ${port}` }
+    {
+      timeoutMs,
+      description:
+        targetId === undefined
+          ? `CDP endpoint on port ${port}`
+          : `CDP target ${targetId} on port ${port}`,
+    }
   );
 }
 
