@@ -197,7 +197,12 @@ export function SettingsPanel() {
 
   return (
     <div className="settings-overlay" onClick={handleOverlayClick}>
-      <div className="settings-panel" role="dialog" aria-label="Settings">
+      <div
+        className="settings-panel"
+        data-testid="settings-dialog"
+        role="dialog"
+        aria-label="Settings"
+      >
         <div className="settings-header">
           <h2>Settings</h2>
           <button

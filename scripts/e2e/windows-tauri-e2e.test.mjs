@@ -91,6 +91,16 @@ test('folder startup readiness uses stable viewer state without coupling to an a
   assert.match(viewerChrome, /data-testid="viewer-rating"/);
 });
 
+test('shortcut dialog selectors match the production settings and command palette surfaces', async () => {
+  const [settingsPanel, commandPalette] = await Promise.all([
+    readFile(resolve(import.meta.dirname, '../../src/components/SettingsPanel.tsx'), 'utf8'),
+    readFile(resolve(import.meta.dirname, '../../src/components/CommandPalette.tsx'), 'utf8'),
+  ]);
+
+  assert.match(settingsPanel, /data-testid="settings-dialog"/);
+  assert.match(commandPalette, /data-testid="command-palette-dialog"/);
+});
+
 test('launch terminates its owned child when CDP attachment fails', async () => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();

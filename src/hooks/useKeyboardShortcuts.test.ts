@@ -88,6 +88,23 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.openCommandPalette).toHaveBeenCalledTimes(1);
   });
 
+  it('opens settings on Ctrl+,', () => {
+    renderHook(() => useKeyboardShortcuts(handlers));
+
+    const event = new KeyboardEvent('keydown', {
+      key: ',',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(useViewerStore.getState().showSettings).toBe(true);
+  });
+
   it('toggles performance telemetry on Ctrl+Shift+F12', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
 
