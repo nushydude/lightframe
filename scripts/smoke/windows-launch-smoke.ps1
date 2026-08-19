@@ -1,5 +1,6 @@
 param(
   [string]$ExePath = "src-tauri/target/release/lightframe.exe",
+  [string]$AppIdentifier = "com.lightframe.app",
   [int]$TimeoutSeconds = 45,
   [int]$WindowStablePolls = 2,
   [int]$RespondingGraceSeconds = 5,
@@ -53,7 +54,7 @@ if ($existing.Count -gt 0 -and -not $AllowExistingLightFrame) {
   throw "LightFrame is already running (PID $ids). Close it or rerun with -AllowExistingLightFrame."
 }
 
-$appConfigDir = Join-Path $env:APPDATA "com.lightframe.app"
+$appConfigDir = Join-Path $env:APPDATA $AppIdentifier
 $settingsPath = Join-Path $appConfigDir "settings.json"
 $backupPath = $null
 $hadSettings = Test-Path -LiteralPath $settingsPath

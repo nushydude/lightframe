@@ -22,6 +22,13 @@ test('Windows smoke runner keeps a CI-friendly startup wait and late-window grac
   assert.match(source, /\$stableWindowPolls -lt \$WindowStablePolls/);
 });
 
+test('Windows smoke runner uses the supplied app identifier for its config directory', async () => {
+  const source = await smokeSource();
+
+  assert.match(source, /\[string\]\$AppIdentifier = "com\.lightframe\.app"/);
+  assert.match(source, /\$appConfigDir = Join-Path \$env:APPDATA \$AppIdentifier/);
+});
+
 test('Windows smoke runner preserves process, crash, and settings cleanup safeguards', async () => {
   const source = await smokeSource();
 

@@ -459,9 +459,13 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
   delete baseEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
   const childEnv = {
     ...baseEnv,
-    APPDATA: paths.appData,
-    LOCALAPPDATA: paths.localAppData,
-    USERPROFILE: paths.userProfile,
+    ...(browserArgsInConfig
+      ? {}
+      : {
+          APPDATA: paths.appData,
+          LOCALAPPDATA: paths.localAppData,
+          USERPROFILE: paths.userProfile,
+        }),
     TEMP: paths.temp,
     TMP: paths.temp,
     WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,

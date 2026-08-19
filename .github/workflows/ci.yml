@@ -200,6 +200,7 @@ jobs:
             $configPath = Join-Path $env:RUNNER_TEMP 'lightframe-tauri-e2e.conf.json'
             $browserArgs = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=$cdpPort --remote-allow-origins=*"
             $config = Get-Content -Raw './src-tauri/tauri.conf.json' | ConvertFrom-Json
+            $config.identifier = 'com.lightframe.e2e'
             foreach ($window in $config.app.windows) {
               $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue $browserArgs -Force
             }
@@ -221,7 +222,7 @@ jobs:
 
       - name: Smoke test packaged startup
         shell: pwsh
-        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
+        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -AppIdentifier com.lightframe.e2e -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
 
       - name: Upload Windows E2E diagnostics
         if: always()

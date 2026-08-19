@@ -257,15 +257,21 @@ test('launch overwrites inherited WebView2 browser arguments with its selected C
   assert.doesNotMatch(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /stale/);
 });
 
-test('config mode removes inherited WebView2 browser arguments from the child environment', async () => {
+test('config mode removes inherited browser arguments and preserves the Windows profile', async () => {
   const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
   const previousConfigMode = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
   const previousBrowserArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+  const previousAppData = process.env.APPDATA;
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousUserProfile = process.env.USERPROFILE;
   const child = createChild({ exitCode: 0 });
   let spawnedEnvironment;
   process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
   process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = '1';
   process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--inherited-stale-argument';
+  process.env.APPDATA = 'C:\\Users\\runneradmin\\AppData\\Roaming';
+  process.env.LOCALAPPDATA = 'C:\\Users\\runneradmin\\AppData\\Local';
+  process.env.USERPROFILE = 'C:\\Users\\runneradmin';
 
   try {
     await launch([], {}, [], {
@@ -295,9 +301,18 @@ test('config mode removes inherited WebView2 browser arguments from the child en
     else process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = previousConfigMode;
     if (previousBrowserArgs === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
     else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
+    if (previousAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = previousAppData;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
   }
 
   assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, undefined);
+  assert.equal(spawnedEnvironment.APPDATA, 'C:\\Users\\runneradmin\\AppData\\Roaming');
+  assert.equal(spawnedEnvironment.LOCALAPPDATA, 'C:\\Users\\runneradmin\\AppData\\Local');
+  assert.equal(spawnedEnvironment.USERPROFILE, 'C:\\Users\\runneradmin');
 });
 
 test('launch ignores invalid configured CDP ports and uses the free-port provider', async () => {
@@ -355,6 +370,13 @@ test('Windows CI E2E builds with an isolated test config and preserves the produ
   assert.ok(listenerStart < build, 'CDP port reservation must start before the build');
   assert.ok(build < listenerStop, 'CDP port reservation must remain held throughout the build');
   assert.ok(listenerStop < e2e, 'CDP port reservation must be released immediately before E2E');
+
+  const buildIdentifier = workflow.match(/\$config\.identifier = '([^']+)'/)?.[1];
+  const smokeIdentifier = workflow.match(
+    /windows-launch-smoke\.ps1[^\r\n]*-AppIdentifier ([\w.]+)/
+  )?.[1];
+  assert.equal(buildIdentifier, 'com.lightframe.e2e');
+  assert.equal(smokeIdentifier, buildIdentifier);
 });
 
 test('Tauri CSP permits the native IPC transports used during startup', async () => {
