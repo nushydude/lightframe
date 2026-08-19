@@ -24,8 +24,8 @@ const root = resolve(import.meta.dirname, '../..');
 const artifacts = join(root, 'artifacts', 'windows-e2e');
 const exe =
   process.env.LIGHTFRAME_E2E_EXE ?? join(root, 'src-tauri', 'target', 'release', 'lightframe.exe');
-const png = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLgiQAAAABJRU5ErkJggg==',
+export const fixturePng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z/D/PwAG/gL+DHWJ3gAAAABJRU5ErkJggg==',
   'base64'
 );
 export const redactDiagnostic = (value) =>
@@ -724,7 +724,7 @@ export async function main() {
     );
     await Promise.all(
       [1, 2, 3, 4].map((index) =>
-        writeFile(join(fixture, `demo-${String(index).padStart(2, '0')}.png`), png)
+        writeFile(join(fixture, `demo-${String(index).padStart(2, '0')}.png`), fixturePng)
       )
     );
     session = await launch([], paths, result.launches, { onOwned });

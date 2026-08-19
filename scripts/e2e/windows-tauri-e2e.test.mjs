@@ -3,11 +3,13 @@ import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { inflateSync } from 'node:zlib';
 import {
   cleanupHarness,
   closeOwnedSession,
   failureConsoleMessage,
   finalizeHarness,
+  fixturePng,
   launch,
   monitorImageDisplayBanners,
   redactedFailureReport,
@@ -18,6 +20,17 @@ import {
 const expectedBrowserArgs =
   '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=9555 --remote-allow-origins=*';
 
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function createChild({ exitCode = null, signalCode = null } = {}) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
@@ -26,6 +39,39 @@ function createChild({ exitCode = null, signalCode = null } = {}) {
   child.signalCode = signalCode;
   return child;
 }
+
+test('generated folder fixture is a valid decodable RGBA PNG', () => {
+  assert.deepEqual(fixturePng.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+  const chunkTypes = [];
+  const imageData = [];
+  let imageHeader;
+  let offset = 8;
+  while (offset < fixturePng.length) {
+    const length = fixturePng.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = typeStart + 4;
+    const crcOffset = dataStart + length;
+    const nextOffset = crcOffset + 4;
+    assert.ok(nextOffset <= fixturePng.length, 'PNG chunk must fit within the fixture');
+
+    const type = fixturePng.toString('ascii', typeStart, dataStart);
+    const data = fixturePng.subarray(dataStart, crcOffset);
+    assert.equal(
+      fixturePng.readUInt32BE(crcOffset),
+      crc32(fixturePng.subarray(typeStart, crcOffset)),
+      `${type} chunk CRC`
+    );
+    chunkTypes.push(type);
+    if (type === 'IHDR') imageHeader = data;
+    if (type === 'IDAT') imageData.push(data);
+    offset = nextOffset;
+  }
+
+  assert.deepEqual(chunkTypes, ['IHDR', 'IDAT', 'IEND']);
+  assert.deepEqual(imageHeader, Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
+  assert.deepEqual(inflateSync(Buffer.concat(imageData)), Buffer.from([0, 255, 0, 255, 255]));
+});
 
 test('launch terminates its owned child when CDP attachment fails', async () => {
   const child = new EventEmitter();
