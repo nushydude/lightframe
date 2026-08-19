@@ -162,16 +162,17 @@ export async function pollCdpEndpoint(port, timeoutMs = 10_000, targetId) {
 }
 
 export class CdpClient {
-  constructor(webSocketUrl, { timeoutMs = 10_000 } = {}) {
+  constructor(webSocketUrl, { timeoutMs = 10_000, WebSocketImpl = WebSocket } = {}) {
     this.webSocketUrl = webSocketUrl;
     this.timeoutMs = timeoutMs;
+    this.WebSocketImpl = WebSocketImpl;
     this.nextId = 1;
     this.pending = new Map();
     this.events = { console: [], exceptions: [] };
   }
 
   async connect() {
-    this.socket = new WebSocket(this.webSocketUrl);
+    this.socket = new this.WebSocketImpl(this.webSocketUrl);
     await new Promise((resolve, reject) => {
       this.socket.addEventListener('open', resolve, { once: true });
       this.socket.addEventListener(
@@ -186,6 +187,7 @@ export class CdpClient {
       );
     });
     this.socket.addEventListener('message', (event) => this.#handle(JSON.parse(event.data)));
+    await this.command('Runtime.runIfWaitingForDebugger');
     await Promise.all([
       this.command('Runtime.enable'),
       this.command('Page.enable'),
