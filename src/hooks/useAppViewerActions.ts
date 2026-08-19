@@ -3,6 +3,7 @@ import { getRuntime } from '../services/runtime/runtime';
 import type { RuntimeWindow } from '../services/runtime/types';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { CurationFilter } from '../services/curationFilter';
+import type { FolderSessionSnapshot } from '../services/tauriCommands';
 import { createViewerCommands, type ViewerCommand } from '../services/commandRegistry';
 import {
   closeSecondaryWindow,
@@ -29,7 +30,10 @@ type AppViewerActionsOptions = {
   isFullscreen: boolean;
   isSecondary: boolean;
   isProjectorOpen: boolean;
-  openFolder: (folderPath: string, options?: { curationFilter?: CurationFilter }) => Promise<void>;
+  applyFolderSessionSnapshot: (
+    session: FolderSessionSnapshot,
+    options?: { curationFilter?: CurationFilter }
+  ) => Promise<unknown>;
   openFilePicker: () => Promise<void>;
   openFolderPicker: () => Promise<void>;
   goNext: () => boolean;
@@ -125,7 +129,7 @@ export function useAppViewerActions({
   isFullscreen,
   isSecondary,
   isProjectorOpen,
-  openFolder,
+  applyFolderSessionSnapshot,
   openFilePicker,
   openFolderPicker,
   goNext,
@@ -171,10 +175,10 @@ export function useAppViewerActions({
 
   const handleOpenRecentFolder = useCallback(
     async (folderPath: string, filter: CurationFilter = 'all') => {
-      await openRecentFolderSession(folderPath);
-      await openFolder(folderPath, { curationFilter: filter });
+      const session = await openRecentFolderSession(folderPath);
+      await applyFolderSessionSnapshot(session, { curationFilter: filter });
     },
-    [openFolder]
+    [applyFolderSessionSnapshot]
   );
 
   const handleToggleFullscreen = useCallback(

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 import {
   assertEqual,
+  CdpClient,
   debuggerTargetUrl,
   fatalCdpEvents,
   keyChord,
@@ -9,6 +10,41 @@ import {
   parseDebuggerTargetPayload,
   waitForCondition,
 } from './cdp-client.mjs';
+
+test('CDP resumes a debugger-paused page before enabling domains', async () => {
+  const messages = [];
+
+  class FakeWebSocket extends EventTarget {
+    constructor(url) {
+      super();
+      assert.equal(url, 'ws://127.0.0.1:9222/devtools/page/target');
+      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+    }
+
+    send(payload) {
+      const message = JSON.parse(payload);
+      messages.push(message);
+      queueMicrotask(() => {
+        const event = new Event('message');
+        Object.defineProperty(event, 'data', {
+          value: JSON.stringify({ id: message.id, result: {} }),
+        });
+        this.dispatchEvent(event);
+      });
+    }
+  }
+
+  await new CdpClient('ws://127.0.0.1:9222/devtools/page/target', {
+    WebSocketImpl: FakeWebSocket,
+  }).connect();
+
+  assert.deepEqual(messages, [
+    { id: 1, method: 'Runtime.runIfWaitingForDebugger', params: {} },
+    { id: 2, method: 'Runtime.enable', params: {} },
+    { id: 3, method: 'Page.enable', params: {} },
+    { id: 4, method: 'Log.enable', params: {} },
+  ]);
+});
 
 test('waitForCondition resolves once a condition becomes true', async () => {
   let attempts = 0;
@@ -66,6 +102,30 @@ test('fatalCdpEvents excludes informational console events', () => {
       exceptions: [],
     }).length,
     1
+  );
+});
+
+test('fatalCdpEvents ignores only the known stale legacy asset scheme network warning', () => {
+  const knownWarning = {
+    source: 'network',
+    level: 'error',
+    text: 'Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME',
+    url: 'lightframe-asset://session_1/img_1?deliveryId=delivery_1',
+  };
+  const unrelatedUrl = { ...knownWarning, url: 'custom-asset://session_1/img_1' };
+  const unrelatedNetworkError = {
+    ...knownWarning,
+    text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED',
+  };
+  const applicationConsoleError = { ...knownWarning, source: 'javascript' };
+  const exception = { exceptionDetails: { text: 'Uncaught' } };
+
+  assert.deepEqual(
+    fatalCdpEvents({
+      console: [knownWarning, unrelatedUrl, unrelatedNetworkError, applicationConsoleError],
+      exceptions: [exception],
+    }),
+    [exception, unrelatedUrl, unrelatedNetworkError, applicationConsoleError]
   );
 });
 

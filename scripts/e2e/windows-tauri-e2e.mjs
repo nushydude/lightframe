@@ -9,7 +9,6 @@ import {
   click,
   close,
   createDebuggerPipeServer,
-  debuggerTargetUrl,
   evaluate,
   fatalCdpEvents,
   getFreePort,
@@ -25,8 +24,8 @@ const root = resolve(import.meta.dirname, '../..');
 const artifacts = join(root, 'artifacts', 'windows-e2e');
 const exe =
   process.env.LIGHTFRAME_E2E_EXE ?? join(root, 'src-tauri', 'target', 'release', 'lightframe.exe');
-const png = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLgiQAAAABJRU5ErkJggg==',
+export const fixturePng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z/D/PwAG/gL+DHWJ3gAAAABJRU5ErkJggg==',
   'base64'
 );
 export const redactDiagnostic = (value) =>
@@ -54,6 +53,89 @@ const viewerState = (cdp) =>
     cdp,
     '({ name: document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim(), index: document.querySelector("[data-testid=viewer-index]")?.dataset.index })'
   );
+const imageDisplayBannerMonitorKey = '__lightframeImageDisplayBannerMonitor';
+const installImageDisplayBannerMonitorExpression = `(() => {
+  const key = ${JSON.stringify(imageDisplayBannerMonitorKey)};
+  window[key]?.disconnect?.();
+  const hits = [];
+  const record = () => {
+    const banners = Array.from(document.querySelectorAll("[role=alert], .error-banner"))
+      .map((node) => node.textContent?.trim() || "")
+      .filter((text) => text.includes("Could not display image"));
+    for (const banner of banners) hits.push(banner);
+  };
+  const observer = new MutationObserver(record);
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+  record();
+  window[key] = {
+    disconnect: () => {
+      observer.disconnect();
+      record();
+      return hits.slice();
+    },
+  };
+  return true;
+})()`;
+const collectImageDisplayBannerMonitorExpression = `(() => {
+  const monitor = window[${JSON.stringify(imageDisplayBannerMonitorKey)}];
+  if (!monitor) return [];
+  const hits = monitor.disconnect();
+  delete window[${JSON.stringify(imageDisplayBannerMonitorKey)}];
+  return hits;
+})()`;
+export const folderStartupImageExpression = `(() => {
+  const filename = document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim();
+  const index = document.querySelector("[data-testid=viewer-index]");
+  const image = document.querySelector(".image-canvas img");
+  return (
+    filename === "demo-01.png" &&
+    index?.dataset.index === "1" &&
+    index?.dataset.total === "4" &&
+    Boolean(image) &&
+    image.complete === true &&
+    image.naturalWidth > 0 &&
+    !image.classList.contains("loading")
+  );
+})()`;
+const finalRapidNavigationImageExpression = `new Promise((resolve) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const filename = document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim();
+    const index = document.querySelector("[data-testid=viewer-index]")?.dataset.index;
+    const total = document.querySelector("[data-testid=viewer-index]")?.dataset.total;
+    const image = document.querySelector(".image-canvas img");
+    resolve(
+      filename === "demo-01.png" &&
+        index === "1" &&
+        total === "4" &&
+        Boolean(image) &&
+        image.complete === true &&
+        image.naturalWidth > 0 &&
+        !image.classList.contains("loading")
+    );
+  }));
+})`;
+
+export async function monitorImageDisplayBanners(cdp, during, dependencies = {}) {
+  const {
+    evaluatePage = evaluate,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    postSettleMs = 1_000,
+  } = dependencies;
+  await evaluatePage(cdp, installImageDisplayBannerMonitorExpression);
+
+  try {
+    const result = await during();
+    await wait(postSettleMs);
+    const hits = await evaluatePage(cdp, collectImageDisplayBannerMonitorExpression);
+    return { result, hits };
+  } finally {
+    await evaluatePage(cdp, collectImageDisplayBannerMonitorExpression).catch(() => undefined);
+  }
+}
 
 function recordJourney(result, journey) {
   result.journeys.push(journey);
@@ -265,43 +347,84 @@ function timedOutExit(child) {
   };
 }
 
-async function connectPipeTarget(target, port, connectClient, entry) {
-  const urls = ['localhost', '127.0.0.1', '[::1]'].map((host) =>
-    debuggerTargetUrl(target, port).replace('127.0.0.1', host)
-  );
-  const handshakeErrors = [];
-  for (const webSocketDebuggerUrl of urls) {
-    try {
-      return await withTimeout(
-        connectClient({ ...target, webSocketDebuggerUrl }),
-        4_500,
-        `CDP WebSocket handshake timed out for ${webSocketDebuggerUrl}`
-      );
-    } catch (handshakeError) {
-      handshakeErrors.push(redactDiagnostic(handshakeError));
-    }
-  }
-  entry.pipeHandshakeErrors = handshakeErrors;
-  throw new Error(`CDP pipe target handshakes failed: ${handshakeErrors.join(' | ')}`);
+function webviewCdpBrowserArguments(port) {
+  return `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=${port} --remote-allow-origins=*`;
 }
 
-async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient) {
-  const page = await Promise.race([
-    pollEndpoint(port, 15_000),
-    debuggerPipe.target.then((target) => ({ pipeTarget: target })),
-    prematureExit(session.child),
-  ]);
-  return page.pipeTarget
-    ? connectPipeTarget(page.pipeTarget, port, connectClient, session.entry)
-    : connectClient(page);
+function debuggerPipeTargetId(target) {
+  if (typeof target?.id === 'string' && target.id) return target.id;
+  if (typeof target?.webSocketDebuggerUrl === 'string') {
+    const match = new URL(target.webSocketDebuggerUrl).pathname.match(/\/devtools\/page\/([^/]+)$/);
+    if (match?.[1]) return match[1];
+  }
+  throw new Error('Debugger pipe target did not identify a page');
+}
+
+function remainingTime(deadline, now) {
+  return Math.max(0, deadline - now());
+}
+
+async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient, options = {}) {
+  const {
+    timeoutMs = 15_000,
+    connectAttemptTimeoutMs = 1_500,
+    retryDelayMs = 100,
+    now = Date.now,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = options;
+  const deadline = now() + timeoutMs;
+  const childExit = prematureExit(session.child);
+  const pipeTarget = await withTimeout(
+    Promise.race([debuggerPipe.target, childExit]),
+    remainingTime(deadline, now),
+    `Timed out waiting for the debugger-pipe target on port ${port}`
+  );
+  const targetId = debuggerPipeTargetId(pipeTarget);
+  const failures = [];
+  session.entry.exactTargetFailures = failures;
+  while (remainingTime(deadline, now) > 0) {
+    const remaining = remainingTime(deadline, now);
+    try {
+      const exactPage = await withTimeout(
+        Promise.race([pollEndpoint(port, remaining, targetId), childExit]),
+        remaining,
+        `Timed out polling CDP target ${targetId} on port ${port}`
+      );
+      return await withTimeout(
+        Promise.race([connectClient(exactPage), childExit]),
+        Math.min(connectAttemptTimeoutMs, remainingTime(deadline, now)),
+        `Timed out connecting to CDP target ${targetId} on port ${port}`
+      );
+    } catch (error) {
+      if (error?.code === 'LIGHTFRAME_PREMATURE_EXIT') {
+        throw error;
+      }
+      failures.push(redactDiagnostic(error));
+    }
+
+    const remainingAfterAttempt = remainingTime(deadline, now);
+    if (remainingAfterAttempt <= 0) break;
+    await Promise.race([wait(Math.min(retryDelayMs, remainingAfterAttempt)), childExit]);
+  }
+  throw new Error(
+    `Timed out attaching to CDP target ${targetId} on port ${port}: ${failures.at(-1) ?? 'target unavailable'}`
+  );
 }
 
 function prematureExit(child) {
   return new Promise((_, reject) => {
-    child.once('error', (error) => reject(new Error(`LightFrame spawn failed: ${error.message}`)));
-    child.once('exit', (code, signal) =>
-      reject(new Error(`LightFrame exited before CDP attach (code=${code}, signal=${signal})`))
-    );
+    child.once('error', (error) => {
+      const failure = new Error(`LightFrame spawn failed: ${error.message}`);
+      failure.code = 'LIGHTFRAME_PREMATURE_EXIT';
+      reject(failure);
+    });
+    child.once('exit', (code, signal) => {
+      const failure = new Error(
+        `LightFrame exited before CDP attach (code=${code}, signal=${signal})`
+      );
+      failure.code = 'LIGHTFRAME_PREMATURE_EXIT';
+      reject(failure);
+    });
   });
 }
 
@@ -334,23 +457,39 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
     onOwned = () => undefined,
     terminateProcessTree = terminateOwnedProcessTree,
     waitForChildExit = waitForExit,
+    attachTimeoutMs,
+    connectAttemptTimeoutMs,
+    retryDelayMs,
+    now,
+    wait,
   } = dependencies;
-  const port = await findPort();
+  const configuredPort = Number.parseInt(process.env.LIGHTFRAME_E2E_CDP_PORT ?? '', 10);
+  const port = configuredPort > 0 && configuredPort <= 65_535 ? configuredPort : await findPort();
+  const browserArgsInConfig = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG === '1';
   const executablePath = executable();
   const pipeName = `lightframe-e2e-${process.pid}-${Date.now()}`;
   const debuggerPipe = await createDebuggerPipe(basename(executablePath), pipeName);
+  const baseEnv = { ...process.env };
+  delete baseEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+  const childEnv = {
+    ...baseEnv,
+    ...(browserArgsInConfig
+      ? {}
+      : {
+          APPDATA: paths.appData,
+          LOCALAPPDATA: paths.localAppData,
+          USERPROFILE: paths.userProfile,
+        }),
+    TEMP: paths.temp,
+    TMP: paths.temp,
+    WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,
+    WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER: pipeName,
+    ...(browserArgsInConfig
+      ? {}
+      : { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: webviewCdpBrowserArguments(port) }),
+  };
   const child = spawnProcess(executablePath, args, {
-    env: {
-      ...process.env,
-      APPDATA: paths.appData,
-      LOCALAPPDATA: paths.localAppData,
-      USERPROFILE: paths.userProfile,
-      TEMP: paths.temp,
-      TMP: paths.temp,
-      WEBVIEW2_USER_DATA_FOLDER: paths.webviewUserData,
-      WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER: pipeName,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --remote-allow-origins=*`,
-    },
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logs = '';
@@ -376,7 +515,13 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
   launchLogs.push(entry);
   onOwned(session);
   try {
-    session.cdp = await attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient);
+    session.cdp = await attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient, {
+      timeoutMs: attachTimeoutMs,
+      connectAttemptTimeoutMs,
+      retryDelayMs,
+      now,
+      wait,
+    });
     return session;
   } catch (error) {
     try {
@@ -391,18 +536,28 @@ export async function launch(args, paths, launchLogs, dependencies = {}) {
 }
 
 async function runHomeStartup(session, result) {
-  await waitForSelector(session.cdp, '[data-testid="native-app-root"][data-runtime-ready="true"]');
-  await waitForSelector(session.cdp, '[data-testid="home-screen"]');
+  const startupWait = { timeoutMs: 30_000 };
+  await waitForSelector(
+    session.cdp,
+    '[data-testid="native-app-root"][data-runtime-ready="true"]',
+    startupWait
+  );
+  await waitForSelector(session.cdp, '[data-testid="home-screen"]', startupWait);
   recordJourney(result, { name: 'home', status: 'passed' });
   if (fatalCdpEvents(session.cdp.events).length) throw new Error('CDP error after home journey');
 }
 
 async function runFolderStartup(session, result) {
-  await waitForSelector(session.cdp, '[data-testid="native-app-root"][data-runtime-ready="true"]');
-  await waitForExpression(
+  const startupWait = { timeoutMs: 30_000 };
+  await waitForSelector(
     session.cdp,
-    'document.querySelector("[data-testid=viewer-index]")?.dataset.total === "4"'
+    '[data-testid="native-app-root"][data-runtime-ready="true"]',
+    startupWait
   );
+  await waitForExpression(session.cdp, folderStartupImageExpression, {
+    ...startupWait,
+    description: 'initial folder image to render',
+  });
   const state = await viewerState(session.cdp);
   if (state.name !== 'demo-01.png' || state.index !== '1')
     throw new Error(`Unexpected startup selection: ${JSON.stringify(state)}`);
@@ -437,6 +592,27 @@ async function runNavigationGrid(session, result) {
   await keyChord(session.cdp, ['g']);
   await waitForSelector(session.cdp, '[data-testid="viewer-index"]');
   recordJourney(result, { name: 'navigation-grid', status: 'passed' });
+}
+
+async function runRapidOverlappingNavigation(session, result) {
+  await waitForSelector(session.cdp, '[data-testid="viewer-index"]');
+  const { hits } = await monitorImageDisplayBanners(session.cdp, async () => {
+    const navigationBursts = [
+      ...Array.from({ length: 8 }, () => keyChord(session.cdp, ['ArrowRight'])),
+      ...Array.from({ length: 8 }, () => keyChord(session.cdp, ['ArrowLeft'])),
+    ];
+    await Promise.all(navigationBursts);
+    await waitForExpression(session.cdp, finalRapidNavigationImageExpression, {
+      description: 'settled rapid-navigation final image',
+    });
+  });
+  if (hits.length) {
+    throw new Error(`Unexpected image display banner during rapid navigation: ${hits.join(' | ')}`);
+  }
+  const state = await viewerState(session.cdp);
+  assertEqual(state.name, 'demo-01.png', 'rapid navigation final filename');
+  assertEqual(state.index, '1', 'rapid navigation final index');
+  recordJourney(result, { name: 'rapid-overlapping-navigation', status: 'passed', state });
 }
 
 async function runCuration(session) {
@@ -486,22 +662,44 @@ async function runShortcutDialogs(session, result) {
 async function captureFailureArtifacts(session, result) {
   const captureErrors = [];
   const files = [];
-  try {
-    if (session?.cdp) {
-      await writeFile(join(artifacts, 'failure.html'), redactDiagnostic(await html(session.cdp)));
-      files.push('failure.html');
-      await writeFile(
-        join(artifacts, 'failure.png'),
-        Buffer.from(await screenshot(session.cdp), 'base64')
-      );
-      files.push('failure.png');
-      await writeFile(
+  const capture = async (name, action) => {
+    try {
+      await action();
+      files.push(name);
+    } catch (captureError) {
+      captureErrors.push(`${name}: ${redactDiagnostic(captureError)}`);
+    }
+  };
+  if (session?.cdp) {
+    await capture('cdp-events.json', () =>
+      writeFile(
         join(artifacts, 'cdp-events.json'),
         JSON.stringify(redactDiagnostics(session.cdp.events), null, 2)
+      )
+    );
+    await capture('page-state.json', async () => {
+      const state = await session.cdp.command('Runtime.evaluate', {
+        expression:
+          'JSON.stringify({href: location.href, readyState: document.readyState, title: document.title, html: document.documentElement?.outerHTML ?? null})',
+        returnByValue: true,
+      });
+      await writeFile(
+        join(artifacts, 'page-state.json'),
+        redactDiagnostic(state.result?.value ?? JSON.stringify(state))
       );
-      files.push('cdp-events.json');
-    }
-    await writeFile(
+    });
+    await capture('failure.html', async () =>
+      writeFile(join(artifacts, 'failure.html'), redactDiagnostic(await html(session.cdp)))
+    );
+    await capture('failure.png', async () =>
+      writeFile(
+        join(artifacts, 'failure.png'),
+        Buffer.from(await screenshot(session.cdp), 'base64')
+      )
+    );
+  }
+  await capture('launch-logs.json', () =>
+    writeFile(
       join(artifacts, 'launch-logs.json'),
       JSON.stringify(
         redactDiagnostics(
@@ -510,11 +708,8 @@ async function captureFailureArtifacts(session, result) {
         null,
         2
       )
-    );
-    files.push('launch-logs.json');
-  } catch (captureError) {
-    captureErrors.push(redactDiagnostic(captureError));
-  }
+    )
+  );
   return { captureErrors, files };
 }
 
@@ -548,7 +743,7 @@ export async function main() {
     );
     await Promise.all(
       [1, 2, 3, 4].map((index) =>
-        writeFile(join(fixture, `demo-${String(index).padStart(2, '0')}.png`), png)
+        writeFile(join(fixture, `demo-${String(index).padStart(2, '0')}.png`), fixturePng)
       )
     );
     session = await launch([], paths, result.launches, { onOwned });
@@ -558,6 +753,7 @@ export async function main() {
     session = await launch(['--folder', fixture], paths, result.launches, { onOwned });
     await runFolderStartup(session, result);
     await runNavigationGrid(session, result);
+    await runRapidOverlappingNavigation(session, result);
     await runCuration(session);
     await closeOwnedSession(session);
     session = undefined;

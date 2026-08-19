@@ -58,6 +58,7 @@ const REGISTERED_COMMANDS: &[(&str, CommandPolicy)] = &[
     ("get_image_metadata_by_id", CommandPolicy::AuthorizedMediaReader),
     ("get_image_tile_by_id", CommandPolicy::AuthorizedMediaReader),
     ("read_folder_index_by_session", CommandPolicy::MainOnly),
+    ("refresh_folder_index_by_session", CommandPolicy::MainOnly),
     ("watch_folder_by_session", CommandPolicy::MainOnly),
     ("unwatch_folder_by_session", CommandPolicy::MainOnly),
     ("get_image_caption_by_id", CommandPolicy::MainOnly),
@@ -443,8 +444,8 @@ async fn update_recent_folders_jump_list(
     app: tauri::AppHandle,
 ) -> Result<Vec<String>, String> {
     commands::enforce_main_window(&window)?;
-    let recent_folders = commands::settings_commands::trusted_recent_folders(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let recent_folders = commands::settings_commands::trusted_recent_folders(&app)?;
         windows_jump_list::update_recent_folders_jump_list(recent_folders)
     })
     .await
@@ -707,6 +708,7 @@ pub fn run() {
             commands::get_image_metadata_by_id,
             commands::get_image_tile_by_id,
             commands::read_folder_index_by_session,
+            commands::refresh_folder_index_by_session,
             folder_watcher::watch_folder_by_session,
             folder_watcher::unwatch_folder_by_session,
             commands::get_image_caption_by_id,

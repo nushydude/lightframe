@@ -77,7 +77,8 @@ export function useAppRuntimeLifecycle({
 }) {
   const {
     openImage,
-    openImageForStartup,
+    applyFolderSessionSnapshot,
+    applyFileSessionSnapshot,
     openFolder,
     openFilePicker,
     openFolderPicker,
@@ -140,7 +141,8 @@ export function useAppRuntimeLifecycle({
     syncFavoriteFilter,
     loadSettings,
     loadCuration,
-    openImageForStartup,
+    applyFolderSessionSnapshot,
+    applyFileSessionSnapshot,
     setError,
     updateSettings,
     isSecondary,
@@ -151,7 +153,7 @@ export function useAppRuntimeLifecycle({
     isFullscreen,
     isSecondary,
     isProjectorOpen,
-    openFolder,
+    applyFolderSessionSnapshot,
     openFilePicker,
     openFolderPicker,
     goNext: () => goNext(),

@@ -1,16 +1,36 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import test from 'node:test';
+import { inflateSync } from 'node:zlib';
 import {
   cleanupHarness,
   closeOwnedSession,
   failureConsoleMessage,
   finalizeHarness,
+  fixturePng,
+  folderStartupImageExpression,
   launch,
+  monitorImageDisplayBanners,
   redactedFailureReport,
   redactDiagnostic,
   removeSandboxDirectory,
 } from './windows-tauri-e2e.mjs';
+
+const expectedBrowserArgs =
+  '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=9555 --remote-allow-origins=*';
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
 
 function createChild({ exitCode = null, signalCode = null } = {}) {
   const child = new EventEmitter();
@@ -20,6 +40,66 @@ function createChild({ exitCode = null, signalCode = null } = {}) {
   child.signalCode = signalCode;
   return child;
 }
+
+test('generated folder fixture is a valid decodable RGBA PNG', () => {
+  assert.deepEqual(fixturePng.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+  const chunkTypes = [];
+  const imageData = [];
+  let imageHeader;
+  let offset = 8;
+  while (offset < fixturePng.length) {
+    const length = fixturePng.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = typeStart + 4;
+    const crcOffset = dataStart + length;
+    const nextOffset = crcOffset + 4;
+    assert.ok(nextOffset <= fixturePng.length, 'PNG chunk must fit within the fixture');
+
+    const type = fixturePng.toString('ascii', typeStart, dataStart);
+    const data = fixturePng.subarray(dataStart, crcOffset);
+    assert.equal(
+      fixturePng.readUInt32BE(crcOffset),
+      crc32(fixturePng.subarray(typeStart, crcOffset)),
+      `${type} chunk CRC`
+    );
+    chunkTypes.push(type);
+    if (type === 'IHDR') imageHeader = data;
+    if (type === 'IDAT') imageData.push(data);
+    offset = nextOffset;
+  }
+
+  assert.deepEqual(chunkTypes, ['IHDR', 'IDAT', 'IEND']);
+  assert.deepEqual(imageHeader, Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
+  assert.deepEqual(inflateSync(Buffer.concat(imageData)), Buffer.from([0, 255, 0, 255, 255]));
+});
+
+test('folder startup readiness uses stable viewer state without coupling to an asset scheme', async () => {
+  assert.match(folderStartupImageExpression, /data-testid=viewer-filename/);
+  assert.match(folderStartupImageExpression, /data-testid=viewer-index/);
+  assert.match(folderStartupImageExpression, /image\.complete === true/);
+  assert.match(folderStartupImageExpression, /image\.naturalWidth > 0/);
+  assert.doesNotMatch(folderStartupImageExpression, /lightframe-asset|asset\.localhost|\.src\b/);
+
+  const viewerChrome = await readFile(
+    resolve(import.meta.dirname, '../../src/components/ViewerChrome.tsx'),
+    'utf8'
+  );
+  assert.match(viewerChrome, /data-testid="viewer-filename"/);
+  assert.match(viewerChrome, /data-testid="viewer-index"/);
+  assert.match(viewerChrome, /data-testid="viewer-favorite"/);
+  assert.match(viewerChrome, /data-testid="viewer-rating"/);
+});
+
+test('shortcut dialog selectors match the production settings and command palette surfaces', async () => {
+  const [settingsPanel, commandPalette] = await Promise.all([
+    readFile(resolve(import.meta.dirname, '../../src/components/SettingsPanel.tsx'), 'utf8'),
+    readFile(resolve(import.meta.dirname, '../../src/components/CommandPalette.tsx'), 'utf8'),
+  ]);
+
+  assert.match(settingsPanel, /data-testid="settings-dialog"/);
+  assert.match(commandPalette, /data-testid="command-palette-dialog"/);
+});
 
 test('launch terminates its owned child when CDP attachment fails', async () => {
   const child = new EventEmitter();
@@ -49,7 +129,7 @@ test('launch terminates its owned child when CDP attachment fails', async () => 
           throw new Error('CDP unavailable');
         },
         createDebuggerPipe: async () => ({
-          target: new Promise(() => {}),
+          target: Promise.reject(new Error('CDP unavailable')),
           close: async () => {
             closePipeCalls += 1;
           },
@@ -82,11 +162,314 @@ test('launch does not kill an already-exited owned child after attach failure', 
           throw new Error('attach failed');
         },
         createDebuggerPipe: async () => ({
-          target: new Promise(() => {}),
+          target: Promise.reject(new Error('attach failed')),
           close: async () => undefined,
         }),
       }),
     /attach failed/
+  );
+});
+
+test('launch ignores another page and retries the exact debugger-pipe target until it connects', async () => {
+  const child = createChild({ exitCode: 0 });
+  const connectedPages = [];
+  const endpointSnapshots = [
+    [{ type: 'page', id: 'other-page' }],
+    [
+      { type: 'page', id: 'other-page' },
+      {
+        type: 'page',
+        id: 'exact-target',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/exact-target',
+      },
+    ],
+    [
+      {
+        type: 'page',
+        id: 'exact-target',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/exact-target',
+      },
+    ],
+  ];
+  let exactPollCalls = 0;
+
+  const session = await launch([], {}, [], {
+    findPort: async () => 9222,
+    executable: () => 'C:/LightFrame.exe',
+    spawnProcess: () => child,
+    pollEndpoint: async (port, timeoutMs, targetId) => {
+      assert.equal(port, 9222);
+      assert.ok(timeoutMs > 0);
+      assert.equal(targetId, 'exact-target');
+      const pages = endpointSnapshots[exactPollCalls++] ?? endpointSnapshots.at(-1);
+      const exactPage = pages.find((page) => page.id === targetId);
+      if (!exactPage) throw new Error('Only another CDP page is available');
+      return exactPage;
+    },
+    createDebuggerPipe: async () => ({
+      target: Promise.resolve({ type: 'page', id: 'exact-target' }),
+      close: async () => undefined,
+    }),
+    connectClient: async (page) => {
+      connectedPages.push(page);
+      if (connectedPages.length === 1) throw new Error('Exact target handshake not ready');
+      return { socket: { close: () => undefined }, events: { console: [], exceptions: [] } };
+    },
+    retryDelayMs: 0,
+  });
+
+  assert.equal(session.cdp.events.console.length, 0);
+  assert.equal(exactPollCalls, 3);
+  assert.equal(connectedPages.length, 2);
+  assert.ok(connectedPages.every((page) => page.id === 'exact-target'));
+});
+
+test('exact debugger-pipe target polling stops when the LightFrame child exits', async () => {
+  const child = createChild();
+
+  await assert.rejects(
+    () =>
+      launch([], {}, [], {
+        findPort: async () => 9222,
+        executable: () => 'C:/LightFrame.exe',
+        spawnProcess: () => child,
+        pollEndpoint: async (_port, _timeoutMs, targetId) => {
+          if (targetId === undefined) return new Promise(() => {});
+          queueMicrotask(() => {
+            child.exitCode = 9;
+            child.emit('exit', 9, null);
+          });
+          return new Promise(() => {});
+        },
+        createDebuggerPipe: async () => ({
+          target: Promise.resolve({ type: 'page', id: 'exact-target' }),
+          close: async () => undefined,
+        }),
+        attachTimeoutMs: 1_000,
+      }),
+    /LightFrame exited before CDP attach \(code=9, signal=null\)/
+  );
+});
+
+test('launch uses a valid configured CDP port and forwards it to WebView2', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const child = createChild({ exitCode: 0 });
+  let polledPort;
+  let spawnedEnvironment;
+  let findPortCalls = 0;
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
+
+  try {
+    await launch([], {}, [], {
+      findPort: async () => {
+        findPortCalls += 1;
+        return 9444;
+      },
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: (_path, _args, options) => {
+        spawnedEnvironment = options.env;
+        return child;
+      },
+      pollEndpoint: async (port) => {
+        polledPort = port;
+        return { webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured' };
+      },
+      createDebuggerPipe: async () => ({
+        target: Promise.resolve({ type: 'page', id: 'configured' }),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+  }
+
+  assert.equal(findPortCalls, 0);
+  assert.equal(polledPort, 9555);
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, expectedBrowserArgs);
+});
+
+test('launch overwrites inherited WebView2 browser arguments with its selected CDP port', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const previousBrowserArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+  const child = createChild({ exitCode: 0 });
+  let spawnedEnvironment;
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
+  process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--stale-argument';
+
+  try {
+    await launch([], {}, [], {
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: (_path, _args, options) => {
+        spawnedEnvironment = options.env;
+        return child;
+      },
+      pollEndpoint: async () => ({
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured',
+      }),
+      createDebuggerPipe: async () => ({
+        target: Promise.resolve({ type: 'page', id: 'configured' }),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+    if (previousBrowserArgs === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+    else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
+  }
+
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, expectedBrowserArgs);
+  assert.doesNotMatch(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, /stale/);
+});
+
+test('config mode removes inherited browser arguments and preserves the Windows profile', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const previousConfigMode = process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
+  const previousBrowserArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+  const previousAppData = process.env.APPDATA;
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousUserProfile = process.env.USERPROFILE;
+  const child = createChild({ exitCode: 0 });
+  let spawnedEnvironment;
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '9555';
+  process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = '1';
+  process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--inherited-stale-argument';
+  process.env.APPDATA = 'C:\\Users\\runneradmin\\AppData\\Roaming';
+  process.env.LOCALAPPDATA = 'C:\\Users\\runneradmin\\AppData\\Local';
+  process.env.USERPROFILE = 'C:\\Users\\runneradmin';
+
+  try {
+    await launch([], {}, [], {
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: (_path, _args, options) => {
+        spawnedEnvironment = options.env;
+        return child;
+      },
+      pollEndpoint: async () => ({
+        type: 'page',
+        id: 'configured',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9555/devtools/page/configured',
+      }),
+      createDebuggerPipe: async () => ({
+        target: Promise.resolve({ type: 'page', id: 'configured' }),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+    if (previousConfigMode === undefined) delete process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG;
+    else process.env.LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = previousConfigMode;
+    if (previousBrowserArgs === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+    else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = previousBrowserArgs;
+    if (previousAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = previousAppData;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
+  }
+
+  assert.equal(spawnedEnvironment.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, undefined);
+  assert.equal(spawnedEnvironment.APPDATA, 'C:\\Users\\runneradmin\\AppData\\Roaming');
+  assert.equal(spawnedEnvironment.LOCALAPPDATA, 'C:\\Users\\runneradmin\\AppData\\Local');
+  assert.equal(spawnedEnvironment.USERPROFILE, 'C:\\Users\\runneradmin');
+});
+
+test('launch ignores invalid configured CDP ports and uses the free-port provider', async () => {
+  const previousPort = process.env.LIGHTFRAME_E2E_CDP_PORT;
+  const child = createChild({ exitCode: 0 });
+  const selectedPorts = [];
+  process.env.LIGHTFRAME_E2E_CDP_PORT = '70000';
+
+  try {
+    await launch([], {}, [], {
+      findPort: async () => 9444,
+      executable: () => 'C:/LightFrame.exe',
+      spawnProcess: () => child,
+      pollEndpoint: async (port) => {
+        selectedPorts.push(port);
+        return { webSocketDebuggerUrl: 'ws://127.0.0.1:9444/devtools/page/fallback' };
+      },
+      createDebuggerPipe: async () => ({
+        target: Promise.resolve({ type: 'page', id: 'fallback' }),
+        close: async () => undefined,
+      }),
+      connectClient: async () => ({
+        socket: { close: () => undefined },
+        events: { console: [], exceptions: [] },
+      }),
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.LIGHTFRAME_E2E_CDP_PORT;
+    else process.env.LIGHTFRAME_E2E_CDP_PORT = previousPort;
+  }
+
+  assert.deepEqual(selectedPorts, [9444]);
+});
+
+test('Windows CI E2E builds with an isolated test config and preserves the production config', async () => {
+  const workflow = await readFile(resolve(import.meta.dirname, '../../.github/workflows/ci.yml'), {
+    encoding: 'utf8',
+  });
+
+  assert.match(workflow, /LIGHTFRAME_E2E_TAURI_CONFIG/);
+  assert.match(workflow, /pnpm tauri build --no-bundle --ci --config/);
+  assert.match(workflow, /pnpm run e2e:windows/);
+  assert.match(workflow, /additionalBrowserArgs/);
+  assert.match(workflow, /LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG/);
+  assert.match(workflow, /RUNNER_TEMP[\s\S]*lightframe-tauri-e2e\.conf\.json/);
+  assert.match(workflow, /--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection/);
+  assert.match(workflow, /--autoplay-policy=no-user-gesture-required/);
+  assert.match(workflow, /--remote-debugging-port=\$cdpPort --remote-allow-origins=\*/);
+  assert.doesNotMatch(workflow, /Set-Content[^\r\n]*tauri\.conf\.json/);
+
+  const listenerStart = workflow.indexOf('$listener.Start()');
+  const build = workflow.indexOf('pnpm tauri build --no-bundle --ci --config');
+  const listenerStop = workflow.indexOf('$listener.Stop()');
+  const e2e = workflow.indexOf('pnpm run e2e:windows');
+  assert.ok(listenerStart < build, 'CDP port reservation must start before the build');
+  assert.ok(build < listenerStop, 'CDP port reservation must remain held throughout the build');
+  assert.ok(listenerStop < e2e, 'CDP port reservation must be released immediately before E2E');
+
+  const buildIdentifier = workflow.match(/\$config\.identifier = '([^']+)'/)?.[1];
+  const smokeIdentifier = workflow.match(
+    /windows-launch-smoke\.ps1[^\r\n]*-AppIdentifier ([\w.]+)/
+  )?.[1];
+  assert.equal(buildIdentifier, 'com.lightframe.e2e');
+  assert.equal(smokeIdentifier, buildIdentifier);
+});
+
+test('Tauri CSP permits the native IPC transports used during startup', async () => {
+  const config = JSON.parse(
+    await readFile(resolve(import.meta.dirname, '../../src-tauri/tauri.conf.json'), {
+      encoding: 'utf8',
+    })
+  );
+  const connectSources = config.app.security.csp
+    .split(';')
+    .map((directive) => directive.trim().split(/\s+/))
+    .find(([name]) => name === 'connect-src')
+    ?.slice(1);
+
+  assert.ok(connectSources, 'Tauri CSP must define connect-src');
+  assert.ok(connectSources.includes('ipc:'), 'Tauri CSP must allow the ipc: transport');
+  assert.ok(
+    connectSources.includes('http://ipc.localhost'),
+    'Tauri CSP must allow the Windows IPC host'
   );
 });
 
@@ -140,7 +523,7 @@ test('attach failure retains its cause when owned process cleanup also fails', a
           throw new Error('CDP unavailable');
         },
         createDebuggerPipe: async () => ({
-          target: new Promise(() => {}),
+          target: Promise.reject(new Error('CDP unavailable')),
           close: async () => undefined,
         }),
         terminateProcessTree: async () => {
@@ -244,7 +627,7 @@ test('attach failure before launch returns still clears and verifies its sandbox
         throw new Error('CDP unavailable');
       },
       createDebuggerPipe: async () => ({
-        target: new Promise(() => {}),
+        target: Promise.reject(new Error('CDP unavailable')),
         close: async () => undefined,
       }),
       onOwned: (session) => {
@@ -366,4 +749,74 @@ test('diagnostic redaction handles UNC paths with spaces without changing WebSoc
   );
   assert.match(pathThenWebSocket, /ws:\/\/localhost:9222\/devtools\/page\/id/);
   assert.doesNotMatch(pathThenWebSocket, /C:\\Program Files/i);
+});
+
+test('rapid navigation banner monitor captures transient image display banners', async () => {
+  const operations = [];
+  let releaseWait;
+
+  const monitorPromise = monitorImageDisplayBanners({}, async () => 'navigation-complete', {
+    evaluatePage: async (_cdp, expression) => {
+      if (expression.includes('MutationObserver')) operations.push('install');
+      if (expression.includes('delete window')) {
+        operations.push('collect');
+        return ['Could not display image: C:/fixture/demo-02.png'];
+      }
+      return true;
+    },
+    wait: async (ms) => {
+      operations.push(`wait:${ms}`);
+      await new Promise((resolve) => {
+        releaseWait = resolve;
+      });
+      operations.push('wait-resolved');
+    },
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(operations, ['install', 'wait:1000']);
+  releaseWait?.();
+  const { hits, result } = await monitorPromise;
+
+  assert.equal(result, 'navigation-complete');
+  assert.deepEqual(hits, ['Could not display image: C:/fixture/demo-02.png']);
+  assert.deepEqual(operations, ['install', 'wait:1000', 'wait-resolved', 'collect', 'collect']);
+});
+
+test('rapid navigation banner monitor captures persistent image display banners', async () => {
+  const { hits } = await monitorImageDisplayBanners({}, async () => undefined, {
+    evaluatePage: async (_cdp, expression) => {
+      if (expression.includes('disconnect')) {
+        return ['Could not display image: C:/fixture/demo-04.png'];
+      }
+      return true;
+    },
+  });
+
+  assert.deepEqual(hits, ['Could not display image: C:/fixture/demo-04.png']);
+});
+
+test('rapid navigation banner monitor cleans up while preserving navigation errors', async () => {
+  const operations = [];
+
+  await assert.rejects(
+    monitorImageDisplayBanners(
+      {},
+      async () => {
+        operations.push('during');
+        throw new Error('navigation failed');
+      },
+      {
+        evaluatePage: async (_cdp, expression) => {
+          if (expression.includes('MutationObserver')) operations.push('install');
+          if (expression.includes('delete window')) operations.push('collect');
+          return [];
+        },
+        wait: async () => operations.push('wait'),
+      }
+    ),
+    (error) => error instanceof Error && error.message === 'navigation failed'
+  );
+
+  assert.deepEqual(operations, ['install', 'during', 'collect']);
 });

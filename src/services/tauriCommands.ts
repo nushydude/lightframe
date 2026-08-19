@@ -85,6 +85,8 @@ export type StartupSessionSelection =
   | { mode: 'folder'; session: FolderSessionSnapshot }
   | { mode: 'image'; session: FileSessionSnapshot };
 
+type AdoptableSessionSnapshot = FolderSessionSnapshot | FileSessionSnapshot;
+
 class SessionCoordinator {
   private activeSessionId: string | null = null;
   private currentGeneration = 0;
@@ -111,6 +113,27 @@ class SessionCoordinator {
 
   public getSessionForFolder(folderPath: string): FolderSessionSnapshot | null {
     return this.folderSessions.get(this.folderKey(folderPath))?.session ?? null;
+  }
+
+  public getFileSessionForPath(filePath: string): FileSessionSnapshot | null {
+    const existingImage = this.getActiveSessionForPath(filePath);
+    const existingFolder = this.getSessionForFolder(getParentDirectory(filePath));
+    if (
+      !existingImage ||
+      !existingFolder ||
+      existingImage.sessionId !== existingFolder.session_id
+    ) {
+      return null;
+    }
+
+    return {
+      session_id: existingFolder.session_id,
+      session_instance_id: existingFolder.session_instance_id,
+      requested_image_id: existingImage.imageId,
+      canonical_folder: existingFolder.canonical_folder,
+      path_case_semantics: existingFolder.path_case_semantics,
+      images: existingFolder.images,
+    };
   }
 
   public openFolder(
@@ -315,6 +338,12 @@ export function clearAdoptedProjectorGrant(): void {
 }
 
 export async function openFolderSession(folderPath: string): Promise<FolderSessionSnapshot> {
+  return readAuthorizedFolderSessionSnapshot(folderPath);
+}
+
+async function readAuthorizedFolderSessionSnapshot(
+  folderPath: string
+): Promise<FolderSessionSnapshot> {
   const existing = sessionCoordinator.getSessionForFolder(folderPath);
   if (!existing) {
     throw new Error(`No trusted native selection grant exists for folder '${folderPath}'`);
@@ -331,19 +360,29 @@ export async function openRecentFolderSession(folderPath: string): Promise<Folde
 }
 
 async function openFileSession(filePath: string): Promise<FileSessionSnapshot> {
-  const existingImage = sessionCoordinator.getActiveSessionForPath(filePath);
-  const existingFolder = sessionCoordinator.getSessionForFolder(getParentDirectory(filePath));
-  if (existingImage && existingFolder && existingImage.sessionId === existingFolder.session_id) {
-    return {
-      session_id: existingFolder.session_id,
-      session_instance_id: existingFolder.session_instance_id,
-      requested_image_id: existingImage.imageId,
-      canonical_folder: existingFolder.canonical_folder,
-      path_case_semantics: existingFolder.path_case_semantics,
-      images: existingFolder.images,
-    };
-  }
+  const existing = readAuthorizedFileSessionSnapshot(filePath);
+  if (existing) return existing;
   throw new Error(`No trusted native selection grant exists for file '${filePath}'`);
+}
+
+function readAuthorizedFileSessionSnapshot(filePath: string): FileSessionSnapshot | null {
+  return sessionCoordinator.getFileSessionForPath(filePath);
+}
+
+function acceptNativeSessionSnapshot<T extends AdoptableSessionSnapshot>(
+  session: T,
+  supersededMessage: string,
+  requestGeneration = sessionCoordinator.allocateRequestGeneration()
+): T {
+  const accepted = sessionCoordinator.acceptSession(requestGeneration, {
+    session_id: session.session_id,
+    session_instance_id: session.session_instance_id,
+    canonical_folder: session.canonical_folder,
+    path_case_semantics: session.path_case_semantics,
+    images: session.images,
+  });
+  if (!accepted) throw new Error(supersededMessage);
+  return session;
 }
 
 export async function selectFolderSession(): Promise<FolderSessionSnapshot | null> {
@@ -359,33 +398,21 @@ export async function consumeStartupSession(): Promise<StartupSessionSelection> 
   const gen = sessionCoordinator.allocateRequestGeneration();
   const selection = await invoke<StartupSessionSelection>('consume_startup_session');
   if (selection.mode === 'empty') return selection;
-  const session = selection.session;
-  const accepted = sessionCoordinator.acceptSession(gen, {
-    session_id: session.session_id,
-    session_instance_id: session.session_instance_id,
-    canonical_folder: session.canonical_folder,
-    path_case_semantics: session.path_case_semantics,
-    images: session.images,
-  });
-  if (!accepted) throw new Error('Startup session was superseded by a newer request');
+  acceptNativeSessionSnapshot(
+    selection.session,
+    'Startup session was superseded by a newer request',
+    gen
+  );
   return selection;
 }
 
 export function adoptNativeSessionSelection(
   selection: Exclude<StartupSessionSelection, { mode: 'empty' }>
 ): StartupSessionSelection {
-  const session = selection.session;
-  const accepted = sessionCoordinator.acceptSession(
-    sessionCoordinator.allocateRequestGeneration(),
-    {
-      session_id: session.session_id,
-      session_instance_id: session.session_instance_id,
-      canonical_folder: session.canonical_folder,
-      path_case_semantics: session.path_case_semantics,
-      images: session.images,
-    }
+  acceptNativeSessionSnapshot(
+    selection.session,
+    'Native session selection was superseded by a newer request'
   );
-  if (!accepted) throw new Error('Native session selection was superseded by a newer request');
   return selection;
 }
 
@@ -393,17 +420,11 @@ export async function selectFileSession(): Promise<FileSessionSnapshot | null> {
   const gen = sessionCoordinator.allocateRequestGeneration();
   const session = await invoke<FileSessionSnapshot | null>('select_file_session');
   if (!session) return null;
-  const accepted = sessionCoordinator.acceptSession(gen, {
-    session_id: session.session_id,
-    session_instance_id: session.session_instance_id,
-    canonical_folder: session.canonical_folder,
-    path_case_semantics: session.path_case_semantics,
-    images: session.images,
-  });
-  if (!accepted) {
-    throw new Error('File selection was superseded by a newer request');
-  }
-  return session;
+  return acceptNativeSessionSnapshot(
+    session,
+    'File selection was superseded by a newer request',
+    gen
+  );
 }
 
 export async function closeFolderSession(sessionId: string): Promise<void> {
@@ -690,7 +711,14 @@ export async function readFolderIndex(folderPath: string): Promise<ImageFile[]> 
 }
 
 export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[]> {
-  return readFolderIndex(folderPath);
+  const session =
+    sessionCoordinator.getSessionForFolder(folderPath) ?? (await openFolderSession(folderPath));
+  const records = await invoke<ImageFile[] | null>('refresh_folder_index_by_session', {
+    sessionId: session.session_id,
+  });
+  const images = records ?? [];
+  sessionCoordinator.refreshSessionImages(session.session_id, images);
+  return images;
 }
 
 /** Get metadata (dimensions, format, file size) for an image */

@@ -22,13 +22,20 @@ test('Windows smoke runner keeps a CI-friendly startup wait and late-window grac
   assert.match(source, /\$stableWindowPolls -lt \$WindowStablePolls/);
 });
 
+test('Windows smoke runner uses the supplied app identifier for its config directory', async () => {
+  const source = await smokeSource();
+
+  assert.match(source, /\[string\]\$AppIdentifier = "com\.lightframe\.app"/);
+  assert.match(source, /\$appConfigDir = Join-Path \$env:APPDATA \$AppIdentifier/);
+});
+
 test('Windows smoke runner preserves process, crash, and settings cleanup safeguards', async () => {
   const source = await smokeSource();
 
   assert.match(source, /Get-LightFrameCrashEvents -StartTime \$startedAt/);
   assert.match(source, /LightFrame exited before showing a main window/);
   assert.match(source, /fresh crash-reporting events were recorded/);
-  assert.match(source, /Stop-Process -Id \$process\.Id -Force/);
+  assert.match(source, /taskkill\.exe \/PID \$process\.Id \/T \/F/);
   assert.match(source, /Move-Item -LiteralPath \$backupPath -Destination \$settingsPath -Force/);
   assert.match(source, /Remove-Item -LiteralPath \$settingsPath -Force/);
 });

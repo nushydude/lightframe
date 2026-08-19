@@ -59,7 +59,7 @@ where
 }
 
 #[tauri::command]
-pub fn consume_startup_session(
+pub async fn consume_startup_session(
     app: AppHandle,
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
@@ -70,42 +70,54 @@ pub fn consume_startup_session(
         return Ok(StartupSessionSelection::Empty);
     }
 
+    let session_manager = session_manager.inner().clone();
+    let window_label = window.label().to_string();
     let (folder, file) = startup_target_from_args(std::env::args());
-    if let Some(folder) = folder {
-        let session = session_manager.open_folder_session(&folder, Some(window.label()))?;
-        settings_commands::record_trusted_recent_folder(
-            &app,
-            Path::new(&session.canonical_folder),
-        )?;
-        return Ok(StartupSessionSelection::Folder { session });
-    }
-    if let Some(file) = file {
-        let session = session_manager.open_file_session(&file, Some(window.label()))?;
-        settings_commands::record_trusted_recent_folder(
-            &app,
-            Path::new(&session.canonical_folder),
-        )?;
-        return Ok(StartupSessionSelection::Image { session });
-    }
-    Ok(StartupSessionSelection::Empty)
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(folder) = folder {
+            let session = session_manager.open_folder_session(&folder, Some(&window_label))?;
+            settings_commands::record_trusted_recent_folder(
+                &app,
+                Path::new(&session.canonical_folder),
+            )?;
+            return Ok(StartupSessionSelection::Folder { session });
+        }
+        if let Some(file) = file {
+            let session = session_manager.open_file_session(&file, Some(&window_label))?;
+            settings_commands::record_trusted_recent_folder(
+                &app,
+                Path::new(&session.canonical_folder),
+            )?;
+            return Ok(StartupSessionSelection::Image { session });
+        }
+        Ok(StartupSessionSelection::Empty)
+    })
+    .await
+    .map_err(|error| format!("Startup session worker failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn open_recent_folder_session(
+pub async fn open_recent_folder_session(
     app: AppHandle,
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     folder_path: String,
 ) -> Result<crate::authority::FolderSessionSnapshot, String> {
     enforce_main_window(&window)?;
-    let requested = PathBuf::from(&folder_path);
-    let canonical_requested =
-        crate::authority::SessionManager::canonicalize_existing_file(&requested)?;
-    let authorized = settings_commands::is_trusted_recent_folder(&app, &canonical_requested)?;
-    if !authorized {
-        return Err("Folder is not present in the backend-owned recent-folder list".to_string());
-    }
-    session_manager.open_folder_session(&canonical_requested, Some(window.label()))
+    let session_manager = session_manager.inner().clone();
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let requested = PathBuf::from(&folder_path);
+        let canonical_requested =
+            crate::authority::SessionManager::canonicalize_existing_file(&requested)?;
+        let authorized = settings_commands::is_trusted_recent_folder(&app, &canonical_requested)?;
+        if !authorized {
+            return Err("Folder is not present in the backend-owned recent-folder list".to_string());
+        }
+        session_manager.open_folder_session(&canonical_requested, Some(&window_label))
+    })
+    .await
+    .map_err(|error| format!("Recent folder session worker failed: {error}"))?
 }
 
 /// Supported image extensions for the viewer
@@ -1306,16 +1318,23 @@ pub async fn select_folder_session(
 ) -> Result<Option<crate::authority::FolderSessionSnapshot>, String> {
     enforce_main_window(&window)?;
     let dialog_app = app.clone();
+    let session_manager = session_manager.inner().clone();
+    let window_label = window.label().to_string();
     let selected = tauri::async_runtime::spawn_blocking(move || {
-        dialog_app.dialog().file().blocking_pick_folder()
+        let selected = dialog_app.dialog().file().blocking_pick_folder();
+        let Some(selected) = selected else { return Ok(None) };
+        let path =
+            selected.into_path().map_err(|error| format!("Invalid selected folder: {error}"))?;
+        let session = session_manager.open_folder_session(&path, Some(&window_label))?;
+        settings_commands::record_trusted_recent_folder(
+            &dialog_app,
+            Path::new(&session.canonical_folder),
+        )?;
+        Ok(Some(session))
     })
     .await
     .map_err(|error| format!("Native folder selection failed: {error}"))?;
-    let Some(selected) = selected else { return Ok(None) };
-    let path = selected.into_path().map_err(|error| format!("Invalid selected folder: {error}"))?;
-    let session = session_manager.open_folder_session(&path, Some(window.label()))?;
-    settings_commands::record_trusted_recent_folder(&app, Path::new(&session.canonical_folder))?;
-    Ok(Some(session))
+    selected
 }
 
 #[tauri::command]
@@ -1326,16 +1345,27 @@ pub async fn select_file_session(
 ) -> Result<Option<crate::authority::FileSessionSnapshot>, String> {
     enforce_main_window(&window)?;
     let dialog_app = app.clone();
+    let session_manager = session_manager.inner().clone();
+    let window_label = window.label().to_string();
     let selected = tauri::async_runtime::spawn_blocking(move || {
-        dialog_app.dialog().file().add_filter("Images", SUPPORTED_EXTENSIONS).blocking_pick_file()
+        let selected = dialog_app
+            .dialog()
+            .file()
+            .add_filter("Images", SUPPORTED_EXTENSIONS)
+            .blocking_pick_file();
+        let Some(selected) = selected else { return Ok(None) };
+        let path =
+            selected.into_path().map_err(|error| format!("Invalid selected file: {error}"))?;
+        let session = session_manager.open_file_session(&path, Some(&window_label))?;
+        settings_commands::record_trusted_recent_folder(
+            &dialog_app,
+            Path::new(&session.canonical_folder),
+        )?;
+        Ok(Some(session))
     })
     .await
     .map_err(|error| format!("Native file selection failed: {error}"))?;
-    let Some(selected) = selected else { return Ok(None) };
-    let path = selected.into_path().map_err(|error| format!("Invalid selected file: {error}"))?;
-    let session = session_manager.open_file_session(&path, Some(window.label()))?;
-    settings_commands::record_trusted_recent_folder(&app, Path::new(&session.canonical_folder))?;
-    Ok(Some(session))
+    selected
 }
 
 pub fn enforce_main_window_label(label: &str) -> Result<(), String> {
@@ -4821,7 +4851,30 @@ pub async fn close_projector_grant(
 
 #[tauri::command]
 pub async fn read_folder_index_by_session(
-    _app: tauri::AppHandle,
+    window: tauri::Window,
+    session_manager: tauri::State<'_, crate::authority::SessionManager>,
+    session_id: String,
+) -> Result<Vec<ImageFile>, String> {
+    enforce_main_window(&window)?;
+    let snapshot = session_manager.get_session_snapshot(&session_id, Some(window.label()))?;
+    Ok(snapshot
+        .images
+        .into_iter()
+        .map(|authorized| ImageFile {
+            id: Some(authorized.id),
+            session_id: Some(session_id.clone()),
+            path: authorized.path,
+            file_name: authorized.file_name,
+            extension: authorized.extension,
+            size_bytes: authorized.size_bytes,
+            modified_at: authorized.modified_at,
+            created_at: authorized.created_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn refresh_folder_index_by_session(
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     session_id: String,

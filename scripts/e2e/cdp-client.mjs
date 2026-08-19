@@ -101,10 +101,31 @@ export function assertEqual(actual, expected, label) {
   }
 }
 
+function isKnownLegacyAssetSchemeWarning(event) {
+  if (
+    event.source !== 'network' ||
+    event.level !== 'error' ||
+    event.text !== 'Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME' ||
+    typeof event.url !== 'string'
+  ) {
+    return false;
+  }
+
+  try {
+    return new URL(event.url).protocol === 'lightframe-asset:';
+  } catch {
+    return false;
+  }
+}
+
 export function fatalCdpEvents(events) {
   return [
     ...events.exceptions,
-    ...events.console.filter((event) => ['error', 'assert'].includes(event.type ?? event.level)),
+    ...events.console.filter(
+      (event) =>
+        ['error', 'assert'].includes(event.type ?? event.level) &&
+        !isKnownLegacyAssetSchemeWarning(event)
+    ),
   ];
 }
 
@@ -135,7 +156,7 @@ export function keyDispatchParams(key, type, modifiers = 0) {
   };
 }
 
-export async function pollCdpEndpoint(port, timeoutMs = 10_000) {
+export async function pollCdpEndpoint(port, timeoutMs = 10_000, targetId) {
   return waitForCondition(
     async () => {
       const pages = await Promise.any(
@@ -145,23 +166,34 @@ export async function pollCdpEndpoint(port, timeoutMs = 10_000) {
           return response.json();
         })
       );
-      return pages.find((page) => page.type === 'page') ?? null;
+      return (
+        pages.find(
+          (page) => page.type === 'page' && (targetId === undefined || page.id === targetId)
+        ) ?? null
+      );
     },
-    { timeoutMs, description: `CDP endpoint on port ${port}` }
+    {
+      timeoutMs,
+      description:
+        targetId === undefined
+          ? `CDP endpoint on port ${port}`
+          : `CDP target ${targetId} on port ${port}`,
+    }
   );
 }
 
 export class CdpClient {
-  constructor(webSocketUrl, { timeoutMs = 10_000 } = {}) {
+  constructor(webSocketUrl, { timeoutMs = 10_000, WebSocketImpl = WebSocket } = {}) {
     this.webSocketUrl = webSocketUrl;
     this.timeoutMs = timeoutMs;
+    this.WebSocketImpl = WebSocketImpl;
     this.nextId = 1;
     this.pending = new Map();
     this.events = { console: [], exceptions: [] };
   }
 
   async connect() {
-    this.socket = new WebSocket(this.webSocketUrl);
+    this.socket = new this.WebSocketImpl(this.webSocketUrl);
     await new Promise((resolve, reject) => {
       this.socket.addEventListener('open', resolve, { once: true });
       this.socket.addEventListener(
@@ -176,6 +208,7 @@ export class CdpClient {
       );
     });
     this.socket.addEventListener('message', (event) => this.#handle(JSON.parse(event.data)));
+    await this.command('Runtime.runIfWaitingForDebugger');
     await Promise.all([
       this.command('Runtime.enable'),
       this.command('Page.enable'),
@@ -219,7 +252,10 @@ export async function evaluate(client, expression) {
     returnByValue: true,
     awaitPromise: true,
   });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  if (result.exceptionDetails) {
+    const detail = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
+    throw new Error(detail || 'CDP evaluation failed');
+  }
   return result.result.value;
 }
 

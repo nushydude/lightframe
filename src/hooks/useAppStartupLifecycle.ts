@@ -5,6 +5,7 @@ import { useSettingsStore } from '../state/settingsStore';
 import { CurationPersistenceError } from '../state/curationStore';
 import { useViewerStore } from '../state/viewerStore';
 import { consumeStartupSession } from '../services/tauriCommands';
+import type { FileSessionSnapshot, FolderSessionSnapshot } from '../services/tauriCommands';
 import {
   recordStartupCliResolveTelemetry,
   recordStartupInitialImageOpenTelemetry,
@@ -22,9 +23,12 @@ type StartupLifecycleOptions = {
   isProjectorWindow: boolean;
   loadSettings: () => Promise<unknown>;
   loadCuration: () => Promise<unknown>;
-  openFolder: (folderPath: string) => Promise<unknown>;
   openImage: (imagePath: string) => Promise<unknown>;
-  openImageForStartup: (imagePath: string) => Promise<unknown>;
+  applyFolderSessionSnapshot: (session: FolderSessionSnapshot) => Promise<unknown>;
+  applyFileSessionSnapshot: (
+    session: FileSessionSnapshot,
+    options?: { startup?: boolean }
+  ) => Promise<unknown>;
   setError: (message: string | null) => void;
 };
 
@@ -66,9 +70,12 @@ async function restoreStartupWindowBeforeShow({
 
 async function openStartupTarget({
   isMainWindow,
-  openFolder,
-  openImageForStartup,
-}: Pick<StartupLifecycleOptions, 'isMainWindow' | 'openFolder' | 'openImageForStartup'>) {
+  applyFolderSessionSnapshot,
+  applyFileSessionSnapshot,
+}: Pick<
+  StartupLifecycleOptions,
+  'isMainWindow' | 'applyFolderSessionSnapshot' | 'applyFileSessionSnapshot'
+>) {
   if (!isMainWindow) return;
 
   const cliResolveStartedAt = performance.now();
@@ -76,14 +83,10 @@ async function openStartupTarget({
   recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
   if (startupDecision.mode === 'folder') {
-    await openFolder(startupDecision.session.canonical_folder);
+    await applyFolderSessionSnapshot(startupDecision.session);
   } else if (startupDecision.mode === 'image') {
-    const image = startupDecision.session.images.find(
-      (candidate) => candidate.id === startupDecision.session.requested_image_id
-    );
-    if (!image) throw new Error('Startup image is missing from its authorized session');
     const startupImageOpenStartedAt = performance.now();
-    await openImageForStartup(image.path);
+    await applyFileSessionSnapshot(startupDecision.session, { startup: true });
     recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
   }
 }
@@ -95,9 +98,9 @@ export function useAppStartupLifecycle({
   isProjectorWindow,
   loadSettings,
   loadCuration,
-  openFolder,
   openImage,
-  openImageForStartup,
+  applyFolderSessionSnapshot,
+  applyFileSessionSnapshot,
   setError,
 }: StartupLifecycleOptions) {
   const [hasStartupResolved, setHasStartupResolved] = useState(false);
@@ -131,10 +134,14 @@ export function useAppStartupLifecycle({
       });
 
       try {
-        await openStartupTarget({ isMainWindow, openFolder, openImageForStartup });
+        await openStartupTarget({
+          isMainWindow,
+          applyFolderSessionSnapshot,
+          applyFileSessionSnapshot,
+        });
       } catch (error) {
-        console.error('Failed to parse CLI args on startup:', error);
-        setError(`Failed to parse CLI args on startup: ${error}`);
+        console.error('Failed to open startup session:', error);
+        setError(`Could not open startup file or folder: ${error}`);
       } finally {
         if (!isCancelled && !useViewerStore.getState().folderPath) {
           await loadCuration().catch((error: unknown) => {
@@ -173,9 +180,9 @@ export function useAppStartupLifecycle({
     isProjectorWindow,
     loadCuration,
     loadSettings,
-    openFolder,
     openImage,
-    openImageForStartup,
+    applyFolderSessionSnapshot,
+    applyFileSessionSnapshot,
     setError,
   ]);
 

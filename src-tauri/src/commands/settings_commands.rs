@@ -239,7 +239,9 @@ pub struct ProjectorSettings {
 #[tauri::command]
 pub async fn read_settings(window: tauri::Window, app: AppHandle) -> Result<AppSettings, String> {
     super::enforce_main_window(&window)?;
-    let settings = read_settings_from_disk(&app)?;
+    let settings = tauri::async_runtime::spawn_blocking(move || read_settings_from_disk(&app))
+        .await
+        .map_err(|error| format!("Read settings worker failed: {error}"))??;
 
     thumbnails::set_tile_source_cache_limit(
         thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
@@ -255,15 +257,19 @@ pub async fn read_projector_settings(
     app: AppHandle,
 ) -> Result<ProjectorSettings, String> {
     super::enforce_secondary_window_label(window.label())?;
-    let _lock = lock_settings_io()?;
-    let path = settings_path(&app)?;
-    let settings: AppSettings = if !path.exists() {
-        AppSettings::default()
-    } else {
-        let content =
-            fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_default()
-    };
+    let settings: AppSettings = tauri::async_runtime::spawn_blocking(move || {
+        let _lock = lock_settings_io()?;
+        let path = settings_path(&app)?;
+        if !path.exists() {
+            Ok::<AppSettings, String>(AppSettings::default())
+        } else {
+            let content =
+                fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
+            Ok::<AppSettings, String>(serde_json::from_str(&content).unwrap_or_default())
+        }
+    })
+    .await
+    .map_err(|error| format!("Read projector settings worker failed: {error}"))??;
     Ok(ProjectorSettings { theme: settings.theme, performance_mode: settings.performance_mode })
 }
 
@@ -275,12 +281,16 @@ pub async fn write_settings(
     settings: AppSettings,
 ) -> Result<(), String> {
     super::enforce_main_window(&window)?;
-    let _lock = lock_settings_io()?;
     thumbnails::set_tile_source_cache_limit(
         thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
     );
-    let path = settings_path(&app)?;
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    write_text_file_atomically(&path, &content, "settings")
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = lock_settings_io()?;
+        let path = settings_path(&app)?;
+        let content = serde_json::to_string_pretty(&settings)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        write_text_file_atomically(&path, &content, "settings")
+    })
+    .await
+    .map_err(|error| format!("Write settings worker failed: {error}"))?
 }
