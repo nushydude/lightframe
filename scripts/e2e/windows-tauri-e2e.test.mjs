@@ -357,6 +357,26 @@ test('Windows CI E2E builds with an isolated test config and preserves the produ
   assert.ok(listenerStop < e2e, 'CDP port reservation must be released immediately before E2E');
 });
 
+test('Tauri CSP permits the native IPC transports used during startup', async () => {
+  const config = JSON.parse(
+    await readFile(resolve(import.meta.dirname, '../../src-tauri/tauri.conf.json'), {
+      encoding: 'utf8',
+    })
+  );
+  const connectSources = config.app.security.csp
+    .split(';')
+    .map((directive) => directive.trim().split(/\s+/))
+    .find(([name]) => name === 'connect-src')
+    ?.slice(1);
+
+  assert.ok(connectSources, 'Tauri CSP must define connect-src');
+  assert.ok(connectSources.includes('ipc:'), 'Tauri CSP must allow the ipc: transport');
+  assert.ok(
+    connectSources.includes('http://ipc.localhost'),
+    'Tauri CSP must allow the Windows IPC host'
+  );
+});
+
 test('owned process-tree termination failure is surfaced without killing another process', async () => {
   const child = createChild();
   child.kill = () => assert.fail('child.kill must not run after taskkill failure');
