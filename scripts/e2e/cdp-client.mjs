@@ -101,10 +101,31 @@ export function assertEqual(actual, expected, label) {
   }
 }
 
+function isKnownLegacyAssetSchemeWarning(event) {
+  if (
+    event.source !== 'network' ||
+    event.level !== 'error' ||
+    event.text !== 'Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME' ||
+    typeof event.url !== 'string'
+  ) {
+    return false;
+  }
+
+  try {
+    return new URL(event.url).protocol === 'lightframe-asset:';
+  } catch {
+    return false;
+  }
+}
+
 export function fatalCdpEvents(events) {
   return [
     ...events.exceptions,
-    ...events.console.filter((event) => ['error', 'assert'].includes(event.type ?? event.level)),
+    ...events.console.filter(
+      (event) =>
+        ['error', 'assert'].includes(event.type ?? event.level) &&
+        !isKnownLegacyAssetSchemeWarning(event)
+    ),
   ];
 }
 

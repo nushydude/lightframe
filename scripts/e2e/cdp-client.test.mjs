@@ -105,6 +105,30 @@ test('fatalCdpEvents excludes informational console events', () => {
   );
 });
 
+test('fatalCdpEvents ignores only the known stale legacy asset scheme network warning', () => {
+  const knownWarning = {
+    source: 'network',
+    level: 'error',
+    text: 'Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME',
+    url: 'lightframe-asset://session_1/img_1?deliveryId=delivery_1',
+  };
+  const unrelatedUrl = { ...knownWarning, url: 'custom-asset://session_1/img_1' };
+  const unrelatedNetworkError = {
+    ...knownWarning,
+    text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED',
+  };
+  const applicationConsoleError = { ...knownWarning, source: 'javascript' };
+  const exception = { exceptionDetails: { text: 'Uncaught' } };
+
+  assert.deepEqual(
+    fatalCdpEvents({
+      console: [knownWarning, unrelatedUrl, unrelatedNetworkError, applicationConsoleError],
+      exceptions: [exception],
+    }),
+    [exception, unrelatedUrl, unrelatedNetworkError, applicationConsoleError]
+  );
+});
+
 test('parses a debugger pipe target payload', () => {
   assert.deepEqual(
     parseDebuggerTargetPayload(
