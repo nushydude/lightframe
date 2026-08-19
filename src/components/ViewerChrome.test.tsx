@@ -131,8 +131,10 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    expect(screen.getByText('photo.jpg')).toBeInTheDocument();
-    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    expect(screen.getByTestId('viewer-filename')).toHaveTextContent('photo.jpg');
+    expect(screen.getByTestId('viewer-index')).toHaveTextContent('1 / 2');
+    expect(screen.getByTestId('viewer-index')).toHaveAttribute('data-index', '1');
+    expect(screen.getByTestId('viewer-index')).toHaveAttribute('data-total', '2');
   });
 
   it('shows a same-basename caption while browsing and copies it', async () => {
@@ -370,6 +372,8 @@ describe('ViewerChrome', () => {
 
     expect(topBarLeft?.textContent).toContain('★');
     expect(topBarLeft?.textContent).not.toContain('0/5');
+    expect(screen.getByTestId('viewer-favorite')).toHaveAttribute('data-favorite', 'true');
+    expect(screen.queryByTestId('viewer-rating')).not.toBeInTheDocument();
   });
 
   it('should call onNext when next button is clicked', () => {

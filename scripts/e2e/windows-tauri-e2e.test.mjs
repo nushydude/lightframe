@@ -10,6 +10,7 @@ import {
   failureConsoleMessage,
   finalizeHarness,
   fixturePng,
+  folderStartupImageExpression,
   launch,
   monitorImageDisplayBanners,
   redactedFailureReport,
@@ -71,6 +72,23 @@ test('generated folder fixture is a valid decodable RGBA PNG', () => {
   assert.deepEqual(chunkTypes, ['IHDR', 'IDAT', 'IEND']);
   assert.deepEqual(imageHeader, Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
   assert.deepEqual(inflateSync(Buffer.concat(imageData)), Buffer.from([0, 255, 0, 255, 255]));
+});
+
+test('folder startup readiness uses stable viewer state without coupling to an asset scheme', async () => {
+  assert.match(folderStartupImageExpression, /data-testid=viewer-filename/);
+  assert.match(folderStartupImageExpression, /data-testid=viewer-index/);
+  assert.match(folderStartupImageExpression, /image\.complete === true/);
+  assert.match(folderStartupImageExpression, /image\.naturalWidth > 0/);
+  assert.doesNotMatch(folderStartupImageExpression, /lightframe-asset|asset\.localhost|\.src\b/);
+
+  const viewerChrome = await readFile(
+    resolve(import.meta.dirname, '../../src/components/ViewerChrome.tsx'),
+    'utf8'
+  );
+  assert.match(viewerChrome, /data-testid="viewer-filename"/);
+  assert.match(viewerChrome, /data-testid="viewer-index"/);
+  assert.match(viewerChrome, /data-testid="viewer-favorite"/);
+  assert.match(viewerChrome, /data-testid="viewer-rating"/);
 });
 
 test('launch terminates its owned child when CDP attachment fails', async () => {

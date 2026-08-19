@@ -87,6 +87,20 @@ const collectImageDisplayBannerMonitorExpression = `(() => {
   delete window[${JSON.stringify(imageDisplayBannerMonitorKey)}];
   return hits;
 })()`;
+export const folderStartupImageExpression = `(() => {
+  const filename = document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim();
+  const index = document.querySelector("[data-testid=viewer-index]");
+  const image = document.querySelector(".image-canvas img");
+  return (
+    filename === "demo-01.png" &&
+    index?.dataset.index === "1" &&
+    index?.dataset.total === "4" &&
+    Boolean(image) &&
+    image.complete === true &&
+    image.naturalWidth > 0 &&
+    !image.classList.contains("loading")
+  );
+})()`;
 const finalRapidNavigationImageExpression = `new Promise((resolve) => {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const filename = document.querySelector("[data-testid=viewer-filename]")?.textContent?.trim();
@@ -534,11 +548,16 @@ async function runHomeStartup(session, result) {
 }
 
 async function runFolderStartup(session, result) {
-  await waitForSelector(session.cdp, '[data-testid="native-app-root"][data-runtime-ready="true"]');
-  await waitForExpression(
+  const startupWait = { timeoutMs: 30_000 };
+  await waitForSelector(
     session.cdp,
-    'document.querySelector("[data-testid=viewer-index]")?.dataset.total === "4"'
+    '[data-testid="native-app-root"][data-runtime-ready="true"]',
+    startupWait
   );
+  await waitForExpression(session.cdp, folderStartupImageExpression, {
+    ...startupWait,
+    description: 'initial folder image to render',
+  });
   const state = await viewerState(session.cdp);
   if (state.name !== 'demo-01.png' || state.index !== '1')
     throw new Error(`Unexpected startup selection: ${JSON.stringify(state)}`);

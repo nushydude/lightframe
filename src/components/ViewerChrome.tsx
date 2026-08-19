@@ -1440,17 +1440,30 @@ export function ViewerChrome({
     <>
       <div className="top-bar" role="toolbar" aria-label="Image information" ref={chromeRootRef}>
         <div className="top-bar-left">
-          <span className="file-name" title={fileName}>
+          <span className="file-name" title={fileName} data-testid="viewer-filename">
             {fileName}
           </span>
           {images.length > 0 && (
-            <span className="image-counter">
+            <span
+              className="image-counter"
+              data-testid="viewer-index"
+              data-index={currentIndex + 1}
+              data-total={images.length}
+            >
               {currentIndex + 1} / {images.length}
               {isFolderScanning && ' …'}
             </span>
           )}
-          {isFavorite && <span className="image-counter">★</span>}
-          {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
+          {isFavorite && (
+            <span className="image-counter" data-testid="viewer-favorite" data-favorite="true">
+              ★
+            </span>
+          )}
+          {currentRating > 0 && (
+            <span className="image-counter" data-testid="viewer-rating" data-rating={currentRating}>
+              {currentRating}/5
+            </span>
+          )}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
