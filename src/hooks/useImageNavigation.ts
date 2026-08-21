@@ -133,6 +133,16 @@ function getNow(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
+function isSupersededFolderRefreshError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes('superseded') ||
+    message.includes('stale') ||
+    message.includes('cancel') ||
+    message.includes('no longer active')
+  );
+}
+
 async function applySnapshotCurationHydration({
   curationLoad,
   curationFilter,
@@ -518,6 +528,9 @@ export function useImageNavigation() {
             .catch(() => undefined);
           recordFolderOpenBackgroundRefreshTelemetry(getNow() - backgroundRefreshStartedAt);
         } catch (err) {
+          if (isSupersededFolderRefreshError(err)) {
+            return;
+          }
           console.error('Failed to refresh folder:', err);
           if (isCurrentGeneration(loadGeneration)) {
             setError(`Failed to refresh folder: ${err}`);
@@ -539,11 +552,13 @@ export function useImageNavigation() {
         requestedImageId?: string;
         selectionKind?: 'folder-open' | 'open-image' | 'startup-open';
         curationFilter?: CurationFilter;
+        reconcileInBackground?: boolean;
       }
     ) => {
       const loadGeneration = beginLoadGeneration();
       const nextFolderPath = session.canonical_folder;
       const requestedImage = requestedSnapshotImage(session, options?.requestedImageId);
+      let backgroundRefreshStarted = false;
 
       try {
         setFolderScanning(false);
@@ -585,13 +600,18 @@ export function useImageNavigation() {
           sessionSnapshotWindowTitle(requestedImage, nextFolderPath)
         );
         rememberOpenedFolder(nextFolderPath);
+        if (options?.reconcileInBackground) {
+          backgroundRefreshStarted = true;
+          setFolderScanning(true);
+          startBackgroundFolderRefresh(loadGeneration, nextFolderPath);
+        }
       } catch (err) {
         if (isCurrentGeneration(loadGeneration)) {
           setError(`Failed to apply native session: ${err}`);
         }
         throw err;
       } finally {
-        if (isCurrentGeneration(loadGeneration)) {
+        if (!backgroundRefreshStarted && isCurrentGeneration(loadGeneration)) {
           setFolderScanning(false);
         }
       }
@@ -609,6 +629,7 @@ export function useImageNavigation() {
       setFolderPath,
       setFolderScanning,
       setMarkedPaths,
+      startBackgroundFolderRefresh,
       setViewMode,
     ]
   );
@@ -618,6 +639,7 @@ export function useImageNavigation() {
       await applySessionSnapshot(session, {
         selectionKind: 'folder-open',
         curationFilter: options?.curationFilter,
+        reconcileInBackground: true,
       });
     },
     [applySessionSnapshot]
@@ -628,6 +650,7 @@ export function useImageNavigation() {
       await applySessionSnapshot(session, {
         requestedImageId: session.requested_image_id,
         selectionKind: options?.startup ? 'startup-open' : 'open-image',
+        reconcileInBackground: true,
       });
     },
     [applySessionSnapshot]

@@ -33,6 +33,7 @@ pub struct FolderSessionSnapshot {
     pub session_instance_id: String,
     pub canonical_folder: String,
     pub path_case_semantics: crate::path_normalization::PathCaseSemantics,
+    pub catalog_revision: u64,
     pub images: Vec<AuthorizedImageRecord>,
 }
 
@@ -43,6 +44,7 @@ pub struct FileSessionSnapshot {
     pub requested_image_id: String,
     pub canonical_folder: String,
     pub path_case_semantics: crate::path_normalization::PathCaseSemantics,
+    pub catalog_revision: u64,
     pub images: Vec<AuthorizedImageRecord>,
 }
 
@@ -462,6 +464,7 @@ pub struct SessionInternal {
     pub directory_handle: fs::File,
     pub path_case_semantics: crate::path_normalization::PathCaseSemantics,
     pub images_by_id: HashMap<String, ImageRecordInternal>,
+    pub catalog_revision: u64,
     pub created_at_epoch: u64,
     pub last_used_at_epoch: u64,
 }
@@ -3044,6 +3047,51 @@ pub struct SessionManager {
     refresh_lock: Arc<Mutex<()>>,
 }
 
+struct ScannedSessionImage {
+    canonical_path: PathBuf,
+    display_path: String,
+    file_name: String,
+    extension: String,
+    size_bytes: u64,
+    modified_at: Option<String>,
+    created_at: Option<String>,
+    identity: Option<String>,
+}
+
+fn bootstrap_directory_entry_budget(limit: usize) -> usize {
+    limit.saturating_mul(4).max(limit).max(1)
+}
+
+#[cfg(test)]
+fn record_test_scan_entry() {
+    TEST_SCAN_ENTRY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    let hook = TEST_SCAN_ENTRY_HOOK.with(|hook| hook.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+fn reset_test_scan_entry_count() {
+    TEST_SCAN_ENTRY_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn test_scan_entry_count() -> usize {
+    TEST_SCAN_ENTRY_COUNT.with(|count| count.get())
+}
+
+#[cfg(test)]
+fn set_test_scan_entry_hook(hook: impl FnOnce() + 'static) {
+    TEST_SCAN_ENTRY_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SCAN_ENTRY_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_SCAN_ENTRY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Threat model boundary note:
 /// LightFrame's SessionManager encapsulates filesystem authority behind opaque identifiers
 /// (SessionId, ImageId, DestinationGrantId, ExternalEditorGrantId).
@@ -3089,110 +3137,146 @@ impl SessionManager {
         }
     }
 
-    pub fn open_folder_session(
-        &self,
-        folder_path: &Path,
-        window_label: Option<&str>,
-    ) -> Result<FolderSessionSnapshot, String> {
-        let canonical_folder = Self::canonicalize_existing_file(folder_path)?;
-        if !canonical_folder.is_dir() {
-            return Err(format!("'{}' is not a valid directory", folder_path.display()));
+    fn scanned_image_from_canonical_path(
+        canonical_entry: PathBuf,
+    ) -> Result<Option<ScannedSessionImage>, String> {
+        if !is_supported_image_file(&canonical_entry) {
+            return Ok(None);
         }
-        let directory_handle = open_pinned_directory(&canonical_folder)?;
-        let path_case_semantics =
-            crate::path_normalization::directory_path_case_semantics(&directory_handle)?;
+        let file_handle = open_replaceable_image_file(&canonical_entry)?;
+        verify_pinned_file(&file_handle, &canonical_entry, "Authorized image")?;
+        let metadata = file_handle
+            .metadata()
+            .map_err(|error| format!("Failed to inspect authorized image: {error}"))?;
+        if !metadata.is_file() {
+            return Ok(None);
+        }
+        let file_name =
+            canonical_entry.file_name().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+        let extension = canonical_entry
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        let size_bytes = metadata.len();
+        let identity = filesystem_identity(&canonical_entry, &metadata);
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map(|value| value.as_nanos().to_string());
+        let created_at = metadata
+            .created()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map(|value| value.as_nanos().to_string());
+        let display_path = canonical_entry.to_string_lossy().to_string();
 
+        Ok(Some(ScannedSessionImage {
+            canonical_path: canonical_entry,
+            display_path,
+            file_name,
+            extension,
+            size_bytes,
+            modified_at,
+            created_at,
+            identity,
+        }))
+    }
+
+    fn cached_hint_to_scanned_image(
+        hint_path: &Path,
+        canonical_folder: &Path,
+        path_case_semantics: crate::path_normalization::PathCaseSemantics,
+    ) -> Option<ScannedSessionImage> {
+        let hint_metadata = fs::symlink_metadata(hint_path).ok()?;
+        if is_link_or_reparse_point(&hint_metadata) || !hint_metadata.is_file() {
+            return None;
+        }
+        let canonical_entry = Self::canonicalize_existing_file(hint_path).ok()?;
+        if !is_direct_child_with_semantics(&canonical_entry, canonical_folder, path_case_semantics)
+        {
+            return None;
+        }
+        Self::scanned_image_from_canonical_path(canonical_entry).ok().flatten()
+    }
+
+    fn scan_folder_images(
+        canonical_folder: &Path,
+        path_case_semantics: crate::path_normalization::PathCaseSemantics,
+        limit: Option<usize>,
+    ) -> Result<Vec<ScannedSessionImage>, String> {
+        Self::scan_folder_images_with_controls(
+            canonical_folder,
+            path_case_semantics,
+            limit,
+            None,
+            || Ok(()),
+        )
+    }
+
+    fn scan_folder_images_with_controls<C>(
+        canonical_folder: &Path,
+        path_case_semantics: crate::path_normalization::PathCaseSemantics,
+        accepted_limit: Option<usize>,
+        entry_limit: Option<usize>,
+        mut check_current: C,
+    ) -> Result<Vec<ScannedSessionImage>, String>
+    where
+        C: FnMut() -> Result<(), String>,
+    {
         let mut scanned_images = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(&canonical_folder) {
+        let mut examined_entries = 0usize;
+        if let Ok(entries) = fs::read_dir(canonical_folder) {
             for entry in entries.flatten() {
+                check_current()?;
+                if accepted_limit.is_some_and(|limit| scanned_images.len() >= limit) {
+                    break;
+                }
+                if entry_limit.is_some_and(|limit| examined_entries >= limit) {
+                    break;
+                }
+                examined_entries = examined_entries.saturating_add(1);
+                #[cfg(test)]
+                record_test_scan_entry();
                 let entry_path = entry.path();
+                let Ok(entry_metadata) = fs::symlink_metadata(&entry_path) else {
+                    continue;
+                };
+                if is_link_or_reparse_point(&entry_metadata) || !entry_metadata.is_file() {
+                    continue;
+                }
                 let canonical_entry = match Self::canonicalize_existing_file(&entry_path) {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
 
-                // Ensure file is contained in canonical folder
-                if !is_path_contained_in_with_semantics(
+                if !is_direct_child_with_semantics(
                     &canonical_entry,
-                    &canonical_folder,
+                    canonical_folder,
                     path_case_semantics,
                 ) {
                     continue;
                 }
 
-                if is_supported_image_file(&canonical_entry) {
-                    let file_name = canonical_entry
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let extension = canonical_entry
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.to_lowercase())
-                        .unwrap_or_default();
-
-                    let metadata = fs::metadata(&canonical_entry).ok();
-                    let size_bytes = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-                    let identity = metadata
-                        .as_ref()
-                        .and_then(|value| filesystem_identity(&canonical_entry, value));
-                    let modified_at = metadata
-                        .as_ref()
-                        .and_then(|value| value.modified().ok())
-                        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-                        .map(|value| value.as_nanos().to_string());
-                    let created_at = metadata
-                        .as_ref()
-                        .and_then(|value| value.created().ok())
-                        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-                        .map(|value| value.as_nanos().to_string());
-                    let display_path = canonical_entry.to_string_lossy().to_string();
-
-                    scanned_images.push((
-                        canonical_entry,
-                        display_path,
-                        file_name,
-                        extension,
-                        size_bytes,
-                        modified_at,
-                        created_at,
-                        identity,
-                    ));
+                if let Ok(Some(scanned)) = Self::scanned_image_from_canonical_path(canonical_entry)
+                {
+                    scanned_images.push(scanned);
                 }
             }
         }
+        Ok(scanned_images)
+    }
 
-        let now_epoch =
-            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-
-        let mut store = self.store.lock().unwrap();
-
-        // A renderer owns one authoritative session per canonical folder. Reopening the same
-        // folder refreshes its records in place and preserves IDs for unchanged files. This is
-        // essential because watchers, cached indices, previews, edits, and projector grants all
-        // refer to the same opaque identities.
-        let existing_session_id = store
-            .sessions
-            .iter()
-            .find(|(_, session)| {
-                session.canonical_folder == canonical_folder
-                    && session.window_label.as_deref() == window_label
-            })
-            .map(|(id, _)| id.clone());
-
-        if let Some(existing_id) = existing_session_id.as_ref() {
-            let existing = store.sessions.get(existing_id).expect("existing session disappeared");
-            verify_pinned_directory_parts(&existing.directory_handle, &existing.canonical_folder)?;
-        }
-        verify_pinned_directory_parts(&directory_handle, &canonical_folder)?;
-
-        let session_id = existing_session_id.unwrap_or_else(|| self.generate_opaque_id("session"));
-        let session_instance_id = self.generate_opaque_id("session_instance");
+    fn build_authorized_records(
+        &self,
+        session_id: &str,
+        scanned_images: Vec<ScannedSessionImage>,
+        store: &SessionStore,
+    ) -> (HashMap<String, ImageRecordInternal>, Vec<AuthorizedImageRecord>) {
         let existing_by_path: HashMap<PathBuf, (Option<String>, String)> = store
             .sessions
-            .get(&session_id)
+            .get(session_id)
             .map(|session| {
                 session
                     .images_by_id
@@ -3208,7 +3292,7 @@ impl SessionManager {
             .unwrap_or_default();
         let existing_ids_by_identity: HashMap<String, Vec<String>> = store
             .sessions
-            .get(&session_id)
+            .get(session_id)
             .map(|session| {
                 let mut by_identity: HashMap<String, Vec<String>> = HashMap::new();
                 for record in session.images_by_id.values() {
@@ -3230,8 +3314,12 @@ impl SessionManager {
         let mut force_new_identity = vec![false; scanned_images.len()];
         let mut consumed_ids = std::collections::HashSet::new();
         for (index, scanned) in scanned_images.iter().enumerate() {
-            if let Some((previous_identity, previous_id)) = existing_by_path.get(&scanned.0) {
-                if scanned.7.is_some() && scanned.7.as_ref() == previous_identity.as_ref() {
+            if let Some((previous_identity, previous_id)) =
+                existing_by_path.get(&scanned.canonical_path)
+            {
+                if scanned.identity.is_some()
+                    && scanned.identity.as_ref() == previous_identity.as_ref()
+                {
                     assigned_ids[index] = Some(previous_id.clone());
                     consumed_ids.insert(previous_id.clone());
                 } else {
@@ -3245,7 +3333,7 @@ impl SessionManager {
             if assigned_ids[index].is_some() || force_new_identity[index] {
                 continue;
             }
-            let Some(identity) = &scanned.7 else {
+            let Some(identity) = &scanned.identity else {
                 continue;
             };
             if let Some(previous_id) = existing_ids_by_identity
@@ -3259,54 +3347,79 @@ impl SessionManager {
 
         let mut images_by_id = HashMap::new();
         let mut snapshot_records = Vec::new();
-        for (
-            index,
-            (
-                canonical_path,
-                display_path,
-                file_name,
-                extension,
-                size_bytes,
-                modified_at,
-                created_at,
-                identity,
-            ),
-        ) in scanned_images.into_iter().enumerate()
-        {
+        for (index, scanned) in scanned_images.into_iter().enumerate() {
             let image_id =
                 assigned_ids[index].take().unwrap_or_else(|| self.generate_opaque_id("img"));
             images_by_id.insert(
                 image_id.clone(),
                 ImageRecordInternal {
                     id: image_id.clone(),
-                    canonical_path,
-                    display_path: display_path.clone(),
-                    file_name: file_name.clone(),
-                    extension: extension.clone(),
-                    size_bytes,
-                    modified_at: modified_at.clone(),
-                    created_at: created_at.clone(),
-                    filesystem_identity: identity,
+                    canonical_path: scanned.canonical_path,
+                    display_path: scanned.display_path.clone(),
+                    file_name: scanned.file_name.clone(),
+                    extension: scanned.extension.clone(),
+                    size_bytes: scanned.size_bytes,
+                    modified_at: scanned.modified_at.clone(),
+                    created_at: scanned.created_at.clone(),
+                    filesystem_identity: scanned.identity,
                 },
             );
             snapshot_records.push(AuthorizedImageRecord {
                 id: image_id,
-                path: display_path,
-                file_name,
-                extension,
-                size_bytes,
-                modified_at,
-                created_at,
+                path: scanned.display_path,
+                file_name: scanned.file_name,
+                extension: scanned.extension,
+                size_bytes: scanned.size_bytes,
+                modified_at: scanned.modified_at,
+                created_at: scanned.created_at,
             });
         }
 
         snapshot_records.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+        (images_by_id, snapshot_records)
+    }
 
+    fn publish_folder_session(
+        &self,
+        canonical_folder: PathBuf,
+        directory_handle: fs::File,
+        path_case_semantics: crate::path_normalization::PathCaseSemantics,
+        scanned_images: Vec<ScannedSessionImage>,
+        window_label: Option<&str>,
+    ) -> Result<FolderSessionSnapshot, String> {
+        let now_epoch =
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+
+        let mut store = self.store.lock().unwrap();
+        let existing_session_id = store
+            .sessions
+            .iter()
+            .find(|(_, session)| {
+                session.canonical_folder == canonical_folder
+                    && session.window_label.as_deref() == window_label
+            })
+            .map(|(id, _)| id.clone());
+
+        if let Some(existing_id) = existing_session_id.as_ref() {
+            let existing = store.sessions.get(existing_id).expect("existing session disappeared");
+            verify_pinned_directory_parts(&existing.directory_handle, &existing.canonical_folder)?;
+        }
+        verify_pinned_directory_parts(&directory_handle, &canonical_folder)?;
+
+        let session_id = existing_session_id.unwrap_or_else(|| self.generate_opaque_id("session"));
+        let session_instance_id = self.generate_opaque_id("session_instance");
+        let catalog_revision = store
+            .sessions
+            .get(&session_id)
+            .map(|session| session.catalog_revision.saturating_add(1))
+            .unwrap_or(1);
         let created_at_epoch = store
             .sessions
             .get(&session_id)
             .map(|session| session.created_at_epoch)
             .unwrap_or(now_epoch);
+        let (images_by_id, snapshot_records) =
+            self.build_authorized_records(&session_id, scanned_images, &store);
         let session_internal = SessionInternal {
             id: session_id.clone(),
             instance_id: session_instance_id.clone(),
@@ -3315,11 +3428,11 @@ impl SessionManager {
             directory_handle,
             path_case_semantics,
             images_by_id,
+            catalog_revision,
             created_at_epoch,
             last_used_at_epoch: now_epoch,
         };
 
-        // Enforce session eviction if exceeding cap (e.g. 50 active sessions)
         if !store.sessions.contains_key(&session_id) && store.sessions.len() >= 50 {
             if let Some(lru_key) = store
                 .sessions
@@ -3338,8 +3451,77 @@ impl SessionManager {
             session_instance_id,
             canonical_folder: canonical_folder.to_string_lossy().to_string(),
             path_case_semantics,
+            catalog_revision,
             images: snapshot_records,
         })
+    }
+
+    pub fn open_folder_session_bootstrap(
+        &self,
+        folder_path: &Path,
+        cached_hints: &[String],
+        limit: usize,
+        window_label: Option<&str>,
+    ) -> Result<FolderSessionSnapshot, String> {
+        let canonical_folder = Self::canonicalize_existing_file(folder_path)?;
+        if !canonical_folder.is_dir() {
+            return Err(format!("'{}' is not a valid directory", folder_path.display()));
+        }
+        let directory_handle = open_pinned_directory(&canonical_folder)?;
+        let path_case_semantics =
+            crate::path_normalization::directory_path_case_semantics(&directory_handle)?;
+
+        let mut scanned_images = Vec::new();
+        for hint in cached_hints.iter().take(limit) {
+            if let Some(scanned) = Self::cached_hint_to_scanned_image(
+                Path::new(hint),
+                &canonical_folder,
+                path_case_semantics,
+            ) {
+                scanned_images.push(scanned);
+            }
+        }
+        if scanned_images.is_empty() && limit > 0 {
+            scanned_images = Self::scan_folder_images_with_controls(
+                &canonical_folder,
+                path_case_semantics,
+                Some(limit),
+                Some(bootstrap_directory_entry_budget(limit)),
+                || Ok(()),
+            )?;
+        }
+
+        self.publish_folder_session(
+            canonical_folder,
+            directory_handle,
+            path_case_semantics,
+            scanned_images,
+            window_label,
+        )
+    }
+
+    pub fn open_folder_session(
+        &self,
+        folder_path: &Path,
+        window_label: Option<&str>,
+    ) -> Result<FolderSessionSnapshot, String> {
+        let canonical_folder = Self::canonicalize_existing_file(folder_path)?;
+        if !canonical_folder.is_dir() {
+            return Err(format!("'{}' is not a valid directory", folder_path.display()));
+        }
+        let directory_handle = open_pinned_directory(&canonical_folder)?;
+        let path_case_semantics =
+            crate::path_normalization::directory_path_case_semantics(&directory_handle)?;
+
+        let scanned_images =
+            Self::scan_folder_images(&canonical_folder, path_case_semantics, None)?;
+        self.publish_folder_session(
+            canonical_folder,
+            directory_handle,
+            path_case_semantics,
+            scanned_images,
+            window_label,
+        )
     }
 
     pub fn refresh_folder_session(
@@ -3348,6 +3530,25 @@ impl SessionManager {
         window_label: Option<&str>,
     ) -> Result<FolderSessionSnapshot, String> {
         self.refresh_folder_session_with_barrier(session_id, window_label, || {})
+    }
+
+    fn ensure_session_revision(
+        &self,
+        session_id: &str,
+        session_instance_id: &str,
+        catalog_revision: u64,
+    ) -> Result<(), String> {
+        let store = self.store.lock().unwrap();
+        let session = store
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| "Folder session is no longer active".to_string())?;
+        if session.instance_id != session_instance_id
+            || session.catalog_revision != catalog_revision
+        {
+            return Err("Folder session refresh was superseded by a newer catalog revision".into());
+        }
+        Ok(())
     }
 
     fn refresh_folder_session_with_barrier<F>(
@@ -3359,48 +3560,52 @@ impl SessionManager {
     where
         F: FnOnce(),
     {
-        // Refresh rebuilds and publishes the registry through open_folder_session. Serializing the
-        // read/commit sequence prevents an older refresh from overwriting a newer snapshot.
         let _refresh_guard = self.refresh_lock.lock().unwrap();
         before_refresh();
         let directory = self.lease_session_directory(session_id, window_label)?;
-        let (session_instance_id, previous_images, previous_directory) = {
+        let (session_instance_id, start_revision) = {
             let store = self.store.lock().unwrap();
             let session = store
                 .sessions
                 .get(session_id)
                 .ok_or_else(|| "Folder session is no longer active".to_string())?;
-            (
-                session.instance_id.clone(),
-                session.images_by_id.clone(),
-                session.directory_handle.try_clone().map_err(|error| {
-                    format!("Failed to preserve session directory during refresh: {error}")
-                })?,
-            )
+            (session.instance_id.clone(), session.catalog_revision)
         };
         directory.revalidate()?;
-        let mut refreshed = self.open_folder_session(directory.path(), window_label)?;
-        if let Err(error) = directory.revalidate() {
-            if let Some(session) = self.store.lock().unwrap().sessions.get_mut(session_id) {
-                session.images_by_id = previous_images;
-                session.directory_handle = previous_directory;
-                session.instance_id = session_instance_id;
-            }
-            return Err(format!(
-                "Folder authority changed during refresh; prior registry restored: {error}"
-            ));
-        }
-        if refreshed.session_id != session_id {
-            return Err("Authorized folder refresh changed session identity".into());
-        }
+        let scanned_images = Self::scan_folder_images_with_controls(
+            directory.path(),
+            directory.path_case_semantics(),
+            None,
+            None,
+            || self.ensure_session_revision(session_id, &session_instance_id, start_revision),
+        )?;
+        directory.revalidate()?;
         let mut store = self.store.lock().unwrap();
+        let (images_by_id, snapshot_records) =
+            self.build_authorized_records(session_id, scanned_images, &store);
         let session = store
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| "Folder session disappeared during refresh".to_string())?;
-        session.instance_id = session_instance_id.clone();
-        refreshed.session_instance_id = session_instance_id;
-        Ok(refreshed)
+        if session.instance_id != session_instance_id || session.catalog_revision != start_revision
+        {
+            return Err("Folder session refresh was superseded by a newer catalog revision".into());
+        }
+        session.images_by_id = images_by_id;
+        session.catalog_revision = session.catalog_revision.saturating_add(1);
+        session.last_used_at_epoch =
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let catalog_revision = session.catalog_revision;
+        let canonical_folder = session.canonical_folder.to_string_lossy().to_string();
+        let path_case_semantics = session.path_case_semantics;
+        Ok(FolderSessionSnapshot {
+            session_id: session_id.to_string(),
+            session_instance_id,
+            canonical_folder,
+            path_case_semantics,
+            catalog_revision,
+            images: snapshot_records,
+        })
     }
 
     pub fn open_file_session(
@@ -3437,6 +3642,51 @@ impl SessionManager {
             requested_image_id: requested_record.id.clone(),
             canonical_folder: folder_session.canonical_folder,
             path_case_semantics: folder_session.path_case_semantics,
+            catalog_revision: folder_session.catalog_revision,
+            images: folder_session.images,
+        })
+    }
+
+    pub fn open_file_session_bootstrap(
+        &self,
+        file_path: &Path,
+        cached_hints: &[String],
+        limit: usize,
+        window_label: Option<&str>,
+    ) -> Result<FileSessionSnapshot, String> {
+        let canonical_file = Self::canonicalize_existing_file(file_path)?;
+        if !canonical_file.is_file() {
+            return Err(format!("'{}' is not a valid file", file_path.display()));
+        }
+        let parent_folder =
+            canonical_file.parent().ok_or_else(|| "File has no parent directory".to_string())?;
+        let requested_path = canonical_file.to_string_lossy().to_string();
+        let mut hints = Vec::with_capacity(limit.max(1));
+        hints.push(requested_path);
+        hints.extend(
+            cached_hints
+                .iter()
+                .filter(|hint| Path::new(hint.as_str()) != canonical_file)
+                .take(limit.saturating_sub(1))
+                .cloned(),
+        );
+        let folder_session =
+            self.open_folder_session_bootstrap(parent_folder, &hints, limit, window_label)?;
+        let requested_record = folder_session
+            .images
+            .iter()
+            .find(|img| Path::new(&img.path) == canonical_file)
+            .ok_or_else(|| {
+                format!("Could not find authorized record for '{}'", file_path.display())
+            })?;
+
+        Ok(FileSessionSnapshot {
+            session_id: folder_session.session_id,
+            session_instance_id: folder_session.session_instance_id,
+            requested_image_id: requested_record.id.clone(),
+            canonical_folder: folder_session.canonical_folder,
+            path_case_semantics: folder_session.path_case_semantics,
+            catalog_revision: folder_session.catalog_revision,
             images: folder_session.images,
         })
     }
@@ -3579,6 +3829,7 @@ impl SessionManager {
             session_instance_id: session.instance_id.clone(),
             canonical_folder: session.canonical_folder.to_string_lossy().to_string(),
             path_case_semantics: session.path_case_semantics,
+            catalog_revision: session.catalog_revision,
             images,
         })
     }
@@ -4534,6 +4785,35 @@ fn verify_pinned_file(handle: &fs::File, path: &Path, description: &str) -> Resu
     Ok(())
 }
 
+fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn is_direct_child_with_semantics(
+    path: &Path,
+    folder: &Path,
+    semantics: crate::path_normalization::PathCaseSemantics,
+) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    is_path_contained_in_with_semantics(path, folder, semantics)
+        && crate::path_normalization::normalize_path_for_key_with_semantics(parent, semantics)
+            == crate::path_normalization::normalize_path_for_key_with_semantics(folder, semantics)
+}
+
 fn open_pinned_directory(path: &Path) -> Result<fs::File, String> {
     #[cfg(windows)]
     {
@@ -4718,6 +4998,129 @@ mod tests {
         assert_eq!(first.session_id, second.session_id);
         assert_eq!(first.images[0].id, second.images[0].id);
         assert_eq!(manager.store.lock().unwrap().sessions.len(), 1);
+    }
+
+    #[test]
+    fn bootstrap_session_revalidates_cached_hints_and_keeps_result_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("images");
+        let outside = dir.path().join("outside.jpg");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.jpg"), b"a").unwrap();
+        fs::write(folder.join("b.jpg"), b"b").unwrap();
+        fs::write(folder.join("c.jpg"), b"c").unwrap();
+        fs::write(&outside, b"outside").unwrap();
+
+        let hints = vec![
+            outside.to_string_lossy().to_string(),
+            folder.join("a.jpg").to_string_lossy().to_string(),
+            folder.join("b.jpg").to_string_lossy().to_string(),
+            folder.join("c.jpg").to_string_lossy().to_string(),
+        ];
+        let manager = SessionManager::new();
+        let snapshot =
+            manager.open_folder_session_bootstrap(&folder, &hints, 2, Some("main")).unwrap();
+
+        assert_eq!(snapshot.images.len(), 1);
+        assert!(snapshot.images[0].path.ends_with("a.jpg"));
+        let lease = manager
+            .lease_image(&snapshot.session_id, &snapshot.images[0].id, Some("main"))
+            .unwrap();
+        assert_eq!(fs::read(lease.path()).unwrap(), b"a");
+    }
+
+    #[test]
+    fn bootstrap_session_uses_bounded_directory_fallback_for_empty_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.jpg", "b.jpg", "c.jpg"] {
+            fs::write(dir.path().join(name), name.as_bytes()).unwrap();
+        }
+
+        let manager = SessionManager::new();
+        let snapshot =
+            manager.open_folder_session_bootstrap(dir.path(), &[], 2, Some("main")).unwrap();
+
+        assert_eq!(snapshot.images.len(), 2);
+        assert_eq!(
+            manager.store.lock().unwrap().sessions[&snapshot.session_id].images_by_id.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn bootstrap_directory_fallback_stops_after_entry_budget() {
+        reset_test_scan_entry_count();
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..100 {
+            fs::write(dir.path().join(format!("unsupported-{index}.txt")), b"not-image").unwrap();
+        }
+
+        let manager = SessionManager::new();
+        let snapshot =
+            manager.open_folder_session_bootstrap(dir.path(), &[], 2, Some("main")).unwrap();
+
+        assert!(snapshot.images.is_empty());
+        assert!(test_scan_entry_count() <= bootstrap_directory_entry_budget(2));
+    }
+
+    #[test]
+    fn refresh_rejects_session_closed_during_reconciliation() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("photo.jpg"), b"dummy-image").unwrap();
+        let manager = SessionManager::new();
+        let snapshot =
+            manager.open_folder_session_bootstrap(dir.path(), &[], 1, Some("main")).unwrap();
+        let instance_id = snapshot.session_instance_id.clone();
+
+        let result =
+            manager.refresh_folder_session_with_barrier(&snapshot.session_id, Some("main"), || {
+                manager
+                    .close_session_instance(&snapshot.session_id, &instance_id, Some("main"))
+                    .unwrap();
+            });
+
+        assert!(result.unwrap_err().contains("invalid or expired"));
+    }
+
+    #[test]
+    fn refresh_cancel_probe_stops_stale_scan_after_session_reopen() {
+        reset_test_scan_entry_count();
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..200 {
+            fs::write(dir.path().join(format!("image-{index:03}.jpg")), b"image").unwrap();
+        }
+        let manager = SessionManager::new();
+        let snapshot =
+            manager.open_folder_session_bootstrap(dir.path(), &[], 1, Some("main")).unwrap();
+        reset_test_scan_entry_count();
+
+        let manager_for_hook = manager.clone();
+        let session_id_for_hook = snapshot.session_id.clone();
+        let instance_id_for_hook = snapshot.session_instance_id.clone();
+        let folder_for_hook = dir.path().to_path_buf();
+        set_test_scan_entry_hook(move || {
+            manager_for_hook
+                .close_session_instance(&session_id_for_hook, &instance_id_for_hook, Some("main"))
+                .unwrap();
+            let _ = manager_for_hook.open_folder_session_bootstrap(
+                &folder_for_hook,
+                &[],
+                1,
+                Some("main"),
+            );
+        });
+
+        let result = manager.refresh_folder_session(&snapshot.session_id, Some("main"));
+
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("no longer active") || error.contains("superseded"),
+            "unexpected stale refresh error: {error}"
+        );
+        assert!(test_scan_entry_count() < 10);
+        let store = manager.store.lock().unwrap();
+        assert!(!store.sessions.contains_key(&snapshot.session_id));
+        assert_eq!(store.sessions.len(), 1);
     }
 
     #[test]

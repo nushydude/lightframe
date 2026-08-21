@@ -68,6 +68,7 @@ export interface FolderSessionSnapshot {
   session_instance_id?: string;
   canonical_folder: string;
   path_case_semantics?: PathCaseSemantics;
+  catalog_revision?: number;
   images: AuthorizedImageRecord[];
 }
 
@@ -77,7 +78,23 @@ export interface FileSessionSnapshot {
   requested_image_id: string;
   canonical_folder: string;
   path_case_semantics?: PathCaseSemantics;
+  catalog_revision?: number;
   images: AuthorizedImageRecord[];
+}
+
+interface FolderIndexPayload {
+  catalogRevision: number;
+  images: ImageFile[];
+}
+
+type FolderIndexResponse = FolderIndexPayload | ImageFile[] | null;
+
+function folderIndexImages(payload: FolderIndexResponse): ImageFile[] {
+  return Array.isArray(payload) ? payload : (payload?.images ?? []);
+}
+
+function folderIndexRevision(payload: FolderIndexResponse): number {
+  return Array.isArray(payload) ? 0 : (payload?.catalogRevision ?? 0);
 }
 
 export type StartupSessionSelection =
@@ -93,7 +110,7 @@ class SessionCoordinator {
   private winningGeneration = 0;
   private folderSessions = new Map<
     string,
-    { generation: number; session: FolderSessionSnapshot }
+    { generation: number; session: FolderSessionSnapshot; latestCatalogRevision: number }
   >();
   private pendingFolderOpens = new Map<string, Promise<FolderSessionSnapshot>>();
   private activeSessionImages = new Map<string, { sessionId: string; imageId: string }>();
@@ -132,6 +149,7 @@ class SessionCoordinator {
       requested_image_id: existingImage.imageId,
       canonical_folder: existingFolder.canonical_folder,
       path_case_semantics: existingFolder.path_case_semantics,
+      catalog_revision: existingFolder.catalog_revision,
       images: existingFolder.images,
     };
   }
@@ -153,7 +171,11 @@ class SessionCoordinator {
             `Folder session request for '${folderPath}' was superseded by a newer request`
           );
         }
-        this.folderSessions.set(requestedKey, { generation: requestGen, session: accepted });
+        this.folderSessions.set(requestedKey, {
+          generation: requestGen,
+          session: accepted,
+          latestCatalogRevision: accepted.catalog_revision ?? 0,
+        });
         return accepted;
       })
       .finally(() => {
@@ -187,7 +209,11 @@ class SessionCoordinator {
     this.closeReplacedSessions(key, session.session_id);
 
     this.activeSessionId = session.session_id;
-    this.folderSessions.set(key, { generation: requestGen, session });
+    this.folderSessions.set(key, {
+      generation: requestGen,
+      session,
+      latestCatalogRevision: session.catalog_revision ?? 0,
+    });
     this.indexSessionImages(session);
 
     return session;
@@ -217,6 +243,15 @@ class SessionCoordinator {
     return null;
   }
 
+  private findSessionEntry(
+    sessionId: string
+  ): { generation: number; session: FolderSessionSnapshot; latestCatalogRevision: number } | null {
+    for (const entry of this.folderSessions.values()) {
+      if (entry.session.session_id === sessionId) return entry;
+    }
+    return null;
+  }
+
   private requestSessionClose(session: FolderSessionSnapshot): void {
     if (!session.session_instance_id) return;
     void invoke('close_folder_session', {
@@ -229,9 +264,21 @@ class SessionCoordinator {
     return this.findSession(sessionId)?.session_instance_id ?? null;
   }
 
-  public refreshSessionImages(sessionId: string, images: ImageFile[]): void {
-    const session = this.findSession(sessionId);
-    if (!session) return;
+  public refreshSessionImages(
+    sessionId: string,
+    images: ImageFile[],
+    catalogRevision = 0
+  ): boolean {
+    const entry = this.findSessionEntry(sessionId);
+    if (!entry) return false;
+    if (catalogRevision > 0 && catalogRevision < entry.latestCatalogRevision) {
+      return false;
+    }
+    if (catalogRevision > 0) {
+      entry.latestCatalogRevision = catalogRevision;
+      entry.session.catalog_revision = catalogRevision;
+    }
+    const session = entry.session;
     session.images = images.flatMap((image) =>
       image.id
         ? [
@@ -248,6 +295,7 @@ class SessionCoordinator {
         : []
     );
     if (this.activeSessionId === sessionId) this.indexSessionImages(session);
+    return true;
   }
 
   private indexSessionImages(session: FolderSessionSnapshot): void {
@@ -293,6 +341,7 @@ class SessionCoordinator {
     this.activeSessionImages.clear();
     this.folderSessions.clear();
     this.pendingFolderOpens.clear();
+    pendingFolderRefreshes.clear();
     this.projectorGrantOnly = false;
     this.winningGeneration = ++this.currentGeneration;
   }
@@ -312,6 +361,7 @@ class SessionCoordinator {
     this.winningGeneration = ++this.currentGeneration;
     this.folderSessions.clear();
     this.pendingFolderOpens.clear();
+    pendingFolderRefreshes.clear();
     this.activeSessionImages.clear();
     this.projectorGrantOnly = false;
   }
@@ -379,6 +429,7 @@ function acceptNativeSessionSnapshot<T extends AdoptableSessionSnapshot>(
     session_instance_id: session.session_instance_id,
     canonical_folder: session.canonical_folder,
     path_case_semantics: session.path_case_semantics,
+    catalog_revision: session.catalog_revision,
     images: session.images,
   });
   if (!accepted) throw new Error(supersededMessage);
@@ -635,6 +686,7 @@ export interface FolderWatcherChange {
 
 export interface FolderWatcherPayload {
   sessionId: string;
+  catalogRevision: number;
   folderPath: string;
   images: ImageFile[];
   changes: FolderWatcherChange[];
@@ -682,8 +734,15 @@ export async function listenToFolderWatcherChanges(
   onChange: (payload: FolderWatcherPayload) => void
 ): Promise<UnlistenFn> {
   return listen<FolderWatcherPayload>(FOLDER_WATCHER_EVENT, (event) => {
-    sessionCoordinator.refreshSessionImages(event.payload.sessionId, event.payload.images);
-    onChange(event.payload);
+    if (
+      sessionCoordinator.refreshSessionImages(
+        event.payload.sessionId,
+        event.payload.images,
+        event.payload.catalogRevision
+      )
+    ) {
+      onChange(event.payload);
+    }
   });
 }
 
@@ -698,9 +757,13 @@ export async function scanFolder(folderPath: string): Promise<ImageFile[]> {
 
 // fallow-ignore-next-line unused-export -- session-based IPC helper
 export async function readFolderIndexBySession(sessionId: string): Promise<ImageFile[]> {
-  const records = await invoke<ImageFile[] | null>('read_folder_index_by_session', { sessionId });
-  const images = records ?? [];
-  sessionCoordinator.refreshSessionImages(sessionId, images);
+  const payload = await invoke<FolderIndexResponse>('read_folder_index_by_session', {
+    sessionId,
+  });
+  const images = folderIndexImages(payload);
+  if (!sessionCoordinator.refreshSessionImages(sessionId, images, folderIndexRevision(payload))) {
+    throw new Error('Folder index read was superseded by a newer catalog revision');
+  }
   return images;
 }
 
@@ -710,14 +773,45 @@ export async function readFolderIndex(folderPath: string): Promise<ImageFile[]> 
   return readFolderIndexBySession(session.session_id);
 }
 
+const pendingFolderRefreshes = new Map<string, Promise<ImageFile[]>>();
+
 export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[]> {
   const session =
     sessionCoordinator.getSessionForFolder(folderPath) ?? (await openFolderSession(folderPath));
-  const records = await invoke<ImageFile[] | null>('refresh_folder_index_by_session', {
+  const sessionInstanceId = session.session_instance_id ?? '';
+  const refreshKey = `${session.session_id}:${sessionInstanceId}`;
+  const pending = pendingFolderRefreshes.get(refreshKey);
+  if (pending) return pending;
+
+  const refreshPromise = invoke<FolderIndexResponse>('refresh_folder_index_by_session', {
     sessionId: session.session_id,
-  });
-  const images = records ?? [];
-  sessionCoordinator.refreshSessionImages(session.session_id, images);
+  })
+    .then((payload) => {
+      if (
+        sessionInstanceId &&
+        sessionCoordinator.getSessionInstanceId(session.session_id) !== sessionInstanceId
+      ) {
+        throw new Error('Folder refresh was superseded by a newer session instance');
+      }
+      const images = folderIndexImages(payload);
+      if (
+        !sessionCoordinator.refreshSessionImages(
+          session.session_id,
+          images,
+          folderIndexRevision(payload)
+        )
+      ) {
+        throw new Error('Folder refresh was superseded by a newer catalog revision');
+      }
+      return images;
+    })
+    .finally(() => {
+      if (pendingFolderRefreshes.get(refreshKey) === refreshPromise) {
+        pendingFolderRefreshes.delete(refreshKey);
+      }
+    });
+  pendingFolderRefreshes.set(refreshKey, refreshPromise);
+  const images = await refreshPromise;
   return images;
 }
 

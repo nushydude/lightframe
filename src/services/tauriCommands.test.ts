@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   acquireSlideshowDisplayInhibition,
+  adoptNativeSessionSelection,
+  consumeStartupSession,
   getImageCaption,
   getParentFolder,
   openFolderSession,
+  readFolderIndex,
+  refreshFolderIndex,
+  listenToFolderWatcherChanges,
   selectFolderSession,
   selectFileSession,
   releaseSlideshowDisplayInhibition,
@@ -529,6 +535,443 @@ describe('tauriCommands packaged IPC contract suite', () => {
     expect(
       vi.mocked(invoke).mock.calls.filter(([command]) => command === 'read_folder_index_by_session')
     ).toHaveLength(5);
+  });
+
+  it('coalesces concurrent folder refreshes for the same session instance', async () => {
+    let releaseRefresh!: () => void;
+    const refreshBarrier = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'select_folder_session') {
+        return {
+          session_id: 'sess_coalesced',
+          session_instance_id: 'instance_coalesced',
+          canonical_folder: 'C:/Photos',
+          images: [],
+        } as never;
+      }
+      if (command === 'refresh_folder_index_by_session') {
+        await refreshBarrier;
+        return [
+          {
+            id: 'img_a',
+            sessionId: 'sess_coalesced',
+            path: 'C:/Photos/a.jpg',
+            file_name: 'a.jpg',
+          },
+        ] as never;
+      }
+      return undefined as never;
+    });
+    await selectFolderSession();
+
+    const first = refreshFolderIndex('C:/Photos');
+    const second = refreshFolderIndex('C:/Photos');
+    releaseRefresh();
+
+    await expect(first).resolves.toHaveLength(1);
+    await expect(second).resolves.toHaveLength(1);
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === 'refresh_folder_index_by_session')
+    ).toHaveLength(1);
+  });
+
+  it('rejects a refresh result after the session instance is closed', async () => {
+    let releaseRefresh!: () => void;
+    const refreshBarrier = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'select_folder_session') {
+        return {
+          session_id: 'sess_stale_refresh',
+          session_instance_id: 'instance_old',
+          canonical_folder: 'C:/Photos',
+          images: [],
+        } as never;
+      }
+      if (command === 'refresh_folder_index_by_session') {
+        await refreshBarrier;
+        return [
+          {
+            id: 'img_stale',
+            sessionId: 'sess_stale_refresh',
+            path: 'C:/Photos/stale.jpg',
+            file_name: 'stale.jpg',
+          },
+        ] as never;
+      }
+      return undefined as never;
+    });
+    await selectFolderSession();
+
+    const refresh = refreshFolderIndex('C:/Photos');
+    sessionCoordinator.reset();
+    releaseRefresh();
+
+    await expect(refresh).rejects.toThrow('superseded by a newer session instance');
+    expect(sessionCoordinator.getActiveSessionForPath('C:/Photos/stale.jpg')).toBeNull();
+  });
+
+  it('rejects an out-of-order refresh payload older than an accepted watcher revision', async () => {
+    let eventHandler:
+      | ((event: {
+          payload: {
+            sessionId: string;
+            catalogRevision: number;
+            folderPath: string;
+            images: Array<{ id: string; path: string; file_name: string }>;
+            changes: [];
+            requiresFullRefresh: false;
+          };
+        }) => void)
+      | undefined;
+    let releaseRefresh!: () => void;
+    const refreshBarrier = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    vi.mocked(listen).mockImplementation(async (_event, handler) => {
+      eventHandler = handler as typeof eventHandler;
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'select_folder_session') {
+        return {
+          session_id: 'sess_revision',
+          session_instance_id: 'instance_revision',
+          catalog_revision: 1,
+          canonical_folder: 'C:/Photos',
+          images: [],
+        } as never;
+      }
+      if (command === 'refresh_folder_index_by_session') {
+        await refreshBarrier;
+        return {
+          catalogRevision: 2,
+          images: [
+            {
+              id: 'img_stale',
+              sessionId: 'sess_revision',
+              path: 'C:/Photos/stale.jpg',
+              file_name: 'stale.jpg',
+            },
+          ],
+        } as never;
+      }
+      return undefined as never;
+    });
+    await selectFolderSession();
+    const onWatcherPayload = vi.fn();
+    await listenToFolderWatcherChanges(onWatcherPayload);
+
+    const refresh = refreshFolderIndex('C:/Photos');
+    eventHandler?.({
+      payload: {
+        sessionId: 'sess_revision',
+        catalogRevision: 3,
+        folderPath: 'C:/Photos',
+        images: [{ id: 'img_new', path: 'C:/Photos/new.jpg', file_name: 'new.jpg' }],
+        changes: [],
+        requiresFullRefresh: false,
+      },
+    });
+    releaseRefresh();
+
+    await expect(refresh).rejects.toThrow('superseded by a newer catalog revision');
+    expect(onWatcherPayload).toHaveBeenCalledTimes(1);
+    expect(sessionCoordinator.getActiveSessionForPath('C:/Photos/new.jpg')).toEqual({
+      sessionId: 'sess_revision',
+      imageId: 'img_new',
+    });
+    expect(sessionCoordinator.getActiveSessionForPath('C:/Photos/stale.jpg')).toBeNull();
+  });
+
+  it('does not deliver stale watcher payloads older than the accepted revision', async () => {
+    let eventHandler:
+      | ((event: {
+          payload: {
+            sessionId: string;
+            catalogRevision: number;
+            folderPath: string;
+            images: Array<{ id: string; path: string; file_name: string }>;
+            changes: [];
+            requiresFullRefresh: false;
+          };
+        }) => void)
+      | undefined;
+    vi.mocked(listen).mockImplementation(async (_event, handler) => {
+      eventHandler = handler as typeof eventHandler;
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'select_folder_session') {
+        return {
+          session_id: 'sess_watcher_revision',
+          session_instance_id: 'instance_watcher_revision',
+          catalog_revision: 4,
+          canonical_folder: 'C:/Photos',
+          images: [{ id: 'img_current', path: 'C:/Photos/current.jpg', file_name: 'current.jpg' }],
+        } as never;
+      }
+      return undefined as never;
+    });
+    await selectFolderSession();
+    const onWatcherPayload = vi.fn();
+    await listenToFolderWatcherChanges(onWatcherPayload);
+
+    eventHandler?.({
+      payload: {
+        sessionId: 'sess_watcher_revision',
+        catalogRevision: 3,
+        folderPath: 'C:/Photos',
+        images: [{ id: 'img_old', path: 'C:/Photos/old.jpg', file_name: 'old.jpg' }],
+        changes: [],
+        requiresFullRefresh: false,
+      },
+    });
+
+    expect(onWatcherPayload).not.toHaveBeenCalled();
+    expect(sessionCoordinator.getActiveSessionForPath('C:/Photos/current.jpg')).toEqual({
+      sessionId: 'sess_watcher_revision',
+      imageId: 'img_current',
+    });
+    expect(sessionCoordinator.getActiveSessionForPath('C:/Photos/old.jpg')).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'startup',
+      register: async () => {
+        vi.mocked(invoke).mockImplementation(async (command) => {
+          if (command === 'consume_startup_session') {
+            return {
+              mode: 'folder',
+              session: {
+                session_id: 'sess_startup_revision',
+                session_instance_id: 'instance_startup_revision',
+                catalog_revision: 5,
+                canonical_folder: 'C:/Startup',
+                images: [
+                  {
+                    id: 'img_startup_current',
+                    path: 'C:/Startup/current.jpg',
+                    file_name: 'current.jpg',
+                  },
+                ],
+              },
+            } as never;
+          }
+          return undefined as never;
+        });
+        await consumeStartupSession();
+        return { sessionId: 'sess_startup_revision', folderPath: 'C:/Startup' };
+      },
+    },
+    {
+      name: 'adopted-native',
+      register: async () => {
+        adoptNativeSessionSelection({
+          mode: 'folder',
+          session: {
+            session_id: 'sess_adopted_revision',
+            session_instance_id: 'instance_adopted_revision',
+            catalog_revision: 5,
+            canonical_folder: 'C:/Adopted',
+            images: [
+              {
+                id: 'img_adopted_current',
+                path: 'C:/Adopted/current.jpg',
+                file_name: 'current.jpg',
+                extension: 'jpg',
+                size_bytes: 1,
+              },
+            ],
+          },
+        });
+        return { sessionId: 'sess_adopted_revision', folderPath: 'C:/Adopted' };
+      },
+    },
+    {
+      name: 'file',
+      register: async () => {
+        vi.mocked(invoke).mockImplementation(async (command) => {
+          if (command === 'select_file_session') {
+            return {
+              session_id: 'sess_file_revision',
+              session_instance_id: 'instance_file_revision',
+              requested_image_id: 'img_file_current',
+              catalog_revision: 5,
+              canonical_folder: 'C:/File',
+              images: [
+                {
+                  id: 'img_file_current',
+                  path: 'C:/File/current.jpg',
+                  file_name: 'current.jpg',
+                },
+              ],
+            } as never;
+          }
+          return undefined as never;
+        });
+        await selectFileSession();
+        return { sessionId: 'sess_file_revision', folderPath: 'C:/File' };
+      },
+    },
+  ])(
+    'seeds native $name session revisions so older watcher refresh and read payloads are rejected',
+    async ({ register }) => {
+      let eventHandler:
+        | ((event: {
+            payload: {
+              sessionId: string;
+              catalogRevision: number;
+              folderPath: string;
+              images: Array<{ id: string; path: string; file_name: string }>;
+              changes: [];
+              requiresFullRefresh: false;
+            };
+          }) => void)
+        | undefined;
+      vi.mocked(listen).mockImplementation(async (_event, handler) => {
+        eventHandler = handler as typeof eventHandler;
+        return () => undefined;
+      });
+
+      const { sessionId, folderPath } = await register();
+      vi.mocked(invoke).mockImplementation(async (command) => {
+        if (command === 'refresh_folder_index_by_session') {
+          return {
+            catalogRevision: 4,
+            images: [
+              {
+                id: 'img_refresh_old',
+                path: `${folderPath}/refresh-old.jpg`,
+                file_name: 'refresh-old.jpg',
+              },
+            ],
+          } as never;
+        }
+        if (command === 'read_folder_index_by_session') {
+          return {
+            catalogRevision: 4,
+            images: [
+              { id: 'img_read_old', path: `${folderPath}/read-old.jpg`, file_name: 'read-old.jpg' },
+            ],
+          } as never;
+        }
+        return undefined as never;
+      });
+      const onWatcherPayload = vi.fn();
+      await listenToFolderWatcherChanges(onWatcherPayload);
+
+      eventHandler?.({
+        payload: {
+          sessionId,
+          catalogRevision: 4,
+          folderPath,
+          images: [
+            {
+              id: 'img_watcher_old',
+              path: `${folderPath}/watcher-old.jpg`,
+              file_name: 'watcher-old.jpg',
+            },
+          ],
+          changes: [],
+          requiresFullRefresh: false,
+        },
+      });
+
+      await expect(refreshFolderIndex(folderPath)).rejects.toThrow(
+        'superseded by a newer catalog revision'
+      );
+      await expect(readFolderIndex(folderPath)).rejects.toThrow(
+        'superseded by a newer catalog revision'
+      );
+      expect(onWatcherPayload).not.toHaveBeenCalled();
+      expect(sessionCoordinator.getActiveSessionForPath(`${folderPath}/current.jpg`)).toEqual({
+        sessionId,
+        imageId: expect.stringMatching(/^img_.*_current$/),
+      });
+      expect(
+        sessionCoordinator.getActiveSessionForPath(`${folderPath}/watcher-old.jpg`)
+      ).toBeNull();
+      expect(
+        sessionCoordinator.getActiveSessionForPath(`${folderPath}/refresh-old.jpg`)
+      ).toBeNull();
+      expect(sessionCoordinator.getActiveSessionForPath(`${folderPath}/read-old.jpg`)).toBeNull();
+    }
+  );
+
+  it('rejects stale read payloads after a newer watcher revision so read results cannot overwrite the session', async () => {
+    let eventHandler:
+      | ((event: {
+          payload: {
+            sessionId: string;
+            catalogRevision: number;
+            folderPath: string;
+            images: Array<{ id: string; path: string; file_name: string }>;
+            changes: [];
+            requiresFullRefresh: false;
+          };
+        }) => void)
+      | undefined;
+    vi.mocked(listen).mockImplementation(async (_event, handler) => {
+      eventHandler = handler as typeof eventHandler;
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'select_folder_session') {
+        return {
+          session_id: 'sess_read_race',
+          session_instance_id: 'instance_read_race',
+          catalog_revision: 1,
+          canonical_folder: 'C:/ReadRace',
+          images: [
+            { id: 'img_initial', path: 'C:/ReadRace/initial.jpg', file_name: 'initial.jpg' },
+          ],
+        } as never;
+      }
+      if (command === 'read_folder_index_by_session') {
+        return {
+          catalogRevision: 2,
+          images: [
+            {
+              id: 'img_stale_read',
+              path: 'C:/ReadRace/stale-read.jpg',
+              file_name: 'stale-read.jpg',
+            },
+          ],
+        } as never;
+      }
+      return undefined as never;
+    });
+    await selectFolderSession();
+    const onWatcherPayload = vi.fn();
+    await listenToFolderWatcherChanges(onWatcherPayload);
+
+    eventHandler?.({
+      payload: {
+        sessionId: 'sess_read_race',
+        catalogRevision: 3,
+        folderPath: 'C:/ReadRace',
+        images: [{ id: 'img_new_read', path: 'C:/ReadRace/new.jpg', file_name: 'new.jpg' }],
+        changes: [],
+        requiresFullRefresh: false,
+      },
+    });
+
+    await expect(readFolderIndex('C:/ReadRace')).rejects.toThrow(
+      'superseded by a newer catalog revision'
+    );
+    expect(onWatcherPayload).toHaveBeenCalledTimes(1);
+    expect(sessionCoordinator.getActiveSessionForPath('C:/ReadRace/new.jpg')).toEqual({
+      sessionId: 'sess_read_race',
+      imageId: 'img_new_read',
+    });
+    expect(sessionCoordinator.getActiveSessionForPath('C:/ReadRace/stale-read.jpg')).toBeNull();
   });
 
   it.each(['post-first', 'pre-first'] as const)(
