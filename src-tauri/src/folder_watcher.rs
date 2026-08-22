@@ -25,6 +25,7 @@ const CHANGE_FULL_REFRESH_THRESHOLD: usize = 64;
 #[serde(rename_all = "camelCase")]
 pub struct FolderWatcherPayload {
     pub session_id: String,
+    pub catalog_revision: u64,
     pub folder_path: String,
     pub images: Vec<ImageFile>,
     pub changes: Vec<FolderWatcherChange>,
@@ -364,6 +365,7 @@ fn publish_watcher_batch(
 
     let payload = FolderWatcherPayload {
         session_id: session_id.to_string(),
+        catalog_revision: refreshed.catalog_revision,
         folder_path: folder_path.to_string_lossy().to_string(),
         images,
         changes,
@@ -372,6 +374,7 @@ fn publish_watcher_batch(
 
     let index_changes =
         if !payload.requires_full_refresh { Some(payload.changes.clone()) } else { None };
+    let catalog_revision = payload.catalog_revision;
 
     let result = run_authorized_publication_steps(
         || directory_lease.revalidate(),
@@ -386,7 +389,13 @@ fn publish_watcher_batch(
         },
         || {
             if let Some(changes) = index_changes {
-                update_persistent_folder_index(app, folder_path, &changes, path_case_semantics);
+                update_persistent_folder_index(
+                    app,
+                    folder_path,
+                    &changes,
+                    path_case_semantics,
+                    catalog_revision,
+                );
             }
         },
     );
@@ -708,6 +717,7 @@ fn update_persistent_folder_index(
     folder_path: &Path,
     changes: &[FolderWatcherChange],
     semantics: PathCaseSemantics,
+    catalog_revision: u64,
 ) {
     let index_root = match app.path().app_cache_dir() {
         Ok(cache_dir) => folder_index::index_root(&cache_dir),
@@ -740,11 +750,12 @@ fn update_persistent_folder_index(
     let mut images: Vec<ImageFile> = images_by_key.into_values().collect();
     sort_image_files_by_name(&mut images);
 
-    if let Err(err) = folder_index::write_folder_images_with_semantics(
+    if let Err(err) = folder_index::write_folder_images_for_revision_with_semantics(
         &index_root,
         folder_path,
         &images,
         semantics,
+        catalog_revision,
     ) {
         eprintln!(
             "Failed to update persistent folder index from watcher changes for '{}': {}",
@@ -970,6 +981,22 @@ mod tests {
             2
         );
         assert_eq!(coalesce_repeated_changes(changes, PathCaseSemantics::Insensitive).len(), 1);
+    }
+
+    #[test]
+    fn watcher_payload_serializes_catalog_revision() {
+        let payload = FolderWatcherPayload {
+            session_id: "sess_revision".to_string(),
+            catalog_revision: 42,
+            folder_path: "C:/Photos".to_string(),
+            images: Vec::new(),
+            changes: Vec::new(),
+            requires_full_refresh: false,
+        };
+
+        let serialized = serde_json::to_value(&payload).unwrap();
+        assert_eq!(serialized["sessionId"], "sess_revision");
+        assert_eq!(serialized["catalogRevision"], 42);
     }
 
     #[test]

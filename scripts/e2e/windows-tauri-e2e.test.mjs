@@ -137,6 +137,7 @@ test('launch terminates its owned child when CDP attachment fails', async () => 
         onOwned: (session) => {
           owned = session;
         },
+        attachTimeoutMs: 20,
       }),
     /CDP unavailable/
   );
@@ -165,8 +166,96 @@ test('launch does not kill an already-exited owned child after attach failure', 
           target: Promise.reject(new Error('attach failed')),
           close: async () => undefined,
         }),
+        attachTimeoutMs: 20,
       }),
     /attach failed/
+  );
+});
+
+test('launch falls back to the HTTP CDP endpoint when the debugger pipe never resolves', async () => {
+  const child = createChild({ exitCode: 0 });
+  const polledTargetIds = [];
+  const connectedPages = [];
+
+  const session = await launch([], {}, [], {
+    findPort: async () => 9222,
+    executable: () => 'C:/LightFrame.exe',
+    spawnProcess: () => child,
+    pollEndpoint: async (port, timeoutMs, targetId) => {
+      assert.equal(port, 9222);
+      assert.ok(timeoutMs > 0);
+      polledTargetIds.push(targetId);
+      return {
+        type: 'page',
+        id: 'http-target',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/http-target',
+      };
+    },
+    createDebuggerPipe: async () => ({
+      target: new Promise(() => {}),
+      close: async () => undefined,
+    }),
+    connectClient: async (page) => {
+      connectedPages.push(page);
+      return { socket: { close: () => undefined }, events: { console: [], exceptions: [] } };
+    },
+  });
+
+  assert.equal(session.cdp.events.console.length, 0);
+  assert.deepEqual(polledTargetIds, [undefined]);
+  assert.deepEqual(
+    connectedPages.map((page) => page.id),
+    ['http-target']
+  );
+});
+
+test('launch prefers a concurrently resolved debugger-pipe target over HTTP fallback', async () => {
+  const child = createChild({ exitCode: 0 });
+  const polledTargetIds = [];
+  const connectedPages = [];
+  let resolvePipeTarget;
+  const pipeTarget = new Promise((resolve) => {
+    resolvePipeTarget = resolve;
+  });
+
+  const session = await launch([], {}, [], {
+    findPort: async () => 9222,
+    executable: () => 'C:/LightFrame.exe',
+    spawnProcess: () => child,
+    pollEndpoint: async (port, timeoutMs, targetId) => {
+      assert.equal(port, 9222);
+      assert.ok(timeoutMs > 0);
+      polledTargetIds.push(targetId);
+      if (targetId === undefined) {
+        resolvePipeTarget({ type: 'page', id: 'exact-target' });
+        return {
+          type: 'page',
+          id: 'other-page',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/other-page',
+        };
+      }
+      assert.equal(targetId, 'exact-target');
+      return {
+        type: 'page',
+        id: 'exact-target',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/exact-target',
+      };
+    },
+    createDebuggerPipe: async () => ({
+      target: pipeTarget,
+      close: async () => undefined,
+    }),
+    connectClient: async (page) => {
+      connectedPages.push(page);
+      return { socket: { close: () => undefined }, events: { console: [], exceptions: [] } };
+    },
+  });
+
+  assert.equal(session.cdp.events.console.length, 0);
+  assert.deepEqual(polledTargetIds, [undefined, 'exact-target']);
+  assert.deepEqual(
+    connectedPages.map((page) => page.id),
+    ['exact-target']
   );
 });
 
@@ -529,6 +618,7 @@ test('attach failure retains its cause when owned process cleanup also fails', a
         terminateProcessTree: async () => {
           throw new Error('taskkill failed for owned parent tree');
         },
+        attachTimeoutMs: 20,
       }),
     (error) => {
       assert.match(error.message, /CDP unavailable/);
@@ -633,6 +723,7 @@ test('attach failure before launch returns still clears and verifies its sandbox
       onOwned: (session) => {
         owned = session;
       },
+      attachTimeoutMs: 20,
     });
   } catch (error) {
     attachError = error;

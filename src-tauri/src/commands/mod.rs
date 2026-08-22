@@ -25,6 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
+const FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT: usize = 256;
+
 #[derive(Default)]
 pub struct StartupSessionState {
     consumed: AtomicBool,
@@ -73,9 +75,20 @@ pub async fn consume_startup_session(
     let session_manager = session_manager.inner().clone();
     let window_label = window.label().to_string();
     let (folder, file) = startup_target_from_args(std::env::args());
+    let index_path = resolve_folder_index_path(&app);
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(folder) = folder {
-            let session = session_manager.open_folder_session(&folder, Some(&window_label))?;
+            let hints = bounded_folder_index_hints(
+                index_path.as_deref(),
+                &folder,
+                FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+            );
+            let session = session_manager.open_folder_session_bootstrap(
+                &folder,
+                &hints,
+                FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+                Some(&window_label),
+            )?;
             settings_commands::record_trusted_recent_folder(
                 &app,
                 Path::new(&session.canonical_folder),
@@ -83,7 +96,18 @@ pub async fn consume_startup_session(
             return Ok(StartupSessionSelection::Folder { session });
         }
         if let Some(file) = file {
-            let session = session_manager.open_file_session(&file, Some(&window_label))?;
+            let parent = file.parent().unwrap_or_else(|| Path::new(""));
+            let hints = bounded_folder_index_hints(
+                index_path.as_deref(),
+                parent,
+                FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+            );
+            let session = session_manager.open_file_session_bootstrap(
+                &file,
+                &hints,
+                FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+                Some(&window_label),
+            )?;
             settings_commands::record_trusted_recent_folder(
                 &app,
                 Path::new(&session.canonical_folder),
@@ -106,6 +130,7 @@ pub async fn open_recent_folder_session(
     enforce_main_window(&window)?;
     let session_manager = session_manager.inner().clone();
     let window_label = window.label().to_string();
+    let index_path = resolve_folder_index_path(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let requested = PathBuf::from(&folder_path);
         let canonical_requested =
@@ -114,7 +139,17 @@ pub async fn open_recent_folder_session(
         if !authorized {
             return Err("Folder is not present in the backend-owned recent-folder list".to_string());
         }
-        session_manager.open_folder_session(&canonical_requested, Some(&window_label))
+        let hints = bounded_folder_index_hints(
+            index_path.as_deref(),
+            &canonical_requested,
+            FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+        );
+        session_manager.open_folder_session_bootstrap(
+            &canonical_requested,
+            &hints,
+            FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+            Some(&window_label),
+        )
     })
     .await
     .map_err(|error| format!("Recent folder session worker failed: {error}"))?
@@ -138,6 +173,13 @@ pub struct ImageFile {
     pub size_bytes: u64,
     pub modified_at: Option<String>,
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderIndexPayload {
+    pub catalog_revision: u64,
+    pub images: Vec<ImageFile>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -174,7 +216,9 @@ fn decode_image_caption(bytes: &[u8]) -> String {
 
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let units = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         return String::from_utf16_lossy(&units);
@@ -182,7 +226,9 @@ fn decode_image_caption(bytes: &[u8]) -> String {
 
     if bytes.starts_with(&[0xFE, 0xFF]) {
         let units = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         return String::from_utf16_lossy(&units);
@@ -783,6 +829,26 @@ fn resolve_folder_index_path(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
+fn bounded_folder_index_hints(
+    index_path: Option<&Path>,
+    folder_path: &Path,
+    limit: usize,
+) -> Vec<String> {
+    let Some(index_path) = index_path else {
+        return Vec::new();
+    };
+    let semantics = crate::path_normalization::runtime_path_case_semantics();
+    folder_index::read_folder_images_bounded_with_semantics(
+        index_path,
+        folder_path,
+        semantics,
+        limit,
+    )
+    .into_iter()
+    .map(|image| image.path)
+    .collect()
+}
+
 /// Scan a folder for supported image files
 #[allow(dead_code)]
 pub async fn scan_folder(folder_path: String) -> Result<Vec<ImageFile>, String> {
@@ -1320,12 +1386,23 @@ pub async fn select_folder_session(
     let dialog_app = app.clone();
     let session_manager = session_manager.inner().clone();
     let window_label = window.label().to_string();
+    let index_path = resolve_folder_index_path(&app);
     let selected = tauri::async_runtime::spawn_blocking(move || {
         let selected = dialog_app.dialog().file().blocking_pick_folder();
         let Some(selected) = selected else { return Ok(None) };
         let path =
             selected.into_path().map_err(|error| format!("Invalid selected folder: {error}"))?;
-        let session = session_manager.open_folder_session(&path, Some(&window_label))?;
+        let hints = bounded_folder_index_hints(
+            index_path.as_deref(),
+            &path,
+            FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+        );
+        let session = session_manager.open_folder_session_bootstrap(
+            &path,
+            &hints,
+            FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+            Some(&window_label),
+        )?;
         settings_commands::record_trusted_recent_folder(
             &dialog_app,
             Path::new(&session.canonical_folder),
@@ -1347,6 +1424,7 @@ pub async fn select_file_session(
     let dialog_app = app.clone();
     let session_manager = session_manager.inner().clone();
     let window_label = window.label().to_string();
+    let index_path = resolve_folder_index_path(&app);
     let selected = tauri::async_runtime::spawn_blocking(move || {
         let selected = dialog_app
             .dialog()
@@ -1356,7 +1434,18 @@ pub async fn select_file_session(
         let Some(selected) = selected else { return Ok(None) };
         let path =
             selected.into_path().map_err(|error| format!("Invalid selected file: {error}"))?;
-        let session = session_manager.open_file_session(&path, Some(&window_label))?;
+        let parent = path.parent().unwrap_or_else(|| Path::new(""));
+        let hints = bounded_folder_index_hints(
+            index_path.as_deref(),
+            parent,
+            FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+        );
+        let session = session_manager.open_file_session_bootstrap(
+            &path,
+            &hints,
+            FOLDER_SESSION_BOOTSTRAP_IMAGE_LIMIT,
+            Some(&window_label),
+        )?;
         settings_commands::record_trusted_recent_folder(
             &dialog_app,
             Path::new(&session.canonical_folder),
@@ -4854,10 +4943,10 @@ pub async fn read_folder_index_by_session(
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     session_id: String,
-) -> Result<Vec<ImageFile>, String> {
+) -> Result<FolderIndexPayload, String> {
     enforce_main_window(&window)?;
     let snapshot = session_manager.get_session_snapshot(&session_id, Some(window.label()))?;
-    Ok(snapshot
+    let images = snapshot
         .images
         .into_iter()
         .map(|authorized| ImageFile {
@@ -4870,25 +4959,28 @@ pub async fn read_folder_index_by_session(
             modified_at: authorized.modified_at,
             created_at: authorized.created_at,
         })
-        .collect())
+        .collect();
+    Ok(FolderIndexPayload { catalog_revision: snapshot.catalog_revision, images })
 }
 
 #[tauri::command]
 pub async fn refresh_folder_index_by_session(
+    app: AppHandle,
     window: tauri::Window,
     session_manager: tauri::State<'_, crate::authority::SessionManager>,
     session_id: String,
-) -> Result<Vec<ImageFile>, String> {
+) -> Result<FolderIndexPayload, String> {
     enforce_main_window(&window)?;
     let manager = session_manager.inner().clone();
     let refresh_session_id = session_id.clone();
     let label = window.label().to_string();
+    let index_path = resolve_folder_index_path(&app);
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
         manager.refresh_folder_session(&refresh_session_id, Some(&label))
     })
     .await
     .map_err(|err| format!("Folder session refresh worker failed: {err}"))??;
-    Ok(snapshot
+    let images: Vec<ImageFile> = snapshot
         .images
         .into_iter()
         .map(|authorized| ImageFile {
@@ -4901,7 +4993,22 @@ pub async fn refresh_folder_index_by_session(
             modified_at: authorized.modified_at,
             created_at: authorized.created_at,
         })
-        .collect())
+        .collect();
+    if let Some(index_path) = index_path {
+        if let Err(err) = folder_index::write_folder_images_for_revision_with_semantics(
+            &index_path,
+            Path::new(&snapshot.canonical_folder),
+            &images,
+            snapshot.path_case_semantics,
+            snapshot.catalog_revision,
+        ) {
+            eprintln!(
+                "Failed to update persistent folder index for '{}': {}. Returning live refresh results anyway.",
+                snapshot.canonical_folder, err
+            );
+        }
+    }
+    Ok(FolderIndexPayload { catalog_revision: snapshot.catalog_revision, images })
 }
 
 #[tauri::command]
@@ -4949,6 +5056,27 @@ pub use crate::image_metadata::get_exif_metadata_blocking;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_index_payload_serializes_catalog_revision_for_ipc() {
+        let payload = FolderIndexPayload {
+            catalog_revision: 7,
+            images: vec![ImageFile {
+                id: Some("img_1".to_string()),
+                session_id: Some("sess_1".to_string()),
+                path: "C:/Photos/one.jpg".to_string(),
+                file_name: "one.jpg".to_string(),
+                extension: "jpg".to_string(),
+                size_bytes: 1,
+                modified_at: None,
+                created_at: None,
+            }],
+        };
+
+        let serialized = serde_json::to_value(&payload).unwrap();
+        assert_eq!(serialized["catalogRevision"], 7);
+        assert_eq!(serialized["images"][0]["id"], "img_1");
+    }
 
     #[test]
     fn destination_transaction_retries_failed_rollback_on_drop_and_runs_on_unwind() {

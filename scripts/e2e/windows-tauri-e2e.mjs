@@ -364,6 +364,90 @@ function remainingTime(deadline, now) {
   return Math.max(0, deadline - now());
 }
 
+function createPipeTargetState(debuggerPipe, failures) {
+  const state = {
+    targetId: undefined,
+    pending: true,
+    settled: null,
+  };
+  state.settled = debuggerPipe.target.then(
+    (target) => {
+      state.targetId = debuggerPipeTargetId(target);
+      state.pending = false;
+      return null;
+    },
+    (error) => {
+      failures.push(redactDiagnostic(error));
+      state.pending = false;
+      return null;
+    }
+  );
+  return state;
+}
+
+function cdpAttachMessage(action, port, targetId) {
+  return targetId === undefined
+    ? `Timed out ${action} CDP endpoint on port ${port}`
+    : `Timed out ${action} CDP target ${targetId} on port ${port}`;
+}
+
+async function settleAlreadyResolvedPipeTarget(pipeState) {
+  if (pipeState.targetId === undefined && pipeState.pending) {
+    await Promise.race([pipeState.settled, Promise.resolve()]);
+  }
+}
+
+async function pollAttachPage(port, remaining, pollEndpoint, pipeState, childExit) {
+  const targetId = pipeState.targetId;
+  return withTimeout(
+    Promise.race([
+      ...(targetId === undefined && pipeState.pending ? [pipeState.settled] : []),
+      pollEndpoint(port, remaining, targetId),
+      childExit,
+    ]),
+    remaining,
+    cdpAttachMessage('polling', port, targetId)
+  );
+}
+
+async function shouldRepollExactPipeTarget(targetId, pipeState, wait, childExit) {
+  if (targetId !== undefined) return false;
+  if (pipeState.pending) await Promise.race([pipeState.settled, wait(0), childExit]);
+  return pipeState.targetId !== undefined;
+}
+
+async function connectAttachPage(
+  page,
+  port,
+  targetId,
+  deadline,
+  now,
+  connectAttemptTimeoutMs,
+  connectClient,
+  childExit
+) {
+  return withTimeout(
+    Promise.race([connectClient(page), childExit]),
+    Math.min(connectAttemptTimeoutMs, remainingTime(deadline, now)),
+    cdpAttachMessage('connecting to', port, targetId)
+  );
+}
+
+async function waitForAttachRetry(deadline, now, wait, retryDelayMs, childExit) {
+  const remainingAfterAttempt = remainingTime(deadline, now);
+  if (remainingAfterAttempt <= 0) return false;
+  await Promise.race([wait(Math.min(retryDelayMs, remainingAfterAttempt)), childExit]);
+  return true;
+}
+
+function cdpAttachTimeoutError(port, targetId, failures) {
+  return new Error(
+    targetId === undefined
+      ? `Timed out attaching to CDP endpoint on port ${port}: ${failures.at(-1) ?? 'target unavailable'}`
+      : `Timed out attaching to CDP target ${targetId} on port ${port}: ${failures.at(-1) ?? 'target unavailable'}`
+  );
+}
+
 async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClient, options = {}) {
   const {
     timeoutMs = 15_000,
@@ -374,26 +458,28 @@ async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClien
   } = options;
   const deadline = now() + timeoutMs;
   const childExit = prematureExit(session.child);
-  const pipeTarget = await withTimeout(
-    Promise.race([debuggerPipe.target, childExit]),
-    remainingTime(deadline, now),
-    `Timed out waiting for the debugger-pipe target on port ${port}`
-  );
-  const targetId = debuggerPipeTargetId(pipeTarget);
+  childExit.catch(() => undefined);
   const failures = [];
   session.entry.exactTargetFailures = failures;
+  const pipeState = createPipeTargetState(debuggerPipe, failures);
+
   while (remainingTime(deadline, now) > 0) {
+    await settleAlreadyResolvedPipeTarget(pipeState);
     const remaining = remainingTime(deadline, now);
     try {
-      const exactPage = await withTimeout(
-        Promise.race([pollEndpoint(port, remaining, targetId), childExit]),
-        remaining,
-        `Timed out polling CDP target ${targetId} on port ${port}`
-      );
-      return await withTimeout(
-        Promise.race([connectClient(exactPage), childExit]),
-        Math.min(connectAttemptTimeoutMs, remainingTime(deadline, now)),
-        `Timed out connecting to CDP target ${targetId} on port ${port}`
+      const targetId = pipeState.targetId;
+      const page = await pollAttachPage(port, remaining, pollEndpoint, pipeState, childExit);
+      if (!page) continue;
+      if (await shouldRepollExactPipeTarget(targetId, pipeState, wait, childExit)) continue;
+      return await connectAttachPage(
+        page,
+        port,
+        targetId,
+        deadline,
+        now,
+        connectAttemptTimeoutMs,
+        connectClient,
+        childExit
       );
     } catch (error) {
       if (error?.code === 'LIGHTFRAME_PREMATURE_EXIT') {
@@ -402,13 +488,9 @@ async function attachCdp(session, port, pollEndpoint, debuggerPipe, connectClien
       failures.push(redactDiagnostic(error));
     }
 
-    const remainingAfterAttempt = remainingTime(deadline, now);
-    if (remainingAfterAttempt <= 0) break;
-    await Promise.race([wait(Math.min(retryDelayMs, remainingAfterAttempt)), childExit]);
+    if (!(await waitForAttachRetry(deadline, now, wait, retryDelayMs, childExit))) break;
   }
-  throw new Error(
-    `Timed out attaching to CDP target ${targetId} on port ${port}: ${failures.at(-1) ?? 'target unavailable'}`
-  );
+  throw cdpAttachTimeoutError(port, pipeState.targetId, failures);
 }
 
 function prematureExit(child) {

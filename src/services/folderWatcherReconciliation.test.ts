@@ -23,6 +23,7 @@ describe('reconcileFolderWatcherPayload', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
         sessionId: 'session_1',
+        catalogRevision: 1,
         folderPath: 'C:/images',
         images: [image('image10.jpg', 10), image('image2.jpg', 2), image('image1.jpg', 1)],
         requiresFullRefresh: false,
@@ -48,6 +49,7 @@ describe('reconcileFolderWatcherPayload', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
         sessionId: 'session_1',
+        catalogRevision: 1,
         folderPath: 'C:/images',
         images: [image('a.jpg', 1), image('b.jpg', 2)],
         requiresFullRefresh: false,
@@ -69,6 +71,7 @@ describe('reconcileFolderWatcherPayload', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
         sessionId: 'session_1',
+        catalogRevision: 1,
         folderPath: 'C:/images',
         images: [image('a.jpg', 1), image('c.jpg', 3), image('d.jpg', 4, '100', 'img_b.jpg')],
         requiresFullRefresh: false,
@@ -97,6 +100,7 @@ describe('reconcileFolderWatcherPayload', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
         sessionId: 'session_1',
+        catalogRevision: 1,
         folderPath: 'C:/images',
         images: [image('a.jpg', 42, '999'), image('b.jpg', 2)],
         requiresFullRefresh: false,
@@ -127,6 +131,7 @@ describe('reconcileFolderWatcherPayload', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
         sessionId: 'session_1',
+        catalogRevision: 1,
         folderPath: 'C:/images',
         images: [image('a.jpg', 99, '999'), image('b.jpg', 2)],
         requiresFullRefresh: false,
@@ -162,6 +167,7 @@ describe('reconcileFolderWatcherPayload', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
         sessionId: 'session_1',
+        catalogRevision: 1,
         folderPath: 'C:/images',
         images: images.filter((item) => item.file_name !== '5000.jpg'),
         requiresFullRefresh: false,
@@ -191,6 +197,7 @@ describe('reconcileFolderWatcherPayload', () => {
       reconcileFolderWatcherPayload({
         payload: {
           sessionId: 'session_1',
+          catalogRevision: 1,
           folderPath: 'C:/images',
           images: changes.map((change) => change.image),
           requiresFullRefresh: false,
@@ -209,6 +216,7 @@ describe('reconcileFolderWatcherPayload', () => {
       reconcileFolderWatcherPayload({
         payload: {
           sessionId: 'session_1',
+          catalogRevision: 1,
           folderPath: 'C:/images',
           images: [invalid],
           requiresFullRefresh: true,

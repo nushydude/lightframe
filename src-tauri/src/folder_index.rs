@@ -14,6 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const FOLDER_INDEX_SCHEMA_VERSION: u32 = 4;
+const BOOTSTRAP_INDEX_IMAGE_LIMIT: usize = 256;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct PersistedFolderIndex {
@@ -22,6 +23,8 @@ struct PersistedFolderIndex {
     folder_path: String,
     path_case_semantics: PathCaseSemantics,
     last_refreshed_at: u64,
+    #[serde(default)]
+    catalog_revision: u64,
     #[serde(default)]
     images: Vec<PersistedImageRecord>,
 }
@@ -122,6 +125,23 @@ pub fn read_folder_images_with_semantics(
         .unwrap_or_default()
 }
 
+pub fn read_folder_images_bounded_with_semantics(
+    index_root: &Path,
+    folder_path: &Path,
+    semantics: PathCaseSemantics,
+    limit: usize,
+) -> Vec<ImageFile> {
+    let _guard = lock_index_io();
+    let folder_key = folder_key_with_semantics(folder_path, semantics);
+    let shard_path = bootstrap_shard_path(index_root, &folder_key);
+
+    read_shard(&shard_path, &folder_key, semantics)
+        .map(|index| {
+            index.images.iter().take(limit).map(PersistedImageRecord::to_image_file).collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn write_folder_images(
     index_root: &Path,
     folder_path: &Path,
@@ -141,16 +161,33 @@ pub fn write_folder_images_with_semantics(
     images: &[ImageFile],
     semantics: PathCaseSemantics,
 ) -> Result<(), String> {
+    write_folder_images_for_revision_with_semantics(index_root, folder_path, images, semantics, 0)
+}
+
+pub fn write_folder_images_for_revision_with_semantics(
+    index_root: &Path,
+    folder_path: &Path,
+    images: &[ImageFile],
+    semantics: PathCaseSemantics,
+    catalog_revision: u64,
+) -> Result<(), String> {
     let _guard = lock_index_io();
     let folder_key = folder_key_with_semantics(folder_path, semantics);
     let shard_path = shard_path(index_root, &folder_key);
+    let bootstrap_path = bootstrap_shard_path(index_root, &folder_key);
 
-    if images.is_empty() {
-        remove_shard(&shard_path)?;
+    let previous_index = read_shard(&shard_path, &folder_key, semantics);
+    if previous_index.as_ref().is_some_and(|entry| entry.catalog_revision > catalog_revision) {
         return Ok(());
     }
 
-    let previous_records = read_shard(&shard_path, &folder_key, semantics)
+    if images.is_empty() {
+        remove_shard(&shard_path)?;
+        remove_shard(&bootstrap_path)?;
+        return Ok(());
+    }
+
+    let previous_records = previous_index
         .map(|entry| {
             entry
                 .images
@@ -162,7 +199,7 @@ pub fn write_folder_images_with_semantics(
     let refreshed_at = unix_timestamp_seconds();
     let folder_path_string = folder_path.to_string_lossy().to_string();
 
-    let persisted_images = images
+    let persisted_images: Vec<PersistedImageRecord> = images
         .iter()
         .map(|image| {
             PersistedImageRecord::from_image_file(
@@ -175,17 +212,27 @@ pub fn write_folder_images_with_semantics(
         })
         .collect();
 
-    write_shard(
-        &shard_path,
-        &PersistedFolderIndex {
-            schema_version: FOLDER_INDEX_SCHEMA_VERSION,
-            folder_key,
-            folder_path: folder_path_string,
-            path_case_semantics: semantics,
-            last_refreshed_at: refreshed_at,
-            images: persisted_images,
-        },
-    )
+    let full_index = PersistedFolderIndex {
+        schema_version: FOLDER_INDEX_SCHEMA_VERSION,
+        folder_key: folder_key.clone(),
+        folder_path: folder_path_string.clone(),
+        path_case_semantics: semantics,
+        last_refreshed_at: refreshed_at,
+        catalog_revision,
+        images: persisted_images.clone(),
+    };
+    let bootstrap_index = PersistedFolderIndex {
+        schema_version: FOLDER_INDEX_SCHEMA_VERSION,
+        folder_key,
+        folder_path: folder_path_string,
+        path_case_semantics: semantics,
+        last_refreshed_at: refreshed_at,
+        catalog_revision,
+        images: persisted_images.into_iter().take(BOOTSTRAP_INDEX_IMAGE_LIMIT).collect(),
+    };
+
+    write_shard(&shard_path, &full_index)?;
+    write_shard(&bootstrap_path, &bootstrap_index)
 }
 
 #[cfg(test)]
@@ -200,6 +247,11 @@ fn folder_key_with_semantics(folder_path: &Path, semantics: PathCaseSemantics) -
 fn shard_path(index_root: &Path, folder_key: &str) -> PathBuf {
     let digest = digest_hex(folder_key.as_bytes());
     index_root.join(&digest[0..2]).join(format!("{}.json", digest))
+}
+
+fn bootstrap_shard_path(index_root: &Path, folder_key: &str) -> PathBuf {
+    let digest = digest_hex(folder_key.as_bytes());
+    index_root.join(&digest[0..2]).join(format!("{}.bootstrap.json", digest))
 }
 
 fn read_shard(
@@ -352,6 +404,8 @@ fn unix_timestamp_seconds() -> u64 {
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::tempdir;
 
     fn make_image(folder: &Path, file_name: &str, size_bytes: u64, modified_at: &str) -> ImageFile {
@@ -405,6 +459,122 @@ mod tests {
         write_folder_images(&index_root, &folder, &images).unwrap();
 
         assert_eq!(read_folder_images(&index_root, &folder), images);
+    }
+
+    #[test]
+    fn bounded_folder_images_read_never_returns_full_catalog() {
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join("images");
+        fs::create_dir_all(&folder).unwrap();
+        let index_root = index_root(dir.path());
+        let images = (0..10)
+            .map(|index| make_image(&folder, &format!("image-{index}.jpg"), 1, "100"))
+            .collect::<Vec<_>>();
+
+        write_folder_images(&index_root, &folder, &images).unwrap();
+
+        let bounded = read_folder_images_bounded_with_semantics(
+            &index_root,
+            &folder,
+            crate::path_normalization::runtime_path_case_semantics(),
+            3,
+        );
+        assert_eq!(bounded, images[..3].to_vec());
+    }
+
+    #[test]
+    fn bounded_folder_images_read_uses_bootstrap_shard_not_full_catalog() {
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join("images");
+        fs::create_dir_all(&folder).unwrap();
+        let index_root = index_root(dir.path());
+        let images = (0..10)
+            .map(|index| make_image(&folder, &format!("image-{index}.jpg"), 1, "100"))
+            .collect::<Vec<_>>();
+
+        write_folder_images(&index_root, &folder, &images).unwrap();
+        let key = folder_key(&folder);
+        fs::write(shard_path(&index_root, &key), "{not-valid-json").unwrap();
+
+        let bounded = read_folder_images_bounded_with_semantics(
+            &index_root,
+            &folder,
+            crate::path_normalization::runtime_path_case_semantics(),
+            3,
+        );
+        assert_eq!(bounded, images[..3].to_vec());
+        assert!(read_folder_images(&index_root, &folder).is_empty());
+    }
+
+    #[test]
+    fn stale_revision_write_after_newer_publish_preserves_full_and_bootstrap_indexes() {
+        let dir = tempdir().unwrap();
+        let folder = Arc::new(dir.path().join("images"));
+        fs::create_dir_all(folder.as_ref()).unwrap();
+        let index_root = Arc::new(index_root(dir.path()));
+        let semantics = crate::path_normalization::runtime_path_case_semantics();
+
+        let newer_images = Arc::new(vec![
+            make_image(folder.as_ref(), "newer-0.jpg", 1, "100"),
+            make_image(folder.as_ref(), "newer-1.jpg", 1, "101"),
+            make_image(folder.as_ref(), "newer-2.jpg", 1, "102"),
+        ]);
+        let stale_images = Arc::new(vec![
+            make_image(folder.as_ref(), "stale-0.jpg", 1, "090"),
+            make_image(folder.as_ref(), "stale-1.jpg", 1, "091"),
+            make_image(folder.as_ref(), "stale-2.jpg", 1, "092"),
+        ]);
+        let barrier = Arc::new(Barrier::new(2));
+
+        let newer_thread = {
+            let index_root = Arc::clone(&index_root);
+            let folder = Arc::clone(&folder);
+            let images = Arc::clone(&newer_images);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                write_folder_images_for_revision_with_semantics(
+                    index_root.as_ref(),
+                    folder.as_ref(),
+                    &images,
+                    semantics,
+                    3,
+                )
+                .unwrap();
+                barrier.wait();
+            })
+        };
+
+        let stale_thread = {
+            let index_root = Arc::clone(&index_root);
+            let folder = Arc::clone(&folder);
+            let images = Arc::clone(&stale_images);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                write_folder_images_for_revision_with_semantics(
+                    index_root.as_ref(),
+                    folder.as_ref(),
+                    &images,
+                    semantics,
+                    2,
+                )
+                .unwrap();
+            })
+        };
+
+        newer_thread.join().unwrap();
+        stale_thread.join().unwrap();
+
+        assert_eq!(read_folder_images(index_root.as_ref(), folder.as_ref()), *newer_images);
+        assert_eq!(
+            read_folder_images_bounded_with_semantics(
+                index_root.as_ref(),
+                folder.as_ref(),
+                semantics,
+                2
+            ),
+            newer_images[..2]
+        );
     }
 
     #[test]

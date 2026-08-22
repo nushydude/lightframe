@@ -195,6 +195,7 @@ describe('useImageNavigation', () => {
   });
 
   it('applies native file snapshots directly with exact requested image ids', async () => {
+    (refreshFolderIndex as any).mockImplementation(() => new Promise(() => {}));
     vi.mocked(selectFileSession).mockResolvedValue({
       session_id: 'sess_file',
       session_instance_id: 'inst_file',
@@ -224,9 +225,9 @@ describe('useImageNavigation', () => {
 
     await act(async () => result.current.openFilePicker());
 
-    expect(scanFolder).not.toHaveBeenCalled();
     expect(readFolderIndex).not.toHaveBeenCalled();
-    expect(refreshFolderIndex).not.toHaveBeenCalled();
+    expect(scanFolder).not.toHaveBeenCalled();
+    await waitFor(() => expect(refreshFolderIndex).toHaveBeenCalledWith('c:/native'));
     expect(useViewerStore.getState().activeSessionId).toBe('sess_file');
     expect(useViewerStore.getState().currentImagePath).toBe('c:/native/z-requested.jpg');
     expect(useViewerStore.getState().images).toEqual([
@@ -235,7 +236,14 @@ describe('useImageNavigation', () => {
     ]);
   });
 
-  it('applies native folder snapshots without an immediate disk refresh', async () => {
+  it('applies native folder snapshots and starts bounded background reconciliation', async () => {
+    let resolveBackgroundRefresh!: (images: never[]) => void;
+    (refreshFolderIndex as any).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBackgroundRefresh = resolve;
+        })
+    );
     vi.mocked(selectFolderSession).mockResolvedValue({
       session_id: 'sess_folder',
       session_instance_id: 'inst_folder',
@@ -257,11 +265,13 @@ describe('useImageNavigation', () => {
     await act(async () => result.current.openFolderPicker());
 
     expect(readFolderIndex).not.toHaveBeenCalled();
-    expect(refreshFolderIndex).not.toHaveBeenCalled();
     expect(scanFolder).not.toHaveBeenCalled();
+    expect(refreshFolderIndex).toHaveBeenCalledWith('c:/native-folder');
     expect(useViewerStore.getState().folderPath).toBe('c:/native-folder');
     expect(useViewerStore.getState().currentImagePath).toBe('c:/native-folder/one.jpg');
-    expect(useViewerStore.getState().isFolderScanning).toBe(false);
+    expect(useViewerStore.getState().isFolderScanning).toBe(true);
+
+    resolveBackgroundRefresh([]);
   });
 
   it('returns to viewer mode when opening an image from grid mode', async () => {
@@ -596,6 +606,7 @@ describe('useImageNavigation', () => {
   });
 
   it('applies authorized recent-folder snapshots directly, including empty filtered results', async () => {
+    (refreshFolderIndex as any).mockImplementation(() => new Promise(() => {}));
     const { result } = renderHook(() => useImageNavigation());
 
     await act(async () => {
@@ -611,7 +622,7 @@ describe('useImageNavigation', () => {
 
     expect(readFolderIndex).not.toHaveBeenCalled();
     expect(scanFolder).not.toHaveBeenCalled();
-    expect(refreshFolderIndex).not.toHaveBeenCalled();
+    await waitFor(() => expect(refreshFolderIndex).toHaveBeenCalledWith('c:/empty-recent'));
     expect(useViewerStore.getState().curationFilter).toBe('favorites');
     expect(useViewerStore.getState().folderPath).toBe('c:/empty-recent');
     expect(useViewerStore.getState().images).toEqual([]);
@@ -621,7 +632,101 @@ describe('useImageNavigation', () => {
     );
   });
 
+  it('keeps superseded background refresh rejection invisible after newer watcher revision wins', async () => {
+    const cachedImages = [
+      {
+        id: 'img_cached',
+        path: 'c:/recent/cached.jpg',
+        file_name: 'cached.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+      },
+    ];
+    const newerImages = [
+      {
+        path: 'c:/recent/newer.jpg',
+        file_name: 'newer.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2000',
+      },
+    ];
+    let rejectStaleRefresh: ((error: Error) => void) | undefined;
+    let watcherHandler:
+      | ((payload: {
+          sessionId: string;
+          catalogRevision: number;
+          folderPath: string;
+          images: typeof newerImages;
+          changes: Array<{
+            kind: 'added';
+            path: string;
+            image: (typeof newerImages)[number];
+          }>;
+          requiresFullRefresh: boolean;
+        }) => void)
+      | undefined;
+
+    (refreshFolderIndex as any)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectStaleRefresh = reject;
+          })
+      )
+      .mockResolvedValueOnce(newerImages);
+    (listenToFolderWatcherChanges as any).mockImplementation((handler: typeof watcherHandler) => {
+      watcherHandler = handler;
+      return Promise.resolve(() => undefined);
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.applyFolderSessionSnapshot({
+        session_id: 'sess_recent',
+        canonical_folder: 'c:/recent',
+        catalog_revision: 1,
+        images: cachedImages,
+      });
+    });
+
+    await waitFor(() => {
+      expect(refreshFolderIndex).toHaveBeenCalledTimes(1);
+      expect(watcherHandler).toBeDefined();
+    });
+
+    act(() => {
+      watcherHandler?.({
+        sessionId: 'sess_recent',
+        catalogRevision: 2,
+        folderPath: 'c:/recent',
+        images: newerImages,
+        requiresFullRefresh: false,
+        changes: [
+          {
+            kind: 'added',
+            path: 'c:/recent/newer.jpg',
+            image: newerImages[0],
+          },
+        ],
+      });
+      rejectStaleRefresh?.(new Error('Folder refresh was superseded by a newer catalog revision'));
+    });
+
+    await waitFor(() => {
+      expect(refreshFolderIndex).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(useViewerStore.getState().images.map((image) => image.file_name)).toEqual([
+        'newer.jpg',
+      ]);
+      expect(useViewerStore.getState().errorMessage).toBeNull();
+    });
+  });
+
   it('applies recent-folder snapshot filters after delayed curation metadata hydrates', async () => {
+    (refreshFolderIndex as any).mockImplementation(() => new Promise(() => {}));
     let resolveCuration:
       | ((
           metadata: Record<string, { favorite: boolean; rating: number; updated_at: number }>
@@ -1200,7 +1305,10 @@ describe('useImageNavigation', () => {
     let resolveBackgroundRefresh: ((images: typeof verifiedImages) => void) | undefined;
     let watcherHandler:
       | ((payload: {
+          sessionId: string;
+          catalogRevision: number;
           folderPath: string;
+          images: typeof refreshedImages;
           changes: Array<{
             kind: 'added';
             path: string;
@@ -1238,7 +1346,10 @@ describe('useImageNavigation', () => {
 
     act(() => {
       watcherHandler?.({
+        sessionId: 'sess_test',
+        catalogRevision: 2,
         folderPath: 'c:/test',
+        images: refreshedImages,
         requiresFullRefresh: false,
         changes: [
           {
