@@ -1,12 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import {
-  hydrateProjectorSelection,
-  registerProjectorNavigationHandler,
-  useViewerStore,
-} from './viewerStore';
-import { configurePathCaseSemantics } from '../services/pathIdentity';
-import { initializeRuntime } from '../services/runtime/runtime';
-import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
+import { useViewerStore } from './viewerStore';
 
 const {
   confirmMock,
@@ -44,7 +37,6 @@ vi.mock('../services/thumbnailCache', () => ({
 
 describe('viewerStore', () => {
   beforeEach(() => {
-    initializeRuntime(createTestRuntimeAdapter({ confirm: confirmMock }));
     useViewerStore.getState().reset();
     useViewerStore.getState().setDefaultZoomMode('fit');
     vi.clearAllMocks();
@@ -626,39 +618,6 @@ describe('viewerStore', () => {
     ]);
   });
 
-  it('keeps case-distinct image identities separate under case-sensitive semantics', () => {
-    const restore = configurePathCaseSemantics('case-sensitive');
-    try {
-      useViewerStore.setState({
-        images: [
-          {
-            path: '/photos/A.jpg',
-            file_name: 'A.jpg',
-            extension: 'jpg',
-            size_bytes: 1,
-            modified_at: null,
-          },
-          {
-            path: '/photos/a.jpg',
-            file_name: 'a.jpg',
-            extension: 'jpg',
-            size_bytes: 2,
-            modified_at: null,
-          },
-        ],
-        markedPaths: [],
-      });
-      useViewerStore.getState().setMarkedPaths(['/photos/A.jpg', '/photos/a.jpg']);
-      expect(useViewerStore.getState().markedPaths).toEqual(['/photos/A.jpg', '/photos/a.jpg']);
-      useViewerStore.getState().removeImagesByPaths(['/photos/A.jpg']);
-      expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
-        '/photos/a.jpg',
-      ]);
-    } finally {
-      restore();
-    }
-  });
-
   it('restores per-image pending edits when navigating away and back', () => {
     useViewerStore.setState({
       images: [
@@ -943,39 +902,4 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().viewMode).toBe('viewer');
     expect(useViewerStore.getState().compareSecondaryIndex).toBe(-1);
   });
-});
-it('keeps projector navigation backend-first and hydrates only an authorized response', () => {
-  const images = [
-    {
-      id: 'img_a',
-      sessionId: 'sess_projector',
-      path: 'C:/a.jpg',
-      file_name: 'a.jpg',
-      extension: 'jpg',
-      size_bytes: 1,
-      modified_at: null,
-      created_at: null,
-    },
-    {
-      id: 'img_b',
-      sessionId: 'sess_projector',
-      path: 'C:/b.jpg',
-      file_name: 'b.jpg',
-      extension: 'jpg',
-      size_bytes: 1,
-      modified_at: null,
-      created_at: null,
-    },
-  ];
-  useViewerStore.getState().setImages(images);
-  const requested: string[] = [];
-  registerProjectorNavigationHandler((image) => requested.push(image.id ?? ''));
-
-  useViewerStore.getState().setCurrentIndex(1);
-  expect(requested).toEqual(['img_b']);
-  expect(useViewerStore.getState().currentImagePath).toBe('C:/a.jpg');
-
-  hydrateProjectorSelection('sess_projector', 'img_b');
-  expect(useViewerStore.getState().currentImagePath).toBe('C:/b.jpg');
-  registerProjectorNavigationHandler(null);
 });

@@ -56,9 +56,6 @@ describe('SettingsPanel', () => {
     render(<SettingsPanel />);
 
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
-    expect(screen.getByTestId('settings-dialog')).toBe(
-      screen.getByRole('dialog', { name: 'Settings' })
-    );
     expect(screen.getByText('Diagnostics')).toBeInTheDocument();
 
     await waitFor(() => {

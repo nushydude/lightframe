@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  workflow_call:
   push:
     branches: ['main', 'codex/**', 'hotfix/**', 'release/**']
   pull_request:
@@ -16,8 +15,7 @@ env:
 jobs:
   javascript-advisory:
     name: JavaScript Dependency Advisory Gate
-    # v2.3.8
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8
     with:
       scan-args: |-
         --lockfile=./pnpm-lock.yaml
@@ -37,42 +35,32 @@ jobs:
       checks: write
 
     steps:
-      # v7
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@v7
 
       - name: Audit Cargo.lock against RustSec
-        # v2.0.0
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
+        uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ./src-tauri
-
-      - name: Audit updater verifier Cargo.lock against RustSec
-        # v2.0.0
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: ./tools/updater-signature-verifier
+          # little_exif 0.6.23 pins quick-xml 0.37; tracked for replacement in #101.
+          ignore: RUSTSEC-2026-0194,RUSTSEC-2026-0195
 
   frontend-quality:
     name: Frontend Quality Gate
     runs-on: ubuntu-latest
 
     steps:
-      # v7
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Install pnpm
-        # v6
-        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996
+        uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
 
       - name: Setup Node.js
-        # v7
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
@@ -86,26 +74,11 @@ jobs:
       - name: Lint TypeScript and React
         run: pnpm run lint
 
-      - name: Run E2E helper tests
-        run: pnpm run test:e2e-helper
-
-      - name: Run Windows smoke helper tests
-        run: node --test scripts/smoke/windows-launch-smoke.test.mjs
-
-      - name: Run version contract tests
-        run: pnpm run test:version
-
-      - name: Run release supply-chain tests
-        run: pnpm run test:release-supply-chain
-
       - name: Run Vitest suite
         run: pnpm run test:run
 
       - name: Build frontend
         run: pnpm run build
-
-      - name: Verify version metadata and Cargo.lock
-        run: pnpm run quality:version
 
       - name: Fetch pull request base branch
         if: github.event_name == 'pull_request'
@@ -123,12 +96,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # v7
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
-        # stable (resolved 2026-08-04)
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
@@ -149,85 +120,33 @@ jobs:
         run: cargo test
         working-directory: ./src-tauri
 
-      - name: Check updater verifier formatting
-        run: cargo fmt -- --check
-        working-directory: ./tools/updater-signature-verifier
-
-      - name: Lint updater verifier with locked Clippy
-        run: cargo clippy --locked -- -D warnings
-        working-directory: ./tools/updater-signature-verifier
-
-      - name: Run locked updater verifier tests
-        run: cargo test --locked
-        working-directory: ./tools/updater-signature-verifier
-
   windows-packaged-startup-smoke:
     name: Windows Packaged Startup Smoke
     runs-on: windows-2025
 
     steps:
-      # v7
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
-        # v6
-        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996
+        uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
 
       - name: Setup Node.js
-        # v7
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
 
       - name: Install Rust stable
-        # stable (resolved 2026-08-04)
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build unpackaged Tauri release executable and run Windows navigation E2E
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-          $listener.Start()
-          $cdpPort = $listener.LocalEndpoint.Port
-          try {
-            $configPath = Join-Path $env:RUNNER_TEMP 'lightframe-tauri-e2e.conf.json'
-            $browserArgs = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=$cdpPort --remote-allow-origins=*"
-            $config = Get-Content -Raw './src-tauri/tauri.conf.json' | ConvertFrom-Json
-            $config.identifier = 'com.lightframe.e2e'
-            foreach ($window in $config.app.windows) {
-              $window | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue $browserArgs -Force
-            }
-            $config | ConvertTo-Json -Depth 100 | Set-Content -Encoding utf8 $configPath
-            $env:LIGHTFRAME_E2E_CDP_PORT = $cdpPort
-            $env:LIGHTFRAME_E2E_TAURI_CONFIG = $configPath
-            $env:LIGHTFRAME_E2E_BROWSER_ARGS_IN_CONFIG = '1'
-            pnpm tauri build --no-bundle --ci --config "$env:LIGHTFRAME_E2E_TAURI_CONFIG"
-            if ($LASTEXITCODE -ne 0) {
-              throw "Tauri build failed with exit code $LASTEXITCODE"
-            }
-          } finally {
-            $listener.Stop()
-          }
-          pnpm run e2e:windows
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows navigation E2E failed with exit code $LASTEXITCODE"
-          }
+      - name: Build unpackaged Tauri release executable
+        run: pnpm tauri build --no-bundle --ci
 
       - name: Smoke test packaged startup
         shell: pwsh
-        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe -AppIdentifier com.lightframe.e2e -TimeoutSeconds 45 -WindowStablePolls 2 -RespondingGraceSeconds 5
-
-      - name: Upload Windows E2E diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: windows-e2e-diagnostics
-          path: artifacts/windows-e2e
-          if-no-files-found: warn
+        run: ./scripts/smoke/windows-launch-smoke.ps1 -ExePath ./src-tauri/target/release/lightframe.exe

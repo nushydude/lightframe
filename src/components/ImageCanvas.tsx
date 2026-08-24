@@ -21,13 +21,7 @@ import {
 } from '../services/navigationCacheConfig';
 import { getPerformanceModeProfile } from '../services/performanceMode';
 import { BoundedPathMetadataCache } from '../services/pathMetadataCache';
-import { pathIdentityKey } from '../services/pathIdentity';
-import {
-  getActiveSessionForPath,
-  getImageMetadata,
-  isProjectorGrantOnlySession,
-  releaseSessionAssetDelivery,
-} from '../services/tauriCommands';
+import { getImageMetadata } from '../services/tauriCommands';
 import type { ImageMetadata } from '../types/image';
 import { useZoomPan } from '../hooks/useZoomPan';
 import {
@@ -56,7 +50,6 @@ type ImageCanvasProps = {
 type LoadedImageAsset = {
   path: string;
   url: string;
-  requestId: number;
 };
 
 type MetadataLoadState = {
@@ -64,8 +57,6 @@ type MetadataLoadState = {
   metadata: ImageMetadata | null;
   resolved: boolean;
 };
-
-type AssetTerminalOutcome = 'idle' | 'pending' | 'succeeded' | 'failed';
 
 const PREVIEW_STALL_FULL_RESOLUTION_DELAY_MS = 350;
 const EMPTY_METADATA_LOAD_STATE: MetadataLoadState = {
@@ -88,10 +79,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const activeWorkAbortControllerRef = useRef<AbortController | null>(null);
   const fullLoadKeyRef = useRef<string | null>(null);
   const imageDisplayErrorRef = useRef<string | null>(null);
-  const imageTerminalErrorMessageRef = useRef<string | null>(null);
   const fullResolutionSafetyMessageRef = useRef<string | null>(null);
-  const previewTerminalOutcomeRef = useRef<AssetTerminalOutcome>('idle');
-  const fullTerminalOutcomeRef = useRef<AssetTerminalOutcome>('idle');
   const metadataByPathRef = useRef(new BoundedPathMetadataCache<ImageMetadata>());
   const previousIndexRef = useRef<number | null>(null);
   const navigationDirectionRef = useRef<NavigationDirection>('idle');
@@ -128,23 +116,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     useState<MetadataLoadState>(EMPTY_METADATA_LOAD_STATE);
   const [isLoading, setIsLoading] = useState(false);
   const [fullLoadFailed, setFullLoadFailed] = useState(false);
-
-  const finalizeAssetDelivery = useCallback((url: string) => {
-    if (!url) {
-      return;
-    }
-
-    void releaseSessionAssetDelivery(url);
-  }, []);
-
-  useEffect(() => {
-    const url = fullAsset?.url;
-    if (!url) return;
-    return () => {
-      finalizeAssetDelivery(url);
-    };
-  }, [fullAsset?.url, finalizeAssetDelivery]);
-  const [, setPreviewDisplayFailed] = useState(false);
+  const [previewDisplayFailed, setPreviewDisplayFailed] = useState(false);
   const [tileLoadFailed, setTileLoadFailed] = useState(false);
 
   const images = useViewerStore((s) => s.images);
@@ -179,32 +151,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     }
 
     imageDisplayErrorRef.current = null;
-    imageTerminalErrorMessageRef.current = null;
     setError(null);
   }, [setError]);
-
-  const updateImageDisplayErrorFromTerminalOutcomes = useCallback(
-    (path: string | null) => {
-      const currentTerminalError = imageTerminalErrorMessageRef.current;
-      if (
-        path &&
-        previewTerminalOutcomeRef.current === 'failed' &&
-        fullTerminalOutcomeRef.current === 'failed'
-      ) {
-        const message = `Could not display image: ${path}`;
-        imageTerminalErrorMessageRef.current = message;
-        setImageDisplayError(message);
-        return;
-      }
-
-      if (currentTerminalError && imageDisplayErrorRef.current === currentTerminalError) {
-        imageDisplayErrorRef.current = null;
-        imageTerminalErrorMessageRef.current = null;
-        setError(null);
-      }
-    },
-    [setError, setImageDisplayError]
-  );
 
   const clearFullResolutionSafetyMessage = useCallback(() => {
     const safetyMessage = fullResolutionSafetyMessageRef.current;
@@ -252,35 +200,18 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       }
       fullLoadKeyRef.current = loadKey;
 
-      const state = useViewerStore.getState();
-      const normPath = pathIdentityKey(path);
-      const foundImg =
-        state.images.find((img) => pathIdentityKey(img.path) === normPath) ||
-        state.images[state.currentIndex];
-      const sessionInfo = getActiveSessionForPath(path);
-
-      const targetSessionId =
-        foundImg?.sessionId || sessionInfo?.sessionId || state.activeSessionId;
-      const targetId = foundImg?.id || sessionInfo?.imageId;
-
-      if (!targetSessionId || !targetId) {
-        return;
-      }
-
-      const targetArg = { path, sessionId: targetSessionId, id: targetId };
-      fullTerminalOutcomeRef.current = 'pending';
-      void requestFullAsset(targetArg, { signal })
+      void requestFullAsset(path, { signal })
         .then((url) => {
           if (
             signal?.aborted ||
             !isMountedRef.current ||
             activeRequestIdRef.current !== requestId
           ) {
-            finalizeAssetDelivery(url);
             return;
           }
 
-          setFullAsset({ path, url, requestId });
+          setFullAsset({ path, url });
+          setFullLoadFailed(false);
         })
         .catch((err) => {
           if (
@@ -295,11 +226,10 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           console.error('Failed to load full-resolution image:', err);
           setIsLoading(false);
           setFullLoadFailed(true);
-          fullTerminalOutcomeRef.current = 'failed';
-          updateImageDisplayErrorFromTerminalOutcomes(path);
+          setImageDisplayError(`Could not create image URL: ${path}`);
         });
     },
-    [finalizeAssetDelivery, updateImageDisplayErrorFromTerminalOutcomes]
+    [setImageDisplayError]
   );
 
   const isActiveRequest = useCallback(
@@ -333,12 +263,13 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     []
   );
 
-  const loadPreviewForPath = useCallback((path: string, signal: AbortSignal) => {
-    const state = useViewerStore.getState();
-    const normalized = pathIdentityKey(path);
-    const image = state.images.find((candidate) => pathIdentityKey(candidate.path) === normalized);
-    return getPreviewAsset(image ?? path, PREVIEW_MAX_DIMENSION, { signal });
-  }, []);
+  const loadPreviewForPath = useCallback(
+    (path: string, signal: AbortSignal) =>
+      getPreviewAsset(path, PREVIEW_MAX_DIMENSION, {
+        signal,
+      }),
+    []
+  );
 
   // Load preview first, then full-resolution pixels on demand.
   useEffect(() => {
@@ -355,10 +286,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       setTileLoadFailed(false);
       setIsLoading(false);
       imageDisplayErrorRef.current = null;
-      imageTerminalErrorMessageRef.current = null;
       fullResolutionSafetyMessageRef.current = null;
-      previewTerminalOutcomeRef.current = 'idle';
-      fullTerminalOutcomeRef.current = 'idle';
       return;
     }
 
@@ -386,10 +314,7 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     setTileLoadFailed(false);
     setIsLoading(true);
     imageDisplayErrorRef.current = null;
-    imageTerminalErrorMessageRef.current = null;
     fullResolutionSafetyMessageRef.current = null;
-    previewTerminalOutcomeRef.current = 'pending';
-    fullTerminalOutcomeRef.current = 'idle';
 
     const isCurrentRequest = () => !cancelled && isActiveRequest(requestId);
     const loadCurrentMetadata = async (): Promise<ImageMetadata | null> => {
@@ -513,9 +438,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         );
         if (isCurrentRequest()) {
           previewSettled = true;
-          previewTerminalOutcomeRef.current = 'succeeded';
           clearPreviewFallbackTimer();
-          setPreviewAsset({ path: currentImagePath, url: preview, requestId });
+          setPreviewAsset({ path: currentImagePath, url: preview });
         }
       } catch (err) {
         if (isAbortError(err)) {
@@ -524,10 +448,6 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
         previewSettled = true;
         clearPreviewFallbackTimer();
         console.error('Failed to load preview image:', err);
-        if (isCurrentRequest()) {
-          previewTerminalOutcomeRef.current = 'failed';
-          updateImageDisplayErrorFromTerminalOutcomes(currentImagePath);
-        }
         if (shouldUseTiles && isCurrentRequest()) {
           setIsLoading(false);
           return;
@@ -580,7 +500,6 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     blockUnsafeFullResolutionLoad,
     loadMetadataForPath,
     loadPreviewForPath,
-    updateImageDisplayErrorFromTerminalOutcomes,
   ]);
 
   useEffect(() => {
@@ -698,43 +617,33 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       if (!canStore()) {
         return;
       }
-      // The secondary renderer owns only the current backend-issued projector grant. Avoid
-      // speculative adjacent reads that are outside that grant and would only churn IPC.
-      if (isProjectorGrantOnlySession()) {
-        return;
-      }
 
-      const activeSessionId = useViewerStore.getState().activeSessionId;
       const preloadPromises = preloadIndices
-        .map((index) => ({ img: images[index], index }))
+        .map((index) => images[index]?.path)
+        .map((path, listIndex) => ({ path, index: preloadIndices[listIndex] }))
         .filter(
-          (entry): entry is { img: (typeof images)[number]; index: number } =>
-            Boolean(entry.img?.path) && entry.img.path !== currentImagePath
+          (entry): entry is { path: string; index: number } =>
+            Boolean(entry.path) && entry.path !== currentImagePath
         )
-        .map(({ img, index }) => {
-          const metadataForPath = metadataByPathRef.current.get(img.path) ?? null;
+        .map(({ path, index }) => {
+          const metadataForPath = metadataByPathRef.current.get(path) ?? null;
           const priority = leadingIndices.has(index)
             ? IMAGE_WORK_PRIORITY.adjacentDirectional
             : IMAGE_WORK_PRIORITY.backgroundPreload;
-          const targetSessionId = img.sessionId || activeSessionId;
-          const targetId = img.id;
-          const preloadPromise =
-            shouldPreloadAdjacentFullResolution(metadataForPath, PREVIEW_MAX_DIMENSION) &&
-            targetSessionId &&
-            targetId
-              ? preloadFullAsset(
-                  { path: img.path, sessionId: targetSessionId, id: targetId },
-                  {
-                    canStore,
-                    signal: preloadAbortController.signal,
-                    priority,
-                  }
-                )
-              : preloadPreviewAsset(img, PREVIEW_MAX_DIMENSION, {
-                  canStore,
-                  signal: preloadAbortController.signal,
-                  priority,
-                });
+          const preloadPromise = shouldPreloadAdjacentFullResolution(
+            metadataForPath,
+            PREVIEW_MAX_DIMENSION
+          )
+            ? preloadFullAsset(path, {
+                canStore,
+                signal: preloadAbortController.signal,
+                priority,
+              })
+            : preloadPreviewAsset(path, PREVIEW_MAX_DIMENSION, {
+                canStore,
+                signal: preloadAbortController.signal,
+                priority,
+              });
 
           return preloadPromise.catch(() => {
             // Ignore preload failures
@@ -811,13 +720,12 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   }, [currentImagePath, fullAsset, fullFallbackSrc, fullSrc, imageSrc, previewAsset, previewSrc]);
 
   const handleFullResolutionLoad = useCallback(
-    (loadedPath = fullAsset?.path ?? null, requestId = fullAsset?.requestId ?? null) => {
-      if (loadedPath !== currentImagePath || requestId == null || !isActiveRequest(requestId)) {
+    (loadedPath = fullAsset?.path ?? null) => {
+      if (loadedPath !== currentImagePath) {
         return;
       }
 
       setFullLoadFailed(false);
-      fullTerminalOutcomeRef.current = 'succeeded';
       setIsFullResolutionReady(true);
       setIsLoading(false);
       if (loadedPath) {
@@ -825,73 +733,33 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       }
       clearImageDisplayError();
     },
-    [
-      clearImageDisplayError,
-      currentImagePath,
-      fullAsset?.path,
-      fullAsset?.requestId,
-      isActiveRequest,
-    ]
+    [clearImageDisplayError, currentImagePath, fullAsset?.path]
   );
 
-  const handleFullResolutionError = useCallback(
-    (loadedPath = fullAsset?.path ?? null, requestId = fullAsset?.requestId ?? null) => {
-      if (loadedPath !== currentImagePath || requestId == null || !isActiveRequest(requestId)) {
-        return;
-      }
+  const handleFullResolutionError = useCallback(() => {
+    setFullLoadFailed(true);
+    setIsFullResolutionReady(false);
+    setIsLoading(false);
 
-      setFullLoadFailed(true);
-      fullTerminalOutcomeRef.current = 'failed';
-      setIsFullResolutionReady(false);
-      setIsLoading(false);
-      updateImageDisplayErrorFromTerminalOutcomes(currentImagePath);
-    },
-    [
-      currentImagePath,
-      fullAsset?.path,
-      fullAsset?.requestId,
-      isActiveRequest,
-      updateImageDisplayErrorFromTerminalOutcomes,
-    ]
-  );
-
-  const isActiveAssetEvent = useCallback(
-    (
-      event: SyntheticEvent<HTMLImageElement>,
-      asset: LoadedImageAsset | null,
-      expectedSrc: string
-    ) => {
-      const eventSrc = event.currentTarget.getAttribute('src') ?? '';
-      return (
-        Boolean(asset) &&
-        eventSrc === expectedSrc &&
-        asset?.path === currentImagePath &&
-        isActiveRequest(asset.requestId)
-      );
-    },
-    [currentImagePath, isActiveRequest]
-  );
+    if ((!previewSrc || previewDisplayFailed) && currentImagePath) {
+      setImageDisplayError(`Could not display image: ${currentImagePath}`);
+    }
+  }, [currentImagePath, previewDisplayFailed, previewSrc, setImageDisplayError]);
 
   const handleImageLoad = useCallback(
     (event: SyntheticEvent<HTMLImageElement>) => {
-      const deliveryUrl = event.currentTarget.currentSrc || event.currentTarget.src;
-      finalizeAssetDelivery(deliveryUrl);
-      if (fullSrc && isActiveAssetEvent(event, fullAsset, fullSrc)) {
-        handleFullResolutionLoad(fullAsset?.path ?? null, fullAsset?.requestId ?? null);
+      if (fullSrc && event.currentTarget.getAttribute('src') === fullSrc) {
+        handleFullResolutionLoad(fullAsset?.path ?? null);
         return;
       }
 
-      if (!isActiveAssetEvent(event, previewAsset, previewSrc)) {
+      if (previewAsset?.path !== currentImagePath || !previewAsset?.path) {
         return;
       }
 
       setIsLoading(false);
-      previewTerminalOutcomeRef.current = 'succeeded';
       setPreviewDisplayFailed(false);
-      const visiblePreviewPath = previewAsset?.path ?? currentImagePath;
-      if (visiblePreviewPath) {
-        recordPreviewVisibleTelemetry(visiblePreviewPath);
-      }
+      recordPreviewVisibleTelemetry(previewAsset.path);
       if (imageDisplayErrorRef.current !== fullResolutionSafetyMessageRef.current) {
         clearImageDisplayError();
       }
@@ -899,33 +767,20 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     [
       clearImageDisplayError,
       currentImagePath,
-      fullAsset,
+      fullAsset?.path,
       fullSrc,
       handleFullResolutionLoad,
-      isActiveAssetEvent,
       previewAsset,
-      previewSrc,
-      finalizeAssetDelivery,
     ]
   );
 
-  // fallow-ignore-next-line complexity -- generation-aware image fallback boundary
   const handleImageError = useCallback(
-    // fallow-ignore-next-line complexity -- generation-aware image fallback boundary
     (event: SyntheticEvent<HTMLImageElement>) => {
-      const deliveryUrl = event.currentTarget.currentSrc || event.currentTarget.src;
-      finalizeAssetDelivery(deliveryUrl);
-      if (fullSrc && isActiveAssetEvent(event, fullAsset, fullSrc)) {
-        handleFullResolutionError(fullAsset?.path ?? null, fullAsset?.requestId ?? null);
+      if (fullSrc && event.currentTarget.getAttribute('src') === fullSrc) {
+        handleFullResolutionError();
         return;
       }
 
-      if (!isActiveAssetEvent(event, previewAsset, previewSrc)) {
-        return;
-      }
-
-      previewTerminalOutcomeRef.current = 'failed';
-      updateImageDisplayErrorFromTerminalOutcomes(currentImagePath);
       if (currentImagePath && fullSrc && !fullLoadFailed) {
         setPreviewDisplayFailed(true);
         setIsLoading(true);
@@ -945,52 +800,39 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
 
       setIsLoading(false);
       setPreviewDisplayFailed(true);
-      updateImageDisplayErrorFromTerminalOutcomes(currentImagePath);
+      if (currentImagePath) {
+        setImageDisplayError(`Could not display image: ${currentImagePath}`);
+      }
     },
     [
       currentImagePath,
       ensureFullResolutionLoaded,
-      finalizeAssetDelivery,
-      fullAsset,
       fullLoadFailed,
       fullSrc,
       handleFullResolutionError,
       isFullResolutionReady,
-      isActiveAssetEvent,
-      previewAsset,
       previewSrc,
-      updateImageDisplayErrorFromTerminalOutcomes,
+      setImageDisplayError,
     ]
   );
 
   const handleTiledPreviewLoad = useCallback(() => {
-    if (
-      previewAsset?.path !== currentImagePath ||
-      !previewAsset?.path ||
-      !isActiveRequest(previewAsset.requestId)
-    ) {
+    if (previewAsset?.path !== currentImagePath || !previewAsset?.path) {
       return;
     }
 
     setIsLoading(false);
-    previewTerminalOutcomeRef.current = 'succeeded';
     setPreviewDisplayFailed(false);
     recordPreviewVisibleTelemetry(previewAsset.path);
     if (imageDisplayErrorRef.current !== fullResolutionSafetyMessageRef.current) {
       clearImageDisplayError();
     }
-  }, [clearImageDisplayError, currentImagePath, isActiveRequest, previewAsset]);
+  }, [clearImageDisplayError, currentImagePath, previewAsset]);
 
   const handleTiledPreviewError = useCallback(() => {
-    if (!previewAsset || !isActiveRequest(previewAsset.requestId)) {
-      return;
-    }
-
     setPreviewDisplayFailed(true);
-    previewTerminalOutcomeRef.current = 'failed';
-    updateImageDisplayErrorFromTerminalOutcomes(previewAsset.path);
     setIsLoading(false);
-  }, [isActiveRequest, previewAsset, updateImageDisplayErrorFromTerminalOutcomes]);
+  }, []);
 
   const handleTileLoadError = useCallback(() => {
     if (!currentImagePath) {
@@ -1122,22 +964,8 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
           src={fullSrc}
           alt=""
           className="image-full-loader"
-          onLoad={(event) => {
-            const deliveryUrl = event.currentTarget.currentSrc || event.currentTarget.src;
-            finalizeAssetDelivery(deliveryUrl);
-            if (!isActiveAssetEvent(event, fullAsset, fullSrc)) {
-              return;
-            }
-            handleFullResolutionLoad(fullAsset?.path ?? null, fullAsset?.requestId ?? null);
-          }}
-          onError={(event) => {
-            const deliveryUrl = event.currentTarget.currentSrc || event.currentTarget.src;
-            finalizeAssetDelivery(deliveryUrl);
-            if (!isActiveAssetEvent(event, fullAsset, fullSrc)) {
-              return;
-            }
-            handleFullResolutionError(fullAsset?.path ?? null, fullAsset?.requestId ?? null);
-          }}
+          onLoad={() => handleFullResolutionLoad(fullAsset?.path ?? null)}
+          onError={handleFullResolutionError}
           aria-hidden="true"
           draggable={false}
         />

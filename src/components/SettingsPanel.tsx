@@ -1,5 +1,6 @@
 import React from 'react';
-import { getRuntime } from '../services/runtime/runtime';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
 import type { AppSettings, QuickDestination } from '../types/settings';
@@ -19,14 +20,10 @@ import {
   openUrlExternal,
   retryNativeCodecs,
   saveDiagnosticsSnapshot,
-  selectDestination,
-  selectDestinationFolder,
-  selectExternalEditor,
   type CodecHealthReport,
   type GeneratedCacheCommandScope,
 } from '../services/tauriCommands';
 import { PERFORMANCE_MODE_LABELS } from '../services/performanceMode';
-import { pathIdentityKey } from '../services/pathIdentity';
 
 interface RecentFoldersSettingsProps {
   settings: AppSettings;
@@ -34,7 +31,7 @@ interface RecentFoldersSettingsProps {
 }
 
 function normalizedFolderKey(folderPath: string): string {
-  return pathIdentityKey(folderPath);
+  return folderPath.replace(/\\/g, '/').toLowerCase();
 }
 
 function RecentFoldersSettings({ settings, updateSettings }: RecentFoldersSettingsProps) {
@@ -143,8 +140,12 @@ export function SettingsPanel() {
   };
 
   const handleAddQuickDestination = async () => {
-    const selected = await selectDestinationFolder();
-    const normalizedPath = selected?.selectedPath.trim() ?? '';
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || typeof selected !== 'string') {
+      return;
+    }
+
+    const normalizedPath = selected.trim();
     if (!normalizedPath) {
       return;
     }
@@ -174,8 +175,16 @@ export function SettingsPanel() {
   };
 
   const handleChooseExternalEditor = async () => {
-    const selected = await selectExternalEditor();
-    const normalizedPath = selected?.selectedPath.trim() ?? '';
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: 'Applications', extensions: ['exe', 'bat', 'cmd', 'com'] }],
+    });
+    if (!selected || typeof selected !== 'string') {
+      return;
+    }
+
+    const normalizedPath = selected.trim();
     if (!normalizedPath) {
       return;
     }
@@ -197,12 +206,7 @@ export function SettingsPanel() {
 
   return (
     <div className="settings-overlay" onClick={handleOverlayClick}>
-      <div
-        className="settings-panel"
-        data-testid="settings-dialog"
-        role="dialog"
-        aria-label="Settings"
-      >
+      <div className="settings-panel" role="dialog" aria-label="Settings">
         <div className="settings-header">
           <h2>Settings</h2>
           <button
@@ -817,7 +821,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
       telemetry: getPerformanceTelemetrySnapshot(),
       currentImageMetadata,
       probeErrors,
-      windowLabel: getRuntime().window.label,
+      windowLabel: getCurrentWindow().label,
     });
 
     return serializeDiagnosticsSnapshot(snapshot);
@@ -856,12 +860,15 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
     setIsBusy(true);
     setStatus(null);
     try {
-      const destination = await selectDestination(buildDiagnosticsFileName(), 'diagnostics');
-      if (!destination) {
+      const outputPath = await save({
+        defaultPath: buildDiagnosticsFileName(),
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!outputPath) {
         return;
       }
 
-      await saveDiagnosticsSnapshot(destination.selectedPath, await collectDiagnosticsText());
+      await saveDiagnosticsSnapshot(outputPath, await collectDiagnosticsText());
       setStatus('Diagnostics saved');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));

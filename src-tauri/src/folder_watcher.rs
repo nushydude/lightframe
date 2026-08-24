@@ -1,10 +1,7 @@
 use crate::commands::{
     image_file_from_path, is_supported_image_path, sort_image_files_by_name, ImageFile,
 };
-use crate::{
-    folder_index,
-    path_normalization::{normalize_path_for_key_with_semantics, PathCaseSemantics},
-};
+use crate::{folder_index, path_normalization::normalize_path_for_key};
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -24,9 +21,7 @@ const CHANGE_FULL_REFRESH_THRESHOLD: usize = 64;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderWatcherPayload {
-    pub session_id: String,
     pub folder_path: String,
-    pub images: Vec<ImageFile>,
     pub changes: Vec<FolderWatcherChange>,
     pub requires_full_refresh: bool,
 }
@@ -72,7 +67,6 @@ enum WatcherMessage {
 
 struct FolderWatcherSession {
     _watcher: RecommendedWatcher,
-    _directory_lease: std::sync::Arc<crate::authority::DestinationAuthorityLease>,
     sender: Sender<WatcherMessage>,
     worker: Option<JoinHandle<()>>,
     watch_id: String,
@@ -88,25 +82,13 @@ impl FolderWatcherSession {
 }
 
 #[tauri::command]
-pub fn watch_folder_by_session(
-    app: AppHandle,
-    window: tauri::Window,
-    session_manager: tauri::State<'_, crate::authority::SessionManager>,
-    session_id: String,
-    watch_id: String,
-) -> Result<(), String> {
-    crate::commands::enforce_main_window(&window)?;
-    let directory_lease = std::sync::Arc::new(
-        session_manager.lease_session_directory(&session_id, Some(window.label()))?,
-    );
-    let session = create_watcher_session(
-        app,
-        session_manager.inner().clone(),
-        session_id,
-        window.label().to_string(),
-        directory_lease,
-        watch_id,
-    )?;
+pub fn watch_folder(app: AppHandle, folder_path: String, watch_id: String) -> Result<(), String> {
+    let folder_path = PathBuf::from(folder_path);
+    if !folder_path.is_dir() {
+        return Err(format!("'{}' is not a valid directory", folder_path.display()));
+    }
+
+    let session = create_watcher_session(app, folder_path, watch_id)?;
     let previous = {
         let mut active = active_watcher().lock().unwrap_or_else(|err| err.into_inner());
         active.replace(session)
@@ -120,11 +102,7 @@ pub fn watch_folder_by_session(
 }
 
 #[tauri::command]
-pub fn unwatch_folder_by_session(
-    window: tauri::Window,
-    watch_id: Option<String>,
-) -> Result<(), String> {
-    crate::commands::enforce_main_window(&window)?;
+pub fn unwatch_folder(watch_id: Option<String>) -> Result<(), String> {
     if let Some(watch_id) = watch_id {
         unwatch_active_folder_by_id(&watch_id);
     } else {
@@ -170,14 +148,9 @@ fn active_watcher() -> &'static Mutex<Option<FolderWatcherSession>> {
 
 fn create_watcher_session(
     app: AppHandle,
-    session_manager: crate::authority::SessionManager,
-    session_id: String,
-    window_label: String,
-    directory_lease: std::sync::Arc<crate::authority::DestinationAuthorityLease>,
+    folder_path: PathBuf,
     watch_id: String,
 ) -> Result<FolderWatcherSession, String> {
-    directory_lease.revalidate()?;
-    let folder_path = directory_lease.path().to_path_buf();
     let (sender, receiver) = mpsc::channel::<WatcherMessage>();
     let watcher_sender = sender.clone();
     let mut watcher = RecommendedWatcher::new(
@@ -191,44 +164,15 @@ fn create_watcher_session(
     watcher
         .watch(&folder_path, RecursiveMode::NonRecursive)
         .map_err(|err| format!("Failed to watch folder '{}': {}", folder_path.display(), err))?;
-    directory_lease.revalidate()?;
 
     let worker_folder_path = folder_path.clone();
-    let worker_lease = directory_lease.clone();
-    let worker = thread::spawn(move || {
-        run_watcher_worker(
-            app,
-            session_manager,
-            session_id,
-            window_label,
-            worker_folder_path,
-            worker_lease,
-            receiver,
-        )
-    });
+    let worker = thread::spawn(move || run_watcher_worker(app, worker_folder_path, receiver));
 
-    Ok(FolderWatcherSession {
-        _watcher: watcher,
-        _directory_lease: directory_lease,
-        sender,
-        worker: Some(worker),
-        watch_id,
-    })
+    Ok(FolderWatcherSession { _watcher: watcher, sender, worker: Some(worker), watch_id })
 }
 
-fn run_watcher_worker(
-    app: AppHandle,
-    session_manager: crate::authority::SessionManager,
-    session_id: String,
-    window_label: String,
-    folder_path: PathBuf,
-    directory_lease: std::sync::Arc<crate::authority::DestinationAuthorityLease>,
-    receiver: Receiver<WatcherMessage>,
-) {
+fn run_watcher_worker(app: AppHandle, folder_path: PathBuf, receiver: Receiver<WatcherMessage>) {
     while let Ok(WatcherMessage::Event(first_event)) = receiver.recv() {
-        if directory_lease.revalidate().is_err() {
-            break;
-        }
         let mut results = vec![first_event];
         let mut should_shutdown = false;
 
@@ -255,46 +199,15 @@ fn run_watcher_worker(
             break;
         }
 
-        if !publish_watcher_batch(
-            &app,
-            &session_manager,
-            &session_id,
-            &window_label,
-            &folder_path,
-            &directory_lease,
-            results,
-        ) {
-            break;
-        }
+        publish_watcher_batch(&app, &folder_path, results);
     }
-}
-
-fn run_authorized_publication_steps<V, E, I>(
-    mut validate: V,
-    emit: E,
-    update_index: I,
-) -> Result<(), String>
-where
-    V: FnMut() -> Result<(), String>,
-    E: FnOnce(),
-    I: FnOnce(),
-{
-    validate()?;
-    emit();
-    validate()?;
-    update_index();
-    Ok(())
 }
 
 fn publish_watcher_batch(
     app: &AppHandle,
-    session_manager: &crate::authority::SessionManager,
-    session_id: &str,
-    window_label: &str,
     folder_path: &Path,
-    directory_lease: &crate::authority::DestinationAuthorityLease,
     raw_results: Vec<notify::Result<Event>>,
-) -> bool {
+) {
     let mut requires_full_refresh = raw_results.len() > RAW_EVENT_FULL_REFRESH_THRESHOLD;
     let mut changes = Vec::new();
 
@@ -319,53 +232,18 @@ fn publish_watcher_batch(
     let pairing = pair_split_rename_changes(changes);
     requires_full_refresh |= pairing.requires_full_refresh;
 
-    let path_case_semantics = directory_lease.path_case_semantics();
-    let mut changes = coalesce_repeated_changes(pairing.changes, path_case_semantics);
+    let mut changes = coalesce_repeated_changes(pairing.changes);
     if changes.len() > CHANGE_FULL_REFRESH_THRESHOLD {
         changes.clear();
         requires_full_refresh = true;
     }
 
     if changes.is_empty() && !requires_full_refresh {
-        return true;
+        return;
     }
-
-    if directory_lease.revalidate().is_err() {
-        return false;
-    }
-    let refreshed = match session_manager.refresh_folder_session(session_id, Some(window_label)) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            eprintln!("Failed to reconcile watcher session authority: {error}");
-            return false;
-        }
-    };
-    let images: Vec<ImageFile> = refreshed
-        .images
-        .into_iter()
-        .map(|image| ImageFile {
-            id: Some(image.id),
-            session_id: Some(session_id.to_string()),
-            path: image.path,
-            file_name: image.file_name,
-            extension: image.extension,
-            size_bytes: image.size_bytes,
-            modified_at: image.modified_at,
-            created_at: image.created_at,
-        })
-        .collect();
-    changes = bind_changes_to_authoritative_records(
-        changes,
-        &images,
-        session_id,
-        &mut requires_full_refresh,
-        path_case_semantics,
-    );
 
     let payload = FolderWatcherPayload {
-        session_id: session_id.to_string(),
         folder_path: folder_path.to_string_lossy().to_string(),
-        images,
         changes,
         requires_full_refresh,
     };
@@ -373,74 +251,13 @@ fn publish_watcher_batch(
     let index_changes =
         if !payload.requires_full_refresh { Some(payload.changes.clone()) } else { None };
 
-    let result = run_authorized_publication_steps(
-        || directory_lease.revalidate(),
-        || {
-            if let Err(err) = app.emit(FOLDER_WATCHER_EVENT, payload) {
-                eprintln!(
-                    "Failed to emit folder watcher update for '{}': {}",
-                    folder_path.display(),
-                    err
-                );
-            }
-        },
-        || {
-            if let Some(changes) = index_changes {
-                update_persistent_folder_index(app, folder_path, &changes, path_case_semantics);
-            }
-        },
-    );
-    if let Err(error) = result {
-        eprintln!(
-            "Folder watcher authority changed before publication for '{}': {}",
-            folder_path.display(),
-            error
-        );
-        return false;
+    if let Err(err) = app.emit(FOLDER_WATCHER_EVENT, payload) {
+        eprintln!("Failed to emit folder watcher update for '{}': {}", folder_path.display(), err);
     }
-    true
-}
 
-fn bind_changes_to_authoritative_records(
-    mut changes: Vec<FolderWatcherChange>,
-    images: &[ImageFile],
-    session_id: &str,
-    requires_full_refresh: &mut bool,
-    semantics: PathCaseSemantics,
-) -> Vec<FolderWatcherChange> {
-    let capable_by_path: HashMap<String, ImageFile> = images
-        .iter()
-        .cloned()
-        .map(|image| {
-            (normalize_path_for_key_with_semantics(Path::new(&image.path), semantics), image)
-        })
-        .collect();
-    for change in &mut changes {
-        if change.image.is_some() {
-            change.image = capable_by_path
-                .get(&normalize_path_for_key_with_semantics(Path::new(&change.path), semantics))
-                .cloned();
-        }
+    if let Some(changes) = index_changes {
+        update_persistent_folder_index(app, folder_path, &changes);
     }
-    let has_uncapable_record = changes.iter().any(|change| {
-        matches!(
-            change.kind,
-            FolderWatcherChangeKind::Added
-                | FolderWatcherChangeKind::Modified
-                | FolderWatcherChangeKind::Renamed
-        ) && change
-            .image
-            .as_ref()
-            .map(|image| image.id.is_none() || image.session_id.as_deref() != Some(session_id))
-            .unwrap_or(true)
-    });
-    if has_uncapable_record {
-        // The full refreshed registry below is authoritative. Never publish a path-only mutation
-        // that the renderer could accidentally combine with a stale capability.
-        changes.clear();
-        *requires_full_refresh = true;
-    }
-    changes
 }
 
 fn classify_notify_event(event: &Event) -> EventClassification {
@@ -670,15 +487,12 @@ fn clear_split_rename_side(mut change: FolderWatcherChange) -> FolderWatcherChan
     change
 }
 
-fn coalesce_repeated_changes(
-    changes: Vec<FolderWatcherChange>,
-    semantics: PathCaseSemantics,
-) -> Vec<FolderWatcherChange> {
+fn coalesce_repeated_changes(changes: Vec<FolderWatcherChange>) -> Vec<FolderWatcherChange> {
     let mut coalesced = Vec::new();
     let mut positions_by_key = HashMap::<String, usize>::new();
 
     for change in changes {
-        let key = coalesce_key(&change, semantics);
+        let key = coalesce_key(&change);
         if let Some(index) = positions_by_key.get(&key).copied() {
             coalesced[index] = change;
         } else {
@@ -690,15 +504,15 @@ fn coalesce_repeated_changes(
     coalesced
 }
 
-fn coalesce_key(change: &FolderWatcherChange, semantics: PathCaseSemantics) -> String {
+fn coalesce_key(change: &FolderWatcherChange) -> String {
     format!(
         "{:?}|{}|{}",
         change.kind,
-        normalize_path_for_key_with_semantics(Path::new(&change.path), semantics),
+        normalize_path_for_key(Path::new(&change.path)),
         change
             .old_path
             .as_deref()
-            .map(|path| normalize_path_for_key_with_semantics(Path::new(path), semantics))
+            .map(|path| normalize_path_for_key(Path::new(path)))
             .unwrap_or_default()
     )
 }
@@ -707,7 +521,6 @@ fn update_persistent_folder_index(
     app: &AppHandle,
     folder_path: &Path,
     changes: &[FolderWatcherChange],
-    semantics: PathCaseSemantics,
 ) {
     let index_root = match app.path().app_cache_dir() {
         Ok(cache_dir) => folder_index::index_root(&cache_dir),
@@ -720,32 +533,24 @@ fn update_persistent_folder_index(
         }
     };
 
-    let existing_images =
-        folder_index::read_folder_images_with_semantics(&index_root, folder_path, semantics);
+    let existing_images = folder_index::read_folder_images(&index_root, folder_path);
     if existing_images.is_empty() {
         return;
     }
 
     let mut images_by_key: HashMap<String, ImageFile> = existing_images
         .into_iter()
-        .map(|image| {
-            (normalize_path_for_key_with_semantics(Path::new(&image.path), semantics), image)
-        })
+        .map(|image| (normalize_path_for_key(Path::new(&image.path)), image))
         .collect();
 
     for change in changes {
-        apply_index_change(&mut images_by_key, change, semantics);
+        apply_index_change(&mut images_by_key, change);
     }
 
     let mut images: Vec<ImageFile> = images_by_key.into_values().collect();
     sort_image_files_by_name(&mut images);
 
-    if let Err(err) = folder_index::write_folder_images_with_semantics(
-        &index_root,
-        folder_path,
-        &images,
-        semantics,
-    ) {
+    if let Err(err) = folder_index::write_folder_images(&index_root, folder_path, &images) {
         eprintln!(
             "Failed to update persistent folder index from watcher changes for '{}': {}",
             folder_path.display(),
@@ -757,31 +562,22 @@ fn update_persistent_folder_index(
 fn apply_index_change(
     images_by_key: &mut HashMap<String, ImageFile>,
     change: &FolderWatcherChange,
-    semantics: PathCaseSemantics,
 ) {
     match change.kind {
         FolderWatcherChangeKind::Added | FolderWatcherChangeKind::Modified => {
             if let Some(image) = &change.image {
-                images_by_key.insert(
-                    normalize_path_for_key_with_semantics(Path::new(&image.path), semantics),
-                    image.clone(),
-                );
+                images_by_key.insert(normalize_path_for_key(Path::new(&image.path)), image.clone());
             }
         }
         FolderWatcherChangeKind::Removed => {
-            images_by_key
-                .remove(&normalize_path_for_key_with_semantics(Path::new(&change.path), semantics));
+            images_by_key.remove(&normalize_path_for_key(Path::new(&change.path)));
         }
         FolderWatcherChangeKind::Renamed => {
             if let Some(old_path) = &change.old_path {
-                images_by_key
-                    .remove(&normalize_path_for_key_with_semantics(Path::new(old_path), semantics));
+                images_by_key.remove(&normalize_path_for_key(Path::new(old_path)));
             }
             if let Some(image) = &change.image {
-                images_by_key.insert(
-                    normalize_path_for_key_with_semantics(Path::new(&image.path), semantics),
-                    image.clone(),
-                );
+                images_by_key.insert(normalize_path_for_key(Path::new(&image.path)), image.clone());
             }
         }
     }
@@ -945,105 +741,11 @@ mod tests {
             vec![image_path],
         ));
 
-        let coalesced = coalesce_repeated_changes(
-            first.changes.into_iter().chain(second.changes).collect(),
-            PathCaseSemantics::Sensitive,
-        );
+        let coalesced =
+            coalesce_repeated_changes(first.changes.into_iter().chain(second.changes).collect());
 
         assert_eq!(coalesced.len(), 1);
         assert_eq!(coalesced[0].kind, FolderWatcherChangeKind::Modified);
         assert_eq!(coalesced[0].image.as_ref().unwrap().size_bytes, 6);
-    }
-
-    #[test]
-    fn watcher_coalescing_obeys_explicit_root_case_semantics() {
-        let change = |path: &str| FolderWatcherChange {
-            kind: FolderWatcherChangeKind::Removed,
-            path: path.to_string(),
-            old_path: None,
-            image: None,
-            split_rename_side: None,
-        };
-        let changes = vec![change("C:/Sensitive/A.jpg"), change("C:/Sensitive/a.jpg")];
-        assert_eq!(
-            coalesce_repeated_changes(changes.clone(), PathCaseSemantics::Sensitive).len(),
-            2
-        );
-        assert_eq!(coalesce_repeated_changes(changes, PathCaseSemantics::Insensitive).len(), 1);
-    }
-
-    #[test]
-    fn authoritative_binding_replaces_disappeared_or_changed_kind_targets() {
-        for kind in [FolderWatcherChangeKind::Added, FolderWatcherChangeKind::Modified] {
-            let stale = ImageFile {
-                id: None,
-                session_id: None,
-                path: "C:/images/vanished.jpg".into(),
-                file_name: "vanished.jpg".into(),
-                extension: "jpg".into(),
-                size_bytes: 5,
-                modified_at: None,
-                created_at: None,
-            };
-            let changes = vec![FolderWatcherChange {
-                kind,
-                path: stale.path.clone(),
-                old_path: None,
-                image: Some(stale),
-                split_rename_side: None,
-            }];
-            let mut requires_full_refresh = false;
-
-            let bound = bind_changes_to_authoritative_records(
-                changes,
-                &[],
-                "session_authoritative",
-                &mut requires_full_refresh,
-                PathCaseSemantics::Sensitive,
-            );
-
-            assert!(bound.is_empty());
-            assert!(requires_full_refresh);
-        }
-    }
-
-    #[test]
-    fn authority_swap_during_debounce_prevents_event_and_index_publication() {
-        let emitted = std::cell::Cell::new(false);
-        let indexed = std::cell::Cell::new(false);
-
-        let result = run_authorized_publication_steps(
-            || Err("pinned directory identity changed".to_string()),
-            || emitted.set(true),
-            || indexed.set(true),
-        );
-
-        assert!(result.is_err());
-        assert!(!emitted.get());
-        assert!(!indexed.get());
-    }
-
-    #[test]
-    fn authority_is_revalidated_again_before_index_mutation() {
-        let validation_count = std::cell::Cell::new(0_u8);
-        let emitted = std::cell::Cell::new(false);
-        let indexed = std::cell::Cell::new(false);
-
-        let result = run_authorized_publication_steps(
-            || {
-                validation_count.set(validation_count.get() + 1);
-                if validation_count.get() == 2 {
-                    Err("directory changed after emission".to_string())
-                } else {
-                    Ok(())
-                }
-            },
-            || emitted.set(true),
-            || indexed.set(true),
-        );
-
-        assert!(result.is_err());
-        assert!(emitted.get());
-        assert!(!indexed.get());
     }
 }

@@ -11,23 +11,11 @@ const getThumbnailMock = vi.fn<
     cache_key: string;
   }>
 >();
-const getThumbnailByIdMock =
-  vi.fn<
-    (
-      sessionId: string,
-      imageId: string,
-      sizeBytes?: number,
-      modifiedAt?: string,
-      requestId?: string
-    ) => Promise<{ file_path: string; cache_key: string }>
-  >();
 
 vi.mock('./tauriCommands', () => ({
   generatedImageAssetToUrl: (asset: { file_path: string; cache_key: string }) =>
     `asset://localhost/${asset.file_path}?v=${encodeURIComponent(asset.cache_key)}`,
   getThumbnail: getThumbnailMock,
-  getThumbnailById: getThumbnailByIdMock,
-  cancelMediaRequest: vi.fn(async () => false),
 }));
 
 function createDeferred<T>() {
@@ -71,66 +59,6 @@ describe('thumbnailCache', () => {
     clearThumbnailCacheForTests();
   });
 
-  it('preserves session and image authority through cache lookup and backend request', async () => {
-    const { clearThumbnailCacheForTests, loadThumbnail } = await loadThumbnailCacheModule();
-    const request = {
-      path: 'C:/images/authorized.jpg',
-      sessionId: 'sess_authorized',
-      imageId: 'img_authorized',
-      sizeBytes: 456,
-      modifiedAt: '99',
-    };
-    getThumbnailByIdMock.mockResolvedValueOnce({
-      file_path: 'C:/cache/authorized.jpg',
-      cache_key: 'AUTHORIZED',
-    });
-
-    await expect(loadThumbnail(request)).resolves.toContain('authorized.jpg');
-    await expect(loadThumbnail(request)).resolves.toContain('authorized.jpg');
-
-    expect(getThumbnailByIdMock).toHaveBeenCalledTimes(1);
-    expect(getThumbnailByIdMock).toHaveBeenCalledWith(
-      'sess_authorized',
-      'img_authorized',
-      456,
-      '99',
-      expect.any(String)
-    );
-    expect(getThumbnailMock).not.toHaveBeenCalled();
-    clearThumbnailCacheForTests();
-  });
-
-  it('does not publish a delayed completion from superseded session authority', async () => {
-    const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
-      await loadThumbnailCacheModule();
-    const oldResult = createDeferred<{ file_path: string; cache_key: string }>();
-    const newResult = createDeferred<{ file_path: string; cache_key: string }>();
-    getThumbnailByIdMock
-      .mockImplementationOnce(() => oldResult.promise)
-      .mockImplementationOnce(() => newResult.promise);
-    const oldRequest = {
-      path: 'C:/images/same.jpg',
-      sessionId: 'sess_old',
-      imageId: 'img_old',
-    };
-    const newRequest = {
-      path: 'C:/images/same.jpg',
-      sessionId: 'sess_new',
-      imageId: 'img_new',
-    };
-
-    const oldPromise = loadThumbnail(oldRequest);
-    const newPromise = loadThumbnail(newRequest);
-    oldResult.resolve({ file_path: 'C:/cache/old.jpg', cache_key: 'OLD_AUTH' });
-    await expect(oldPromise).resolves.toContain('old.jpg');
-    expect(getCachedThumbnail(newRequest)).toBeUndefined();
-
-    newResult.resolve({ file_path: 'C:/cache/new.jpg', cache_key: 'NEW_AUTH' });
-    await expect(newPromise).resolves.toContain('new.jpg');
-    expect(getCachedThumbnail(newRequest)).toContain('new.jpg');
-    clearThumbnailCacheForTests();
-  });
-
   it('treats known fallback assets as cacheable thumbnail results', async () => {
     const { clearThumbnailCacheForTests, getCachedThumbnail, loadThumbnail } =
       await loadThumbnailCacheModule();
@@ -149,12 +77,7 @@ describe('thumbnailCache', () => {
     expect(cached).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
     expect(second).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
-    expect(getThumbnailMock).toHaveBeenCalledWith(
-      'C:/images/unsupported.heic',
-      128,
-      '42',
-      expect.any(String)
-    );
+    expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/unsupported.heic', 128, '42');
 
     clearThumbnailCacheForTests();
   });
@@ -173,12 +96,7 @@ describe('thumbnailCache', () => {
     expect(first).toBe('asset://localhost/C:/cache/structured.jpg?v=STRUCTURED');
     expect(second).toBe('asset://localhost/C:/cache/structured.jpg?v=STRUCTURED');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
-    expect(getThumbnailMock).toHaveBeenCalledWith(
-      'C:/images/structured.jpg',
-      300,
-      '10',
-      expect.any(String)
-    );
+    expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/structured.jpg', 300, '10');
 
     clearThumbnailCacheForTests();
   });
@@ -208,20 +126,8 @@ describe('thumbnailCache', () => {
     });
 
     expect(refreshed).toBe('asset://localhost/C:/cache/new.jpg?v=NEW');
-    expect(getThumbnailMock).toHaveBeenNthCalledWith(
-      1,
-      'C:/images/a.jpg',
-      100,
-      '1',
-      expect.any(String)
-    );
-    expect(getThumbnailMock).toHaveBeenNthCalledWith(
-      2,
-      'C:/images/a.jpg',
-      100,
-      '2',
-      expect.any(String)
-    );
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(1, 'C:/images/a.jpg', 100, '1');
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(2, 'C:/images/a.jpg', 100, '2');
 
     clearThumbnailCacheForTests();
   });
@@ -251,8 +157,7 @@ describe('thumbnailCache', () => {
       2,
       secondRequest.path,
       secondRequest.sizeBytes,
-      secondRequest.modifiedAt,
-      expect.any(String)
+      secondRequest.modifiedAt
     );
     clearThumbnailCacheForTests();
   });

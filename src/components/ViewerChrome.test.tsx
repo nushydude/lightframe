@@ -12,8 +12,6 @@ import { confirm, save } from '@tauri-apps/plugin-dialog';
 import * as tauriCommands from '../services/tauriCommands';
 import * as viewerActions from '../services/viewerActions';
 import { useToastStore } from '../state/toastStore';
-import { initializeRuntime } from '../services/runtime/runtime';
-import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 const projectorState = vi.hoisted(() => ({
   isProjectorOpen: false,
@@ -58,13 +56,6 @@ describe('ViewerChrome', () => {
     projectorState.isProjectorOpen = false;
     projectorState.refreshProjectorState.mockReset();
     vi.clearAllMocks();
-    initializeRuntime(
-      createTestRuntimeAdapter({
-        window: { ...createTestRuntimeAdapter().window, ...(getCurrentWindow() as object) },
-        confirm,
-        saveFile: (defaultPath, options) => save({ defaultPath, ...options }),
-      })
-    );
     vi.spyOn(tauriCommands, 'getImageMetadata').mockResolvedValue({
       width: 1200,
       height: 800,
@@ -72,15 +63,6 @@ describe('ViewerChrome', () => {
       format: 'JPEG',
     });
     vi.spyOn(tauriCommands, 'getImageCaption').mockResolvedValue(null);
-    vi.spyOn(tauriCommands, 'selectDestination').mockImplementation(async (suggestedFileName) => {
-      const selectedPath = await save({ defaultPath: suggestedFileName });
-      if (typeof selectedPath !== 'string') return null;
-      return {
-        destinationGrantId: 'dest_test',
-        relativeFileName: selectedPath.replace(/\\/g, '/').split('/').pop() ?? selectedPath,
-        selectedPath,
-      };
-    });
     useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
@@ -131,10 +113,8 @@ describe('ViewerChrome', () => {
 
     render(<ViewerChrome {...defaultProps} />);
 
-    expect(screen.getByTestId('viewer-filename')).toHaveTextContent('photo.jpg');
-    expect(screen.getByTestId('viewer-index')).toHaveTextContent('1 / 2');
-    expect(screen.getByTestId('viewer-index')).toHaveAttribute('data-index', '1');
-    expect(screen.getByTestId('viewer-index')).toHaveAttribute('data-total', '2');
+    expect(screen.getByText('photo.jpg')).toBeInTheDocument();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
   });
 
   it('shows a same-basename caption while browsing and copies it', async () => {
@@ -372,8 +352,6 @@ describe('ViewerChrome', () => {
 
     expect(topBarLeft?.textContent).toContain('★');
     expect(topBarLeft?.textContent).not.toContain('0/5');
-    expect(screen.getByTestId('viewer-favorite')).toHaveAttribute('data-favorite', 'true');
-    expect(screen.queryByTestId('viewer-rating')).not.toBeInTheDocument();
   });
 
   it('should call onNext when next button is clicked', () => {
@@ -1783,9 +1761,6 @@ describe('ViewerChrome', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/other.jpg',
       outputPath: 'C:/Images/photo-scaled.jpg',
-      destinationGrantId: 'dest_existing',
-      relativeFileName: 'photo-scaled.jpg',
-      destinationOperation: 'scale-copy',
       width: 600,
       height: 400,
       smoothing: 0,
@@ -1920,7 +1895,7 @@ describe('ViewerChrome', () => {
     expect(scaleSpy).not.toHaveBeenCalled();
   });
 
-  it('defaults AVIF scaled exports to JPEG through the trusted native destination picker', async () => {
+  it('defaults AVIF scaled exports to JPEG and restricts the save dialog filters', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.avif',
       images: [
@@ -1952,9 +1927,14 @@ describe('ViewerChrome', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     });
 
-    expect(tauriCommands.selectDestination).toHaveBeenCalledWith(
-      'photo-scaled-1200x800.jpg',
-      'scale-copy'
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultPath: 'C:/Images/photo-scaled-1200x800.jpg',
+        filters: expect.arrayContaining([
+          expect.objectContaining({ name: 'JPEG image', extensions: ['jpg', 'jpeg'] }),
+          expect.objectContaining({ name: 'PNG image', extensions: ['png'] }),
+        ]),
+      })
     );
   });
 

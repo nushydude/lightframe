@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getRuntime } from '../services/runtime/runtime';
-import type { RuntimeWindow } from '../services/runtime/types';
+import { listen } from '@tauri-apps/api/event';
+import { getMatches } from '@tauri-apps/plugin-cli';
+import type { Window } from '@tauri-apps/api/window';
 import { useSettingsStore } from '../state/settingsStore';
 import { CurationPersistenceError } from '../state/curationStore';
 import { useViewerStore } from '../state/viewerStore';
-import { consumeStartupSession } from '../services/tauriCommands';
-import type { FileSessionSnapshot, FolderSessionSnapshot } from '../services/tauriCommands';
+import { resolveStartupDecision } from '../services/startup';
 import {
   recordStartupCliResolveTelemetry,
   recordStartupInitialImageOpenTelemetry,
@@ -18,17 +18,14 @@ const STARTUP_WINDOW_RESTORE_TIMEOUT_MS = 750;
 const STARTUP_WINDOW_SHOW_WATCHDOG_MS = 2000;
 
 type StartupLifecycleOptions = {
-  appWindow: RuntimeWindow;
+  appWindow: Window;
   isMainWindow: boolean;
   isProjectorWindow: boolean;
   loadSettings: () => Promise<unknown>;
   loadCuration: () => Promise<unknown>;
+  openFolder: (folderPath: string) => Promise<unknown>;
   openImage: (imagePath: string) => Promise<unknown>;
-  applyFolderSessionSnapshot: (session: FolderSessionSnapshot) => Promise<unknown>;
-  applyFileSessionSnapshot: (
-    session: FileSessionSnapshot,
-    options?: { startup?: boolean }
-  ) => Promise<unknown>;
+  openImageForStartup: (imagePath: string) => Promise<unknown>;
   setError: (message: string | null) => void;
 };
 
@@ -70,23 +67,21 @@ async function restoreStartupWindowBeforeShow({
 
 async function openStartupTarget({
   isMainWindow,
-  applyFolderSessionSnapshot,
-  applyFileSessionSnapshot,
-}: Pick<
-  StartupLifecycleOptions,
-  'isMainWindow' | 'applyFolderSessionSnapshot' | 'applyFileSessionSnapshot'
->) {
+  openFolder,
+  openImageForStartup,
+}: Pick<StartupLifecycleOptions, 'isMainWindow' | 'openFolder' | 'openImageForStartup'>) {
   if (!isMainWindow) return;
 
   const cliResolveStartedAt = performance.now();
-  const startupDecision = await consumeStartupSession();
+  const matches = await getMatches();
+  const startupDecision = resolveStartupDecision(matches.args.file, matches.args.folder);
   recordStartupCliResolveTelemetry(performance.now() - cliResolveStartedAt);
 
-  if (startupDecision.mode === 'folder') {
-    await applyFolderSessionSnapshot(startupDecision.session);
-  } else if (startupDecision.mode === 'image') {
+  if (startupDecision.mode === 'open-folder' && startupDecision.folderPath) {
+    await openFolder(startupDecision.folderPath);
+  } else if (startupDecision.mode === 'open-image' && startupDecision.filePath) {
     const startupImageOpenStartedAt = performance.now();
-    await applyFileSessionSnapshot(startupDecision.session, { startup: true });
+    await openImageForStartup(startupDecision.filePath);
     recordStartupInitialImageOpenTelemetry(performance.now() - startupImageOpenStartedAt);
   }
 }
@@ -98,9 +93,9 @@ export function useAppStartupLifecycle({
   isProjectorWindow,
   loadSettings,
   loadCuration,
+  openFolder,
   openImage,
-  applyFolderSessionSnapshot,
-  applyFileSessionSnapshot,
+  openImageForStartup,
   setError,
 }: StartupLifecycleOptions) {
   const [hasStartupResolved, setHasStartupResolved] = useState(false);
@@ -134,14 +129,10 @@ export function useAppStartupLifecycle({
       });
 
       try {
-        await openStartupTarget({
-          isMainWindow,
-          applyFolderSessionSnapshot,
-          applyFileSessionSnapshot,
-        });
+        await openStartupTarget({ isMainWindow, openFolder, openImageForStartup });
       } catch (error) {
-        console.error('Failed to open startup session:', error);
-        setError(`Could not open startup file or folder: ${error}`);
+        console.error('Failed to parse CLI args on startup:', error);
+        setError(`Failed to parse CLI args on startup: ${error}`);
       } finally {
         if (!isCancelled && !useViewerStore.getState().folderPath) {
           await loadCuration().catch((error: unknown) => {
@@ -160,10 +151,9 @@ export function useAppStartupLifecycle({
     void init();
 
     if (isMainWindow) {
-      void getRuntime()
-        .listen<string>('open-file', async (path) => {
-          await openImage(path);
-        })
+      void listen<string>('open-file', async (event) => {
+        await openImage(event.payload);
+      })
         .then((fn) => {
           unlisten = fn;
         })
@@ -180,9 +170,9 @@ export function useAppStartupLifecycle({
     isProjectorWindow,
     loadCuration,
     loadSettings,
+    openFolder,
     openImage,
-    applyFolderSessionSnapshot,
-    applyFileSessionSnapshot,
+    openImageForStartup,
     setError,
   ]);
 

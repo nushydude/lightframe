@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
-import { getRuntime } from '../services/runtime/runtime';
-import {
-  adoptNativeSessionSelection,
-  updateRecentFoldersJumpList,
-  type StartupSessionSelection,
-} from '../services/tauriCommands';
+import { listen } from '@tauri-apps/api/event';
+import { isDirectory, updateRecentFoldersJumpList } from '../services/tauriCommands';
 import { applyThemePreference } from '../services/themePreference';
 import { configureImageAssetCache } from '../services/imageAssetCache';
 import { configureThumbnailCache } from '../services/thumbnailCache';
@@ -18,7 +14,6 @@ import { mainWindowTitle } from '../services/windowTitle';
 import { useSettingsStore } from '../state/settingsStore';
 import type { PerformanceMode } from '../types/settings';
 import type { ImageCuration } from '../types/curation';
-import { pathIdentityKey } from '../services/pathIdentity';
 
 type PendingMarkedSelectionSnapshot = {
   folderPath: string | null;
@@ -44,14 +39,16 @@ export function useRecentFoldersJumpList({
     if (!isMainWindow || !isLoaded) return;
 
     let isCancelled = false;
-    void updateRecentFoldersJumpList()
+    void updateRecentFoldersJumpList(recentFolders)
       .then(async (removedPaths) => {
         if (isCancelled || removedPaths.length === 0) return;
 
-        const removedKeys = new Set(removedPaths.map((path) => pathIdentityKey(path)));
+        const removedKeys = new Set(
+          removedPaths.map((path) => path.replace(/\\/g, '/').toLowerCase())
+        );
         const currentSettings = useSettingsStore.getState().settings;
         const nextRecentFolders = currentSettings.recentFolders.filter(
-          (folder) => !removedKeys.has(pathIdentityKey(folder.path))
+          (folder) => !removedKeys.has(folder.path.replace(/\\/g, '/').toLowerCase())
         );
         if (nextRecentFolders.length !== currentSettings.recentFolders.length) {
           await updateSettings({ recentFolders: nextRecentFolders });
@@ -77,28 +74,21 @@ export function useDragAndDrop({
   setIsDragOver: (value: boolean) => void;
 }) {
   useEffect(() => {
-    const unlistenDrag = getRuntime().listen<Exclude<StartupSessionSelection, { mode: 'empty' }>>(
-      'trusted-native-drop-session',
-      async (payload) => {
-        setIsDragOver(false);
-        try {
-          const selection = adoptNativeSessionSelection(payload);
-          if (selection.mode === 'folder') {
-            await openFolder(selection.session.canonical_folder);
-          } else if (selection.mode === 'image') {
-            const image = selection.session.images.find(
-              (candidate) => candidate.id === selection.session.requested_image_id
-            );
-            if (!image) throw new Error('Dropped image is missing from its authorized session');
-            await openImage(image.path);
-          }
-        } catch (error) {
-          console.error('Failed to open trusted dropped file:', error);
-        }
+    const unlistenDrag = listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
+      setIsDragOver(false);
+      const paths = event.payload.paths;
+      if (!paths || paths.length === 0) return;
+
+      try {
+        if (await isDirectory(paths[0])) await openFolder(paths[0]);
+        else await openImage(paths[0]);
+      } catch (error) {
+        console.error('Failed to stat dragged file:', error);
+        await openImage(paths[0]);
       }
-    );
-    const unlistenDragEnter = getRuntime().listen('tauri://drag-enter', () => setIsDragOver(true));
-    const unlistenDragLeave = getRuntime().listen('tauri://drag-leave', () => setIsDragOver(false));
+    });
+    const unlistenDragEnter = listen('tauri://drag-enter', () => setIsDragOver(true));
+    const unlistenDragLeave = listen('tauri://drag-leave', () => setIsDragOver(false));
 
     return () => {
       void unlistenDrag.then((fn) => fn());

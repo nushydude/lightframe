@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { reconcileFolderWatcherPayload } from './folderWatcherReconciliation';
 import type { ImageFile } from '../types/image';
-import { pathIdentityKey } from './pathIdentity';
 
 const image = (
   fileName: string,
   sizeBytes: number,
-  modifiedAt: string | null = '100',
-  id: string = `img_${fileName}`
+  modifiedAt: string | null = '100'
 ): ImageFile => ({
-  id,
-  sessionId: 'session_1',
   path: `C:/images/${fileName}`,
   file_name: fileName,
   extension: fileName.split('.').pop() ?? '',
@@ -22,9 +18,7 @@ describe('reconcileFolderWatcherPayload', () => {
   it('adds supported images using the active sort order', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
-        sessionId: 'session_1',
         folderPath: 'C:/images',
-        images: [image('image10.jpg', 10), image('image2.jpg', 2), image('image1.jpg', 1)],
         requiresFullRefresh: false,
         changes: [{ kind: 'added', path: 'C:/images/image2.jpg', image: image('image2.jpg', 2) }],
       },
@@ -47,9 +41,7 @@ describe('reconcileFolderWatcherPayload', () => {
   it('removes deleted images and keeps nearest selection', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
-        sessionId: 'session_1',
         folderPath: 'C:/images',
-        images: [image('a.jpg', 1), image('b.jpg', 2)],
         requiresFullRefresh: false,
         changes: [{ kind: 'removed', path: 'C:/images/c.jpg' }],
       },
@@ -68,16 +60,14 @@ describe('reconcileFolderWatcherPayload', () => {
   it('renames the current image while preserving selection', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
-        sessionId: 'session_1',
         folderPath: 'C:/images',
-        images: [image('a.jpg', 1), image('c.jpg', 3), image('d.jpg', 4, '100', 'img_b.jpg')],
         requiresFullRefresh: false,
         changes: [
           {
             kind: 'renamed',
             oldPath: 'C:/images/b.jpg',
             path: 'C:/images/d.jpg',
-            image: image('d.jpg', 4, '100', 'img_b.jpg'),
+            image: image('d.jpg', 4),
           },
         ],
       },
@@ -96,9 +86,7 @@ describe('reconcileFolderWatcherPayload', () => {
   it('invalidates and updates modified image records', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
-        sessionId: 'session_1',
         folderPath: 'C:/images',
-        images: [image('a.jpg', 42, '999'), image('b.jpg', 2)],
         requiresFullRefresh: false,
         changes: [
           {
@@ -126,9 +114,7 @@ describe('reconcileFolderWatcherPayload', () => {
   it('invalidates added paths so atomic replace saves do not keep stale assets', () => {
     const result = reconcileFolderWatcherPayload({
       payload: {
-        sessionId: 'session_1',
         folderPath: 'C:/images',
-        images: [image('a.jpg', 99, '999'), image('b.jpg', 2)],
         requiresFullRefresh: false,
         changes: [
           {
@@ -157,13 +143,11 @@ describe('reconcileFolderWatcherPayload', () => {
   it('uses the supplied normalized catalog index for changed-path lookup', () => {
     const images = Array.from({ length: 10_000 }, (_, index) => image(`${index}.jpg`, index));
     const pathIndex = new Map(
-      images.map((item, index) => [pathIdentityKey(item.path), BigInt(index) * 1_000_000n])
+      images.map((item, index) => [item.path.toLowerCase(), BigInt(index) * 1_000_000n])
     );
     const result = reconcileFolderWatcherPayload({
       payload: {
-        sessionId: 'session_1',
         folderPath: 'C:/images',
-        images: images.filter((item) => item.file_name !== '5000.jpg'),
         requiresFullRefresh: false,
         changes: [{ kind: 'removed', path: 'C:/images/5000.jpg' }],
       },
@@ -176,11 +160,11 @@ describe('reconcileFolderWatcherPayload', () => {
 
     expect(result.images).toHaveLength(9_999);
     expect(pathIndex.has('c:/images/5000.jpg')).toBe(false);
-    expect(pathIndex.get('c:/images/5001.jpg')).toBe(5_000_000_000n);
+    expect(pathIndex.get('c:/images/5001.jpg')).toBe(5_001_000_000n);
     expect(result.preferredPath).toBeNull();
   });
 
-  it('uses a valid authoritative snapshot even for large batches', () => {
+  it('requests a full refresh for large or low-confidence batches', () => {
     const changes = Array.from({ length: 65 }, (_, index) => ({
       kind: 'modified' as const,
       path: `C:/images/${index}.jpg`,
@@ -189,31 +173,17 @@ describe('reconcileFolderWatcherPayload', () => {
 
     expect(
       reconcileFolderWatcherPayload({
-        payload: {
-          sessionId: 'session_1',
-          folderPath: 'C:/images',
-          images: changes.map((change) => change.image),
-          requiresFullRefresh: false,
-          changes,
-        },
+        payload: { folderPath: 'C:/images', requiresFullRefresh: false, changes },
         images: [image('a.jpg', 1)],
         currentIndex: 0,
         currentImagePath: 'C:/images/a.jpg',
         sortOrder: 'name',
       }).requiresFullRefresh
-    ).toBe(false);
+    ).toBe(true);
 
-    const invalid = image('invalid.jpg', 2);
-    invalid.sessionId = 'another_session';
     expect(
       reconcileFolderWatcherPayload({
-        payload: {
-          sessionId: 'session_1',
-          folderPath: 'C:/images',
-          images: [invalid],
-          requiresFullRefresh: true,
-          changes: [],
-        },
+        payload: { folderPath: 'C:/images', requiresFullRefresh: true, changes: [] },
         images: [image('a.jpg', 1)],
         currentIndex: 0,
         currentImagePath: 'C:/images/a.jpg',

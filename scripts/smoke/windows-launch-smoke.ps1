@@ -1,9 +1,6 @@
 param(
   [string]$ExePath = "src-tauri/target/release/lightframe.exe",
-  [string]$AppIdentifier = "com.lightframe.app",
-  [int]$TimeoutSeconds = 45,
-  [int]$WindowStablePolls = 2,
-  [int]$RespondingGraceSeconds = 5,
+  [int]$TimeoutSeconds = 15,
   [switch]$AllowExistingLightFrame
 )
 
@@ -54,7 +51,7 @@ if ($existing.Count -gt 0 -and -not $AllowExistingLightFrame) {
   throw "LightFrame is already running (PID $ids). Close it or rerun with -AllowExistingLightFrame."
 }
 
-$appConfigDir = Join-Path $env:APPDATA $AppIdentifier
+$appConfigDir = Join-Path $env:APPDATA "com.lightframe.app"
 $settingsPath = Join-Path $appConfigDir "settings.json"
 $backupPath = $null
 $hadSettings = Test-Path -LiteralPath $settingsPath
@@ -107,8 +104,6 @@ try {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   $lastTitle = ""
   $lastHandle = [IntPtr]::Zero
-  $stableWindowPolls = 0
-  $respondingGraceDeadline = $null
 
   while ((Get-Date) -lt $deadline) {
     $process.Refresh()
@@ -125,21 +120,8 @@ try {
     $lastHandle = $process.MainWindowHandle
     $lastTitle = $process.MainWindowTitle
     if ($lastHandle -ne [IntPtr]::Zero -and $lastTitle -like "LightFrame*") {
-      if ($stableWindowPolls -eq 0) {
-        $respondingGraceDeadline = (Get-Date).AddSeconds($RespondingGraceSeconds)
-      }
-      $stableWindowPolls += 1
-      if ($stableWindowPolls -lt $WindowStablePolls) {
-        Start-Sleep -Milliseconds 250
-        continue
-      }
-
       if (-not $process.Responding) {
-        if ($respondingGraceDeadline -and (Get-Date) -lt $respondingGraceDeadline) {
-          Start-Sleep -Milliseconds 250
-          continue
-        }
-        throw "LightFrame opened a main window but it is not responding after $RespondingGraceSeconds seconds."
+        throw "LightFrame opened a main window but it is not responding."
       }
 
       $crashes = @(Get-LightFrameCrashEvents -StartTime $startedAt)
@@ -150,9 +132,6 @@ try {
 
       Write-Host "Smoke passed: PID $($process.Id), HWND $lastHandle, title '$lastTitle'."
       exit 0
-    } else {
-      $stableWindowPolls = 0
-      $respondingGraceDeadline = $null
     }
 
     Start-Sleep -Milliseconds 250
@@ -161,7 +140,7 @@ try {
   throw "Timed out after $TimeoutSeconds seconds waiting for LightFrame to show a main window. Last HWND: $lastHandle, title: '$lastTitle'."
 } finally {
   if ($process -and -not $process.HasExited) {
-    & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
   }
 
   if ($backupPath -and (Test-Path -LiteralPath $backupPath)) {

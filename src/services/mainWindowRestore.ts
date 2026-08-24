@@ -1,25 +1,24 @@
+import {
+  availableMonitors,
+  currentMonitor,
+  PhysicalPosition,
+  PhysicalSize,
+  type Monitor,
+} from '@tauri-apps/api/window';
 import type { AppSettings } from '../types/settings';
-import { getRuntime } from './runtime/runtime';
 import { displayKeyFromMonitor, windowRestorePlanForDisplays } from './windowBounds';
-
-type RuntimeMonitor = NonNullable<
-  Awaited<ReturnType<ReturnType<typeof getRuntime>['currentMonitor']>>
->;
 
 export async function restoreMainWindowBounds(
   appWindow: {
-    setPosition: (position: { x: number; y: number }) => Promise<void>;
-    setSize: (size: { width: number; height: number }) => Promise<void>;
+    setPosition: (position: PhysicalPosition) => Promise<void>;
+    setSize: (size: PhysicalSize) => Promise<void>;
   },
   settings: AppSettings,
   canContinue: () => boolean,
   monitorProviders: {
-    current: () => Promise<RuntimeMonitor | null>;
-    available: () => Promise<RuntimeMonitor[]>;
-  } = {
-    current: () => getRuntime().currentMonitor(),
-    available: () => getRuntime().availableMonitors(),
-  }
+    current: () => Promise<Monitor | null>;
+    available: () => Promise<Monitor[]>;
+  } = { current: currentMonitor, available: availableMonitors }
 ): Promise<void> {
   if (!settings.rememberWindowBounds) return;
   const [monitor, monitors] = await Promise.all([
@@ -27,13 +26,14 @@ export async function restoreMainWindowBounds(
     monitorProviders.available(),
   ]);
   if (!canContinue()) return;
+
   const restorePlan = windowRestorePlanForDisplays(
     settings,
     displayKeyFromMonitor(monitor),
     monitors
   );
   if (!restorePlan) return;
-  await appWindow.setSize({ width: restorePlan.bounds.width, height: restorePlan.bounds.height });
+  await appWindow.setSize(new PhysicalSize(restorePlan.bounds.width, restorePlan.bounds.height));
   if (!canContinue()) return;
-  await appWindow.setPosition({ x: restorePlan.bounds.x, y: restorePlan.bounds.y });
+  await appWindow.setPosition(new PhysicalPosition(restorePlan.bounds.x, restorePlan.bounds.y));
 }

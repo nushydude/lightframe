@@ -8,7 +8,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { getRuntime } from '../services/runtime/runtime';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
 import { ImageCaptionOverlay } from './ImageCaptionOverlay';
 import {
@@ -20,10 +21,8 @@ import {
   openSecondaryWindow,
   overwriteWithCrop,
   saveCroppedCopy,
-  selectDestination,
 } from '../services/tauriCommands';
 import { useViewerStore } from '../state/viewerStore';
-import { pathIdentityKey } from '../services/pathIdentity';
 import {
   chooseQuickDestinationFolder,
   canSaveRotationForPath,
@@ -99,8 +98,6 @@ type SecondaryActionGroup = 'file' | 'organize' | 'workspace' | 'view';
 
 interface PreparedCroppedCopy {
   outputPath: string;
-  destinationGrantId: string;
-  relativeFileName: string;
   cropRect: CropRect;
 }
 
@@ -525,9 +522,9 @@ export function ViewerChrome({
     const lastMarkedPath = markedPaths[markedPaths.length - 1];
     if (!lastMarkedPath) return;
 
-    const normalizedLastMarkedPath = pathIdentityKey(lastMarkedPath);
+    const normalizedLastMarkedPath = lastMarkedPath.replace(/\\/g, '/').toLowerCase();
     const lastMarkedIndex = images.findIndex(
-      (image) => pathIdentityKey(image.path) === normalizedLastMarkedPath
+      (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedLastMarkedPath
     );
     if (lastMarkedIndex >= 0) {
       setCurrentIndex(lastMarkedIndex);
@@ -537,7 +534,7 @@ export function ViewerChrome({
   };
   const toggleFullscreen = async () => {
     try {
-      const appWindow = getRuntime().window;
+      const appWindow = getCurrentWindow();
       const nextFullscreen = !isFullscreen;
       await appWindow.setFullscreen(nextFullscreen);
       setFullscreen(nextFullscreen);
@@ -644,11 +641,7 @@ export function ViewerChrome({
     if (mode === 'move') {
       useViewerStore
         .getState()
-        .removeImagesByPaths(
-          result.successes
-            .filter((success) => success.sourceRemoved !== false)
-            .map((success) => success.sourcePath)
-        );
+        .removeImagesByPaths(result.successes.map((success) => success.sourcePath));
     }
     showTransferResultMessage(result, destination, mode);
     closeOverflowMenus();
@@ -766,17 +759,15 @@ export function ViewerChrome({
     const dotIndex = originalName.lastIndexOf('.');
     const baseName = dotIndex >= 0 ? originalName.slice(0, dotIndex) : originalName;
     const extension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
-    const destination = await selectDestination(`${baseName}-cropped${extension}`, 'crop-copy');
-    if (!destination) {
+    const outputPath = await save({
+      defaultPath: currentImagePath.replace(originalName, `${baseName}-cropped${extension}`),
+    });
+
+    if (!outputPath) {
       return null;
     }
 
-    return {
-      outputPath: destination.selectedPath,
-      destinationGrantId: destination.destinationGrantId,
-      relativeFileName: destination.relativeFileName,
-      cropRect: pixelCropRect,
-    };
+    return { outputPath, cropRect: pixelCropRect };
   };
 
   const handleQueueCroppedCopy = async () => {
@@ -789,9 +780,6 @@ export function ViewerChrome({
       kind: 'cropped-copy',
       sourcePath: currentImagePath,
       outputPath: preparedCopy.outputPath,
-      destinationGrantId: preparedCopy.destinationGrantId,
-      relativeFileName: preparedCopy.relativeFileName,
-      destinationOperation: 'crop-copy',
       cropRect: preparedCopy.cropRect,
       rotationDegrees: rotation,
     });
@@ -855,7 +843,7 @@ export function ViewerChrome({
 
     const { width: imageWidth, height: imageHeight } = dimensions;
 
-    const confirmed = await getRuntime().confirm(
+    const confirmed = await confirm(
       `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
       {
         title: 'Overwrite Cropped Image',
@@ -912,11 +900,7 @@ export function ViewerChrome({
     }
 
     const result = await transferImagesToDestination(markedPaths, destination, mode);
-    const successfulPaths = new Set(
-      result.successes
-        .filter((success) => mode !== 'move' || success.sourceRemoved !== false)
-        .map((success) => success.sourcePath)
-    );
+    const successfulPaths = new Set(result.successes.map((success) => success.sourcePath));
     const failedPaths = markedPaths.filter((path) => !successfulPaths.has(path));
 
     if (mode === 'move') {
@@ -1440,30 +1424,17 @@ export function ViewerChrome({
     <>
       <div className="top-bar" role="toolbar" aria-label="Image information" ref={chromeRootRef}>
         <div className="top-bar-left">
-          <span className="file-name" title={fileName} data-testid="viewer-filename">
+          <span className="file-name" title={fileName}>
             {fileName}
           </span>
           {images.length > 0 && (
-            <span
-              className="image-counter"
-              data-testid="viewer-index"
-              data-index={currentIndex + 1}
-              data-total={images.length}
-            >
+            <span className="image-counter">
               {currentIndex + 1} / {images.length}
               {isFolderScanning && ' …'}
             </span>
           )}
-          {isFavorite && (
-            <span className="image-counter" data-testid="viewer-favorite" data-favorite="true">
-              ★
-            </span>
-          )}
-          {currentRating > 0 && (
-            <span className="image-counter" data-testid="viewer-rating" data-rating={currentRating}>
-              {currentRating}/5
-            </span>
-          )}
+          {isFavorite && <span className="image-counter">★</span>}
+          {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
-import { getRuntime } from '../services/runtime/runtime';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { SlideshowDirection } from '../types/settings';
 import {
   acquireSlideshowDisplayInhibition,
@@ -113,6 +113,7 @@ function buildNextOrderPaths(
 }
 
 /** Hook for slideshow functionality */
+// fallow-ignore-next-line complexity -- preserve the v8.7.5 slideshow orchestration during rollback
 export function useSlideshow() {
   const isSlideshowActive = useViewerStore((state) => state.isSlideshowActive);
   const isSlideshowPaused = useViewerStore((state) => state.isSlideshowPaused);
@@ -205,7 +206,7 @@ export function useSlideshow() {
     }
 
     try {
-      const appWindow = getRuntime().window;
+      const appWindow = getCurrentWindow();
       await appWindow.setFullscreen(false);
       setFullscreen(false);
     } catch (err) {
@@ -396,7 +397,7 @@ export function useSlideshow() {
     // Auto-fullscreen if setting is enabled
     if (autoFullscreenOnSlideshow && !isFullscreen) {
       try {
-        const appWindow = getRuntime().window;
+        const appWindow = getCurrentWindow();
         await appWindow.setFullscreen(true);
         setFullscreen(true);
       } catch (err) {
