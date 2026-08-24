@@ -1,6 +1,4 @@
 export interface ImageFile {
-  id?: string;
-  sessionId?: string;
   path: string;
   file_name: string;
   extension: string;

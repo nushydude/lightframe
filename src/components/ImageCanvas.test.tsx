@@ -21,8 +21,6 @@ const {
   recordVisibleImageSourceUpdatedTelemetryMock,
   recordImageSelectedTelemetryMock,
   measurePerformanceSpanMock,
-  isProjectorGrantOnlySessionMock,
-  releaseSessionAssetDeliveryMock,
   zoomPanState,
 } = vi.hoisted(() => ({
   getPreviewAssetMock: vi.fn(async () => 'asset://localhost/cache/preview.jpg?v=preview'),
@@ -60,8 +58,6 @@ const {
   measurePerformanceSpanMock: vi.fn(async (_metric: string, operation: () => Promise<unknown>) =>
     operation()
   ),
-  isProjectorGrantOnlySessionMock: vi.fn(() => false),
-  releaseSessionAssetDeliveryMock: vi.fn(async () => false),
   zoomPanState: {
     zoomLevel: 1,
     panX: 0,
@@ -102,13 +98,9 @@ vi.mock('../services/imageWorkScheduler', () => ({
 }));
 
 vi.mock('../services/tauriCommands', () => ({
-  acknowledgeSessionAssetDeliveryResponses: vi.fn(async () => true),
   getImageMetadata: getImageMetadataMock,
-  getImageTileById: getImageTileMock,
+  getImageTile: getImageTileMock,
   generatedImageAssetToUrl: generatedImageAssetToUrlMock,
-  releaseSessionAssetDelivery: releaseSessionAssetDeliveryMock,
-  getActiveSessionForPath: vi.fn(() => ({ sessionId: 'sess_test', imageId: 'img_test' })),
-  isProjectorGrantOnlySession: isProjectorGrantOnlySessionMock,
 }));
 
 vi.mock('../services/performanceTelemetry', () => ({
@@ -142,7 +134,6 @@ describe('ImageCanvas', () => {
     zoomPanState.panX = 0;
     zoomPanState.panY = 0;
     zoomPanState.isDragging = false;
-    isProjectorGrantOnlySessionMock.mockReturnValue(false);
     getPreviewAssetMock.mockImplementation(
       async () => 'asset://localhost/cache/preview.jpg?v=preview'
     );
@@ -220,44 +211,6 @@ describe('ImageCanvas', () => {
     });
 
     expect(preloadPreviewAssetMock).toHaveBeenCalledTimes(3);
-    expect(preloadFullAssetMock).not.toHaveBeenCalled();
-  });
-
-  it('does not issue adjacent media reads from a projector-grant-only renderer', async () => {
-    isProjectorGrantOnlySessionMock.mockReturnValue(true);
-    useViewerStore.setState({
-      currentImagePath: 'C:/images/current.jpg',
-      currentIndex: 0,
-      activeSessionId: null,
-      images: [
-        {
-          id: 'img_current',
-          sessionId: 'sess_projector',
-          path: 'C:/images/current.jpg',
-          file_name: 'current.jpg',
-          extension: 'jpg',
-          size_bytes: 1,
-          modified_at: null,
-        },
-        {
-          id: 'img_next',
-          sessionId: 'sess_projector',
-          path: 'C:/images/next.jpg',
-          file_name: 'next.jpg',
-          extension: 'jpg',
-          size_bytes: 1,
-          modified_at: null,
-        },
-      ],
-    });
-
-    render(<ImageCanvas />);
-    await act(async () => {
-      vi.advanceTimersByTime(200);
-      await Promise.resolve();
-    });
-
-    expect(preloadPreviewAssetMock).not.toHaveBeenCalled();
     expect(preloadFullAssetMock).not.toHaveBeenCalled();
   });
 
@@ -361,9 +314,9 @@ describe('ImageCanvas', () => {
     const callsByPath = new Map(
       (
         preloadPreviewAssetMock.mock.calls as unknown as Array<
-          [string | { path: string }, number, { priority?: string } | undefined]
+          [string, number, { priority?: string } | undefined]
         >
-      ).map(([target, , options]) => [typeof target === 'string' ? target : target.path, options])
+      ).map(([path, , options]) => [path, options])
     );
 
     expect(callsByPath.get(images[4].path)).toMatchObject({
@@ -469,10 +422,11 @@ describe('ImageCanvas', () => {
     );
   });
 
-  it('does not show an error banner when preview succeeds but the full asset request fails', async () => {
+  it('surfaces full asset URL creation failures instead of staying stuck loading', async () => {
     requestFullAssetMock.mockImplementationOnce(async () => {
       throw new Error('convert failed');
     });
+    getPreviewAssetMock.mockImplementationOnce(() => new Promise(() => {}));
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     useViewerStore.setState({
@@ -494,49 +448,8 @@ describe('ImageCanvas', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/current.jpg' }),
-      expect.anything()
-    );
-    expect(useViewerStore.getState().errorMessage).toBeNull();
-
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('shows an error banner after both preview and full asset requests fail', async () => {
-    getPreviewAssetMock.mockRejectedValueOnce(new Error('preview failed'));
-    requestFullAssetMock.mockRejectedValueOnce(new Error('full failed'));
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    useViewerStore.setState({
-      currentImagePath: 'C:/images/current.jpg',
-      currentIndex: 0,
-      images: [
-        {
-          path: 'C:/images/current.jpg',
-          file_name: 'current.jpg',
-          extension: 'jpg',
-          size_bytes: 1,
-          modified_at: '1',
-        },
-      ],
-    });
-
-    render(<ImageCanvas />);
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/current.jpg' }),
-      expect.anything()
-    );
-    expect(useViewerStore.getState().errorMessage).toContain(
-      'Could not display image: C:/images/current.jpg'
-    );
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg', expect.anything());
+    expect(useViewerStore.getState().errorMessage).toContain('Could not create image URL');
 
     consoleErrorSpy.mockRestore();
   });
@@ -598,11 +511,8 @@ describe('ImageCanvas', () => {
       await Promise.resolve();
     });
 
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/current.jpg' }),
-      expect.anything()
-    );
-    expect(useViewerStore.getState().errorMessage).toBeNull();
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg', expect.anything());
+    expect(useViewerStore.getState().errorMessage).toContain('Could not display image');
   });
 
   it('loads the full asset after React StrictMode remount checks', async () => {
@@ -633,25 +543,20 @@ describe('ImageCanvas', () => {
       await Promise.resolve();
     });
 
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/current.jpg' }),
-      expect.anything()
-    );
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg', expect.anything());
     expect(container.querySelector('img')?.getAttribute('src')).toBe('asset://localhost/full.jpg');
   });
 
   it('does not record visible-source telemetry from a stale prior image during navigation', async () => {
-    getPreviewAssetMock.mockImplementation((async (target: string | { path: string }) => {
-      const path = typeof target === 'string' ? target : target.path;
+    getPreviewAssetMock.mockImplementation((async (path: string) => {
       if (path === 'C:/images/next.jpg') {
         return new Promise<string>(() => {});
       }
 
       return 'asset://localhost/cache/current-preview.jpg?v=current';
     }) as unknown as () => Promise<string>);
-    requestFullAssetMock.mockImplementation((async (target: string | { path: string }) => {
-      const p = typeof target === 'string' ? target : target.path;
-      return p === 'C:/images/next.jpg'
+    requestFullAssetMock.mockImplementation((async (path: string) => {
+      return path === 'C:/images/next.jpg'
         ? 'asset://localhost/next-full.jpg'
         : 'asset://localhost/current-full.jpg';
     }) as unknown as () => Promise<string>);
@@ -697,17 +602,15 @@ describe('ImageCanvas', () => {
   });
 
   it('ignores stale prior-image load events after navigation until the next source loads', async () => {
-    getPreviewAssetMock.mockImplementation((async (target: string | { path: string }) => {
-      const path = typeof target === 'string' ? target : target.path;
+    getPreviewAssetMock.mockImplementation((async (path: string) => {
       if (path === 'C:/images/next.jpg') {
         return new Promise<string>(() => {});
       }
 
       return 'asset://localhost/cache/current-preview.jpg?v=current';
     }) as unknown as () => Promise<string>);
-    requestFullAssetMock.mockImplementation((async (target: string | { path: string }) => {
-      const p = typeof target === 'string' ? target : target.path;
-      return p === 'C:/images/next.jpg'
+    requestFullAssetMock.mockImplementation((async (path: string) => {
+      return path === 'C:/images/next.jpg'
         ? 'asset://localhost/next-full.jpg'
         : 'asset://localhost/current-full.jpg';
     }) as unknown as () => Promise<string>);
@@ -748,7 +651,6 @@ describe('ImageCanvas', () => {
 
     recordPreviewVisibleTelemetryMock.mockClear();
     recordFullResolutionReadyTelemetryMock.mockClear();
-    releaseSessionAssetDeliveryMock.mockClear();
 
     await act(async () => {
       useViewerStore.getState().setCurrentImage('C:/images/next.jpg', 1);
@@ -760,15 +662,6 @@ describe('ImageCanvas', () => {
       'asset://localhost/next-full.jpg'
     );
 
-    Object.defineProperty(visibleImage as HTMLImageElement, 'currentSrc', {
-      configurable: true,
-      value: 'asset://localhost/cache/current-preview.jpg?v=current',
-    });
-    Object.defineProperty(fullLoaderImage as HTMLImageElement, 'currentSrc', {
-      configurable: true,
-      value: 'asset://localhost/current-full.jpg',
-    });
-
     await act(async () => {
       fireEvent.load(visibleImage as HTMLImageElement);
       fireEvent.load(fullLoaderImage as HTMLImageElement);
@@ -777,78 +670,6 @@ describe('ImageCanvas', () => {
 
     expect(recordPreviewVisibleTelemetryMock).not.toHaveBeenCalledWith('C:/images/next.jpg');
     expect(recordFullResolutionReadyTelemetryMock).not.toHaveBeenCalledWith('C:/images/next.jpg');
-    const releasedUrls = (
-      releaseSessionAssetDeliveryMock.mock.calls as unknown as Array<[string]>
-    ).map(([url]) => url);
-    expect(releasedUrls).toEqual(expect.arrayContaining(['asset://localhost/current-full.jpg']));
-  });
-
-  it('ignores stale prior-image full asset errors after navigation', async () => {
-    getPreviewAssetMock.mockImplementation((async (target: string | { path: string }) => {
-      const path = typeof target === 'string' ? target : target.path;
-      return path === 'C:/images/next.jpg'
-        ? 'asset://localhost/cache/next-preview.jpg?v=next'
-        : 'asset://localhost/cache/current-preview.jpg?v=current';
-    }) as unknown as () => Promise<string>);
-    requestFullAssetMock.mockImplementation((async (target: string | { path: string }) => {
-      const p = typeof target === 'string' ? target : target.path;
-      return p === 'C:/images/next.jpg'
-        ? 'asset://localhost/next-full.jpg'
-        : 'asset://localhost/current-full.jpg';
-    }) as unknown as () => Promise<string>);
-
-    useViewerStore.setState({
-      currentImagePath: 'C:/images/current.jpg',
-      currentIndex: 0,
-      images: [
-        {
-          path: 'C:/images/current.jpg',
-          file_name: 'current.jpg',
-          extension: 'jpg',
-          size_bytes: 1,
-          modified_at: '1',
-        },
-        {
-          path: 'C:/images/next.jpg',
-          file_name: 'next.jpg',
-          extension: 'jpg',
-          size_bytes: 1,
-          modified_at: '1',
-        },
-      ],
-    });
-
-    const { container } = render(<ImageCanvas />);
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const staleFullLoader = container.querySelector('img.image-full-loader');
-    expect(staleFullLoader?.getAttribute('src')).toBe('asset://localhost/current-full.jpg');
-
-    await act(async () => {
-      useViewerStore.getState().setCurrentImage('C:/images/next.jpg', 1);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(releaseSessionAssetDeliveryMock).toHaveBeenCalledWith(
-      'asset://localhost/current-full.jpg'
-    );
-    Object.defineProperty(staleFullLoader as HTMLImageElement, 'currentSrc', {
-      configurable: true,
-      value: 'asset://localhost/current-full.jpg',
-    });
-
-    await act(async () => {
-      fireEvent.error(staleFullLoader as HTMLImageElement);
-      await Promise.resolve();
-    });
-
-    expect(useViewerStore.getState().currentImagePath).toBe('C:/images/next.jpg');
-    expect(useViewerStore.getState().errorMessage).toBeNull();
   });
 
   it('keeps the preview visible when the full asset cannot render', async () => {
@@ -924,10 +745,7 @@ describe('ImageCanvas', () => {
       await Promise.resolve();
     });
 
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/current.jpg' }),
-      expect.anything()
-    );
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/current.jpg', expect.anything());
     expect(container.querySelector('img')?.getAttribute('src')).toBe('asset://localhost/full.jpg');
   });
 
@@ -1182,10 +1000,7 @@ describe('ImageCanvas', () => {
       await Promise.resolve();
     });
 
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: firstImage.path }),
-      expect.anything()
-    );
+    expect(requestFullAssetMock).toHaveBeenCalledWith(firstImage.path, expect.anything());
     requestFullAssetMock.mockClear();
 
     await act(async () => {
@@ -1245,10 +1060,7 @@ describe('ImageCanvas', () => {
       await Promise.resolve();
     });
 
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/native.heic' }),
-      expect.anything()
-    );
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/native.heic', expect.anything());
   });
 
   it('falls back to the full asset when safe tiled decoding fails', async () => {
@@ -1302,10 +1114,7 @@ describe('ImageCanvas', () => {
     });
 
     expect(getImageTileMock).toHaveBeenCalled();
-    expect(requestFullAssetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'C:/images/huge.jpg' }),
-      expect.anything()
-    );
+    expect(requestFullAssetMock).toHaveBeenCalledWith('C:/images/huge.jpg', expect.anything());
 
     warnSpy.mockRestore();
     rectSpy.mockRestore();

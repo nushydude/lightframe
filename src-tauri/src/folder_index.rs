@@ -1,7 +1,4 @@
-use crate::{
-    commands::ImageFile,
-    path_normalization::{normalize_path_for_key_with_semantics, PathCaseSemantics},
-};
+use crate::{commands::ImageFile, path_normalization::normalize_path_for_key};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -13,14 +10,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FOLDER_INDEX_SCHEMA_VERSION: u32 = 4;
+const FOLDER_INDEX_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct PersistedFolderIndex {
     schema_version: u32,
     folder_key: String,
     folder_path: String,
-    path_case_semantics: PathCaseSemantics,
     last_refreshed_at: u64,
     #[serde(default)]
     images: Vec<PersistedImageRecord>,
@@ -51,7 +47,6 @@ impl PersistedImageRecord {
         folder_path: &str,
         last_seen_at: u64,
         previous: Option<&PersistedImageRecord>,
-        semantics: PathCaseSemantics,
     ) -> Self {
         let preserve_metadata = previous
             .map(|record| {
@@ -67,9 +62,7 @@ impl PersistedImageRecord {
             canonical_path: previous
                 .map(|record| record.canonical_path.clone())
                 .filter(|path| !path.is_empty())
-                .unwrap_or_else(|| {
-                    normalize_path_for_key_with_semantics(Path::new(&image.path), semantics)
-                }),
+                .unwrap_or_else(|| normalize_path_for_key(Path::new(&image.path))),
             file_name: image.file_name.clone(),
             extension: image.extension.clone(),
             size_bytes: image.size_bytes,
@@ -84,8 +77,6 @@ impl PersistedImageRecord {
 
     fn to_image_file(&self) -> ImageFile {
         ImageFile {
-            id: None,
-            session_id: None,
             path: self.path.clone(),
             file_name: self.file_name.clone(),
             extension: self.extension.clone(),
@@ -101,23 +92,11 @@ pub fn index_root(cache_root: &Path) -> PathBuf {
 }
 
 pub fn read_folder_images(index_root: &Path, folder_path: &Path) -> Vec<ImageFile> {
-    read_folder_images_with_semantics(
-        index_root,
-        folder_path,
-        crate::path_normalization::runtime_path_case_semantics(),
-    )
-}
-
-pub fn read_folder_images_with_semantics(
-    index_root: &Path,
-    folder_path: &Path,
-    semantics: PathCaseSemantics,
-) -> Vec<ImageFile> {
     let _guard = lock_index_io();
-    let folder_key = folder_key_with_semantics(folder_path, semantics);
+    let folder_key = folder_key(folder_path);
     let shard_path = shard_path(index_root, &folder_key);
 
-    read_shard(&shard_path, &folder_key, semantics)
+    read_shard(&shard_path, &folder_key)
         .map(|index| index.images.iter().map(PersistedImageRecord::to_image_file).collect())
         .unwrap_or_default()
 }
@@ -127,22 +106,8 @@ pub fn write_folder_images(
     folder_path: &Path,
     images: &[ImageFile],
 ) -> Result<(), String> {
-    write_folder_images_with_semantics(
-        index_root,
-        folder_path,
-        images,
-        crate::path_normalization::runtime_path_case_semantics(),
-    )
-}
-
-pub fn write_folder_images_with_semantics(
-    index_root: &Path,
-    folder_path: &Path,
-    images: &[ImageFile],
-    semantics: PathCaseSemantics,
-) -> Result<(), String> {
     let _guard = lock_index_io();
-    let folder_key = folder_key_with_semantics(folder_path, semantics);
+    let folder_key = folder_key(folder_path);
     let shard_path = shard_path(index_root, &folder_key);
 
     if images.is_empty() {
@@ -150,7 +115,7 @@ pub fn write_folder_images_with_semantics(
         return Ok(());
     }
 
-    let previous_records = read_shard(&shard_path, &folder_key, semantics)
+    let previous_records = read_shard(&shard_path, &folder_key)
         .map(|entry| {
             entry
                 .images
@@ -170,7 +135,6 @@ pub fn write_folder_images_with_semantics(
                 &folder_path_string,
                 refreshed_at,
                 previous_records.get(&image.path),
-                semantics,
             )
         })
         .collect();
@@ -181,20 +145,14 @@ pub fn write_folder_images_with_semantics(
             schema_version: FOLDER_INDEX_SCHEMA_VERSION,
             folder_key,
             folder_path: folder_path_string,
-            path_case_semantics: semantics,
             last_refreshed_at: refreshed_at,
             images: persisted_images,
         },
     )
 }
 
-#[cfg(test)]
 fn folder_key(folder_path: &Path) -> String {
-    crate::path_normalization::normalize_path_for_key(folder_path)
-}
-
-fn folder_key_with_semantics(folder_path: &Path, semantics: PathCaseSemantics) -> String {
-    normalize_path_for_key_with_semantics(folder_path, semantics)
+    normalize_path_for_key(folder_path)
 }
 
 fn shard_path(index_root: &Path, folder_key: &str) -> PathBuf {
@@ -202,11 +160,7 @@ fn shard_path(index_root: &Path, folder_key: &str) -> PathBuf {
     index_root.join(&digest[0..2]).join(format!("{}.json", digest))
 }
 
-fn read_shard(
-    shard_path: &Path,
-    expected_folder_key: &str,
-    expected_semantics: PathCaseSemantics,
-) -> Option<PersistedFolderIndex> {
+fn read_shard(shard_path: &Path, expected_folder_key: &str) -> Option<PersistedFolderIndex> {
     if !shard_path.exists() {
         return None;
     }
@@ -248,13 +202,6 @@ fn read_shard(
     if parsed.folder_key != expected_folder_key {
         eprintln!(
             "Discarding folder index shard from '{}' because the folder key did not match the requested folder.",
-            shard_path.display()
-        );
-        return None;
-    }
-    if parsed.path_case_semantics != expected_semantics {
-        eprintln!(
-            "Discarding folder index shard from '{}' because its path case semantics no longer match the authority root.",
             shard_path.display()
         );
         return None;
@@ -359,8 +306,6 @@ mod tests {
         fs::write(&path, vec![0_u8; size_bytes as usize]).unwrap();
 
         ImageFile {
-            id: None,
-            session_id: None,
             path: path.to_string_lossy().to_string(),
             file_name: file_name.to_string(),
             extension: path

@@ -1,6 +1,5 @@
 import type { ImageFile } from '../types/image';
 import type { AppSettings } from '../types/settings';
-import { pathIdentityKey } from './pathIdentity';
 
 const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
@@ -15,7 +14,7 @@ function parseTimestamp(value: string | null | undefined): number | null {
 }
 
 function normalizePathKey(path: string): string {
-  return pathIdentityKey(path);
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 export function shuffleImages(

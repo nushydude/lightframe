@@ -1,246 +1,50 @@
 name: Release
-
 on:
   push:
     tags:
       - 'v*'
 
-permissions:
-  contents: read
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  version-tag-preflight:
-    name: Version and Tag Preflight
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.value }}
-
-    steps:
-      # v7
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          # A tag push is immutable, but record the exact commit rather than checking out a branch.
-          ref: ${{ github.sha }}
-
-      - name: Verify tag matches every committed version record
-        env:
-          GITHUB_REF_TYPE: ${{ github.ref_type }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: node scripts/check-version-sync.mjs
-
-      - id: version
-        name: Export verified version
-        shell: bash
-        run: |
-          VERSION="$(node -p 'require("./package.json").version')"
-          printf 'value=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
-
-  quality-gates:
-    name: Required Quality Gates
-    # Reusable local workflows are evaluated from this tagged commit, so every CI job tests the
-    # same SHA that will be packaged below. Branch-level green status is never consulted.
-    permissions:
-      actions: read
-      checks: write
-      contents: read
-      security-events: write
-    needs: version-tag-preflight
-    uses: ./.github/workflows/ci.yml
-
   publish-tauri:
-    name: Build Draft Windows Release
-    needs: [version-tag-preflight, quality-gates]
-    # Configure the protected `release` Environment in GitHub before enabling a public release.
-    environment: release
     permissions:
       contents: write
-      attestations: write
-      artifact-metadata: write
-      id-token: write
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-2025]
 
+    runs-on: ${{ matrix.platform }}
     steps:
-      # v7
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        # v7
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
       - name: Install pnpm
-        # v6
-        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996
+        uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
 
       - name: Install Rust stable
-        # stable (resolved 2026-08-04)
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Reject conflicting existing release ref or draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
-          SHA: ${{ github.sha }}
-        run: node scripts/release-draft-guard.mjs pre "$TAG" "$SHA"
-
-      - id: tauri
-        name: Build signed Tauri artifacts as a draft
-        # v1
-        uses: tauri-apps/tauri-action@944946e3e4cac6603d1fe8f514171e9ecd3c78aa
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: app-v${{ needs.version-tag-preflight.outputs.version }}
-          releaseCommitish: ${{ github.sha }}
-          releaseName: LightFrame v${{ needs.version-tag-preflight.outputs.version }}
-          releaseBody: See the assets to download the installer.
+          tagName: app-v__VERSION__
+          releaseName: 'LightFrame v__VERSION__'
+          releaseBody: 'See the assets to download the installer.'
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-
-      - name: Verify draft release remains pinned to gated SHA
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
-          SHA: ${{ github.sha }}
-          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
-        run: node scripts/release-draft-guard.mjs post "$TAG" "$SHA" "$RELEASE_ID"
-
-      - name: Stage final release artifacts
-        shell: pwsh
-        env:
-          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
-        run: |
-          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
-          $paths = $env:ARTIFACT_PATHS | ConvertFrom-Json
-          $names = @($paths | ForEach-Object { [IO.Path]::GetFileName($_) })
-          if ($names.Count -ne ($names | Sort-Object -Unique).Count) { throw 'Tauri Action reported duplicate artifact basenames' }
-          foreach ($artifact in $paths) {
-            Copy-Item -LiteralPath $artifact -Destination release-artifacts -Force
-          }
-
-      - name: Verify produced application and updater artifact versions
-        shell: bash
-        env:
-          VERSION: ${{ needs.version-tag-preflight.outputs.version }}
-          REPORTED_VERSION: ${{ steps.tauri.outputs.appVersion }}
-          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
-        run: node scripts/verify-release-artifacts.mjs --expected-version "$VERSION" --reported-version "$REPORTED_VERSION" --artifact-paths "$ARTIFACT_PATHS"
-
-      - name: Sign final artifacts with Azure Trusted Signing when configured
-        if: vars.WINDOWS_SIGNING_PROVIDER == 'azure-trusted-signing'
-        # v0.5.9
-        uses: azure/trusted-signing-action@bb15ca63eb5548cc306f4f335c5617bb414abcad
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files-folder: release-artifacts
-          files-folder-filter: msi,exe
-          files-folder-recurse: true
-
-      - name: Re-sign final updater artifacts and generate final metadata
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.version-tag-preflight.outputs.version }}
-          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: node scripts/finalize-updater-release.mjs --artifact-dir release-artifacts --version "$env:VERSION" --tag "$env:TAG"
-
-      - name: Generate release SBOM and checksums after signing
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.version-tag-preflight.outputs.version }}
-        run: |
-          node scripts/generate-release-sbom.mjs --output release-artifacts/lightframe-$env:VERSION.spdx.json
-          Get-ChildItem release-artifacts -File | Where-Object { $_.Extension -in '.msi','.exe','.zip','.json','.sig' } |
-            Get-FileHash -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower()) *$($_.Path.Substring((Resolve-Path release-artifacts).Path.Length + 1))" } |
-            Set-Content release-artifacts/SHA256SUMS.txt
-
-      - name: Verify final release evidence and Authenticode state
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.version-tag-preflight.outputs.version }}
-          REQUIRE_AUTHENTICODE: ${{ vars.REQUIRE_AUTHENTICODE_SIGNING }}
-          WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER }}
-        run: |
-          $required = node scripts/authenticode-policy.mjs --provider "$env:WINDOWS_SIGNING_PROVIDER" --required "$env:REQUIRE_AUTHENTICODE"
-          node scripts/verify-release-artifacts.mjs --expected-version "$env:VERSION" --artifact-dir release-artifacts --checksums release-artifacts/SHA256SUMS.txt --sbom release-artifacts/lightframe-$env:VERSION.spdx.json --require-authenticode "$required"
-
-      - name: Upload final evidence to draft release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
-        run: gh release upload "$env:TAG" release-artifacts/* --repo "$env:GH_REPO" --clobber
-
-      - name: Verify uploaded final assets match final local bytes
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
-          SHA: ${{ github.sha }}
-          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
-        run: |
-          $downloadDir = Join-Path $env:RUNNER_TEMP 'lightframe-final-release-download'
-          Remove-Item -LiteralPath $downloadDir -Recurse -Force -ErrorAction SilentlyContinue
-          node scripts/verify-uploaded-release-assets.mjs --release-id "$env:RELEASE_ID" --tag "$env:TAG" --sha "$env:SHA" --local-dir release-artifacts --download-dir "$downloadDir"
-
-      - name: Attest final Windows artifacts and release evidence
-        # v4
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
-        with:
-          subject-path: release-artifacts/**
-
-      - name: Attest release SBOM
-        # v4
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
-        with:
-          subject-path: release-artifacts/lightframe-${{ needs.version-tag-preflight.outputs.version }}.spdx.json
-          sbom-path: release-artifacts/lightframe-${{ needs.version-tag-preflight.outputs.version }}.spdx.json
-
-      - name: Upload release evidence for diagnostics
-        # v4
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: lightframe-release-evidence-${{ needs.version-tag-preflight.outputs.version }}
-          path: release-artifacts
-          if-no-files-found: error
-
-      - name: Remove only this run's exact draft after failure
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: app-v${{ needs.version-tag-preflight.outputs.version }}
-          SHA: ${{ github.sha }}
-          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
-        run: node scripts/release-draft-guard.mjs cleanup "$TAG" "$SHA" "$RELEASE_ID"

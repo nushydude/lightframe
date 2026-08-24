@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { getRuntime } from '../services/runtime/runtime';
+import { open } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { ImageFile } from '../types/image';
 import {
   getParentFolder,
-  type FileSessionSnapshot,
-  type FolderSessionSnapshot,
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
-  selectFileSession,
-  selectFolderSession,
 } from '../services/tauriCommands';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
@@ -33,11 +30,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { useCurationStore } from '../state/curationStore';
 import { mainWindowTitle } from '../services/windowTitle';
 import { playBoundaryBeep } from '../services/boundaryFeedback';
+import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
 import { useFolderWatcherLifecycle } from './useFolderWatcherLifecycle';
-import { pathIdentityKey } from '../services/pathIdentity';
 
 function normalizePathKey(path: string): string {
-  return pathIdentityKey(path);
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 function rememberOpenedFolder(folderPath: string) {
@@ -133,71 +130,8 @@ function getNow(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
-async function applySnapshotCurationHydration({
-  curationLoad,
-  curationFilter,
-  folderImagesLength,
-  loadGeneration,
-  isCurrentGeneration,
-  prepareCurationFilter,
-  emptyFolderOpenMessage,
-  setError,
-}: {
-  curationLoad: Promise<unknown>;
-  curationFilter?: CurationFilter;
-  folderImagesLength: number;
-  loadGeneration: number;
-  isCurrentGeneration: (generation: number) => boolean;
-  prepareCurationFilter: (filter: CurationFilter) => void;
-  emptyFolderOpenMessage: string;
-  setError: (message: string | null) => void;
-}): Promise<boolean> {
-  if (!curationFilter) {
-    void curationLoad.catch(() => undefined);
-    return true;
-  }
-
-  await curationLoad.catch(() => undefined);
-  if (!isCurrentGeneration(loadGeneration)) return false;
-
-  const curationState = useCurationStore.getState();
-  prepareCurationFilter(curationFilter);
-  useViewerStore
-    .getState()
-    .syncFavoriteFilter(curationState.curationByPath, curationState.favoritePaths);
-  if (folderImagesLength === 0) {
-    setError(emptyFolderOpenMessage);
-  }
-  return true;
-}
-
-function requestedSnapshotImage(
-  session: FolderSessionSnapshot,
-  requestedImageId?: string
-): FolderSessionSnapshot['images'][number] | null {
-  if (!requestedImageId) return null;
-
-  const requestedImage = session.images.find((image) => image.id === requestedImageId);
-  if (!requestedImage) {
-    throw new Error('Native snapshot is missing the requested image');
-  }
-  return requestedImage;
-}
-
-function sessionSnapshotWindowTitle(
-  requestedImage: FolderSessionSnapshot['images'][number] | null,
-  nextFolderPath: string
-): string {
-  if (requestedImage) {
-    return mainWindowTitle(requestedImage.file_name || 'LightFrame');
-  }
-
-  const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
-  return mainWindowTitle(`[Folder] ${folderName}`);
-}
-
 /** Hook for image navigation and file opening */
-// fallow-ignore-next-line complexity -- navigation/session orchestration boundary
+// fallow-ignore-next-line complexity -- preserve the v8.7.5 folder/navigation orchestration during rollback
 export function useImageNavigation() {
   const emptyFolderOpenMessage = 'No supported images found in the selected folder';
   const {
@@ -214,7 +148,6 @@ export function useImageNavigation() {
     setCurrentIndex,
     prepareCurationFilter,
     setMarkedPaths,
-    setActiveSessionId,
     navigateNext,
     navigatePrev,
     navigateFirst,
@@ -237,7 +170,6 @@ export function useImageNavigation() {
       setCurrentIndex: state.setCurrentIndex,
       prepareCurationFilter: state.prepareCurationFilter,
       setMarkedPaths: state.setMarkedPaths,
-      setActiveSessionId: state.setActiveSessionId,
       navigateNext: state.navigateNext,
       navigatePrev: state.navigatePrev,
       navigateFirst: state.navigateFirst,
@@ -255,7 +187,7 @@ export function useImageNavigation() {
       autoRefreshFolder: state.settings.autoRefreshFolder,
     }))
   );
-  const isMainWindowRef = useRef(getRuntime().window.label === 'main');
+  const isMainWindowRef = useRef(getCurrentWindow().label === 'main');
   const randomOrderRef = useRef<string[] | null>(null);
   const randomSortKeyRef = useRef<string | null>(null);
   const randomFolderRef = useRef<string | null>(null);
@@ -415,19 +347,6 @@ export function useImageNavigation() {
     [applyActiveSortOrder, isCurrentGeneration]
   );
 
-  const imagesFromSessionSnapshot = useCallback((session: FolderSessionSnapshot): ImageFile[] => {
-    return session.images.map((image) => ({
-      id: image.id,
-      sessionId: session.session_id,
-      path: image.path,
-      file_name: image.file_name,
-      extension: image.extension,
-      size_bytes: image.size_bytes,
-      modified_at: image.modified_at ?? null,
-      created_at: image.created_at ?? null,
-    }));
-  }, []);
-
   const readCachedFolderImages = useCallback(
     async (nextFolderPath: string) => {
       try {
@@ -447,7 +366,7 @@ export function useImageNavigation() {
   );
 
   const setFolderWindowTitle = useCallback(async (nextFolderPath: string) => {
-    const appWindow = getRuntime().window;
+    const appWindow = getCurrentWindow();
     const folderName = nextFolderPath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
     await appWindow.setTitle(mainWindowTitle(`[Folder] ${folderName}`));
   }, []);
@@ -532,107 +451,6 @@ export function useImageNavigation() {
     [applyFolderImages, isCurrentGeneration, scanIndexedFolder, setError, setFolderScanning]
   );
 
-  const applySessionSnapshot = useCallback(
-    async (
-      session: FolderSessionSnapshot,
-      options?: {
-        requestedImageId?: string;
-        selectionKind?: 'folder-open' | 'open-image' | 'startup-open';
-        curationFilter?: CurationFilter;
-      }
-    ) => {
-      const loadGeneration = beginLoadGeneration();
-      const nextFolderPath = session.canonical_folder;
-      const requestedImage = requestedSnapshotImage(session, options?.requestedImageId);
-
-      try {
-        setFolderScanning(false);
-        setViewMode('viewer');
-        setActiveSessionId(session.session_id);
-        setNextImageSelectionKind(options?.selectionKind ?? 'folder-open');
-
-        const folderImages = applyActiveSortOrder(
-          imagesFromSessionSnapshot(session),
-          nextFolderPath
-        );
-        if (!isCurrentGeneration(loadGeneration)) return;
-
-        applyFolderImages(folderImages, {
-          emptyMessage: emptyFolderOpenMessage,
-          preferredIndex: 0,
-          preferredPath: requestedImage?.path ?? null,
-        });
-        setMarkedPaths(
-          getPersistedMarkedPathsForFolder(useSettingsStore.getState().settings, nextFolderPath)
-        );
-        setFolderPath(nextFolderPath);
-        const curationLoad = useCurationStore
-          .getState()
-          .loadCuration(folderImages.map((image) => image.path));
-        const curationHydrated = await applySnapshotCurationHydration({
-          curationLoad,
-          curationFilter: options?.curationFilter,
-          folderImagesLength: folderImages.length,
-          loadGeneration,
-          isCurrentGeneration,
-          prepareCurationFilter,
-          emptyFolderOpenMessage,
-          setError,
-        });
-        if (!curationHydrated) return;
-
-        await getRuntime().window.setTitle(
-          sessionSnapshotWindowTitle(requestedImage, nextFolderPath)
-        );
-        rememberOpenedFolder(nextFolderPath);
-      } catch (err) {
-        if (isCurrentGeneration(loadGeneration)) {
-          setError(`Failed to apply native session: ${err}`);
-        }
-        throw err;
-      } finally {
-        if (isCurrentGeneration(loadGeneration)) {
-          setFolderScanning(false);
-        }
-      }
-    },
-    [
-      applyActiveSortOrder,
-      applyFolderImages,
-      beginLoadGeneration,
-      emptyFolderOpenMessage,
-      imagesFromSessionSnapshot,
-      isCurrentGeneration,
-      prepareCurationFilter,
-      setActiveSessionId,
-      setError,
-      setFolderPath,
-      setFolderScanning,
-      setMarkedPaths,
-      setViewMode,
-    ]
-  );
-
-  const applyFolderSessionSnapshot = useCallback(
-    async (session: FolderSessionSnapshot, options?: { curationFilter?: CurationFilter }) => {
-      await applySessionSnapshot(session, {
-        selectionKind: 'folder-open',
-        curationFilter: options?.curationFilter,
-      });
-    },
-    [applySessionSnapshot]
-  );
-
-  const applyFileSessionSnapshot = useCallback(
-    async (session: FileSessionSnapshot, options?: { startup?: boolean }) => {
-      await applySessionSnapshot(session, {
-        requestedImageId: session.requested_image_id,
-        selectionKind: options?.startup ? 'startup-open' : 'open-image',
-      });
-    },
-    [applySessionSnapshot]
-  );
-
   const scanFolderForImage = useCallback(
     async (loadGeneration: number, filePath: string, parentFolder: string) => {
       try {
@@ -644,9 +462,9 @@ export function useImageNavigation() {
         folderImages = applyActiveSortOrder(folderImages, parentFolder);
         if (!isCurrentGeneration(loadGeneration)) return;
 
-        const normalizedPath = pathIdentityKey(filePath);
+        const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
         const index = folderImages.findIndex(
-          (image) => pathIdentityKey(image.path) === normalizedPath
+          (image) => image.path.replace(/\\/g, '/').toLowerCase() === normalizedPath
         );
         applyFolderImages(folderImages, {
           emptyMessage: emptyFolderOpenMessage,
@@ -690,7 +508,7 @@ export function useImageNavigation() {
         setCurrentImage(filePath, 0);
         setViewMode('viewer');
 
-        const appWindow = getRuntime().window;
+        const appWindow = getCurrentWindow();
         const fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'LightFrame';
         await appWindow.setTitle(mainWindowTitle(fileName));
         if (!isCurrentGeneration(loadGeneration)) return;
@@ -738,14 +556,23 @@ export function useImageNavigation() {
   /** Open a file picker dialog */
   const openFilePicker = useCallback(async () => {
     try {
-      const selected = await selectFileSession();
+      const selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: 'Images',
+            extensions: [...SUPPORTED_IMAGE_EXTENSIONS],
+          },
+        ],
+      });
+
       if (selected) {
-        await applyFileSessionSnapshot(selected);
+        await openImage(selected as string);
       }
     } catch (err) {
       console.error('File picker error:', err);
     }
-  }, [applyFileSessionSnapshot]);
+  }, [openImage]);
 
   /** Open a specific folder */
   const openFolder = useCallback(
@@ -831,14 +658,18 @@ export function useImageNavigation() {
   /** Open a folder picker dialog */
   const openFolderPicker = useCallback(async () => {
     try {
-      const selected = await selectFolderSession();
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+
       if (selected) {
-        await applyFolderSessionSnapshot(selected);
+        await openFolder(selected as string);
       }
     } catch (err) {
       console.error('Folder picker error:', err);
     }
-  }, [applyFolderSessionSnapshot]);
+  }, [openFolder]);
 
   const refreshFolderFromDisk = useCallback(async () => {
     const snapshot = getFolderRefreshSnapshot();
@@ -938,8 +769,6 @@ export function useImageNavigation() {
     isFolderScanning,
     openImage,
     openImageForStartup,
-    applyFolderSessionSnapshot,
-    applyFileSessionSnapshot,
     openFolder,
     openFilePicker,
     openFolderPicker,

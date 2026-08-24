@@ -82,7 +82,6 @@ pub(crate) fn write_text_file_atomically(
     }
 }
 
-#[cfg(test)]
 pub(crate) fn replace_file_safely(temp_path: &Path, destination_path: &Path) -> Result<(), String> {
     replace_file_safely_with_label(temp_path, destination_path, "image")
 }

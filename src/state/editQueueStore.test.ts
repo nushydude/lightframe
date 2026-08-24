@@ -2,29 +2,15 @@ import { waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditQueueStore } from './editQueueStore';
 
-const { saveCroppedCopyMock, saveScaledCopyMock, selectDestinationMock } = vi.hoisted(() => ({
+const { saveCroppedCopyMock, saveScaledCopyMock } = vi.hoisted(() => ({
   saveCroppedCopyMock: vi.fn(),
   saveScaledCopyMock: vi.fn(),
-  selectDestinationMock: vi.fn(),
 }));
 
 vi.mock('../services/tauriCommands', () => ({
-  getFileName: (path: string) => {
-    const parts = path.split(/[\\/]/);
-    return parts[parts.length - 1] ?? path;
-  },
-  saveCroppedCopyWithGrant: saveCroppedCopyMock,
-  saveScaledCopyWithGrant: saveScaledCopyMock,
-  selectDestination: selectDestinationMock,
+  saveCroppedCopy: saveCroppedCopyMock,
+  saveScaledCopy: saveScaledCopyMock,
 }));
-
-function exactDestination(index: number, operation: 'crop-copy' | 'scale-copy') {
-  return {
-    destinationGrantId: `grant-${index}`,
-    relativeFileName: `output-${index}.jpg`,
-    destinationOperation: operation,
-  } as const;
-}
 
 describe('editQueueStore', () => {
   beforeEach(() => {
@@ -37,7 +23,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo.jpg',
       outputPath: 'C:/Images/photo-scaled.jpg',
-      ...exactDestination(1, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 10,
@@ -65,7 +50,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-a.jpg',
       outputPath: 'C:/Images/photo-scaled.jpg',
-      ...exactDestination(1, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -76,7 +60,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-b.jpg',
       outputPath: 'C:\\Images\\PHOTO-SCALED.jpg',
-      ...exactDestination(2, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -98,7 +81,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo.jpg',
       outputPath: 'C:/Images/photo-scaled.jpg',
-      ...exactDestination(1, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 10,
@@ -108,7 +90,6 @@ describe('editQueueStore', () => {
       kind: 'cropped-copy',
       sourcePath: 'C:/Images/photo.jpg',
       outputPath: 'C:/Images/photo-cropped.jpg',
-      ...exactDestination(2, 'crop-copy'),
       cropRect: { x: 10, y: 20, width: 100, height: 80 },
       rotationDegrees: 90,
     });
@@ -124,8 +105,7 @@ describe('editQueueStore', () => {
     expect(useEditQueueStore.getState().isRunning).toBe(false);
     expect(saveScaledCopyMock).toHaveBeenCalledWith(
       'C:/Images/photo.jpg',
-      'grant-1',
-      'output-1.jpg',
+      'C:/Images/photo-scaled.jpg',
       640,
       480,
       10,
@@ -134,26 +114,19 @@ describe('editQueueStore', () => {
     expect(saveCroppedCopyMock).toHaveBeenCalledWith(
       'C:/Images/photo.jpg',
       { x: 10, y: 20, width: 100, height: 80 },
-      'grant-2',
-      'output-2.jpg',
+      'C:/Images/photo-cropped.jpg',
       90
     );
   });
 
   it('marks failures, keeps draining, and allows retrying the failed job', async () => {
-    saveScaledCopyMock
-      .mockRejectedValueOnce({
-        message: 'disk full',
-        destinationGrantConsumed: false,
-      })
-      .mockResolvedValue(undefined);
+    saveScaledCopyMock.mockRejectedValueOnce(new Error('disk full')).mockResolvedValue(undefined);
     saveCroppedCopyMock.mockResolvedValue(undefined);
 
     const result = useEditQueueStore.getState().enqueueJob({
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo.jpg',
       outputPath: 'C:/Images/photo-scaled.jpg',
-      ...exactDestination(1, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -163,7 +136,6 @@ describe('editQueueStore', () => {
       kind: 'cropped-copy',
       sourcePath: 'C:/Images/photo.jpg',
       outputPath: 'C:/Images/photo-cropped.jpg',
-      ...exactDestination(2, 'crop-copy'),
       cropRect: { x: 10, y: 20, width: 100, height: 80 },
       rotationDegrees: 0,
     });
@@ -187,7 +159,7 @@ describe('editQueueStore', () => {
     });
 
     if (!result.ok) throw new Error(result.error);
-    await useEditQueueStore.getState().retryJob(result.jobId);
+    useEditQueueStore.getState().retryJob(result.jobId);
     useEditQueueStore.getState().runQueue();
 
     await waitFor(() => {
@@ -212,7 +184,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-1.jpg',
       outputPath: 'C:/Images/photo-1-scaled.jpg',
-      ...exactDestination(1, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -222,7 +193,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-2.jpg',
       outputPath: 'C:/Images/photo-2-scaled.jpg',
-      ...exactDestination(2, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -270,7 +240,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-1.jpg',
       outputPath: 'C:/Images/photo-1-scaled.jpg',
-      ...exactDestination(1, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -280,7 +249,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-2.jpg',
       outputPath: 'C:/Images/photo-2-scaled.jpg',
-      ...exactDestination(2, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -290,7 +258,6 @@ describe('editQueueStore', () => {
       kind: 'scaled-copy',
       sourcePath: 'C:/Images/photo-3.jpg',
       outputPath: 'C:/Images/photo-3-scaled.jpg',
-      ...exactDestination(3, 'scale-copy'),
       width: 640,
       height: 480,
       smoothing: 0,
@@ -315,7 +282,7 @@ describe('editQueueStore', () => {
     useEditQueueStore.getState().cancelJob(queuedResult.jobId);
     expect(useEditQueueStore.getState().summary.currentJobId).toBe(runningResult.jobId);
 
-    await useEditQueueStore.getState().retryJob(failedResult.jobId);
+    useEditQueueStore.getState().retryJob(failedResult.jobId);
     expect(useEditQueueStore.getState().summary.currentJobId).toBe(runningResult.jobId);
 
     resolveRunningJob?.();
@@ -323,111 +290,5 @@ describe('editQueueStore', () => {
     await waitFor(() => {
       expect(useEditQueueStore.getState().summary.currentJobId).toBe(null);
     });
-  });
-
-  it('preserves each exact grant while paused for two outputs in the same folder', async () => {
-    saveScaledCopyMock.mockResolvedValue(undefined);
-    useEditQueueStore.getState().enqueueJob({
-      kind: 'scaled-copy',
-      sourcePath: 'C:/Images/a.jpg',
-      outputPath: 'C:/Exports/a.jpg',
-      ...exactDestination(11, 'scale-copy'),
-      width: 100,
-      height: 100,
-      smoothing: 0,
-      sharpening: 0,
-    });
-    useEditQueueStore.getState().enqueueJob({
-      kind: 'scaled-copy',
-      sourcePath: 'C:/Images/b.jpg',
-      outputPath: 'C:/Exports/b.jpg',
-      ...exactDestination(12, 'scale-copy'),
-      width: 100,
-      height: 100,
-      smoothing: 0,
-      sharpening: 0,
-    });
-
-    expect(saveScaledCopyMock).not.toHaveBeenCalled();
-    useEditQueueStore.getState().runQueue();
-    await waitFor(() => expect(useEditQueueStore.getState().summary.completedCount).toBe(2));
-    expect(saveScaledCopyMock.mock.calls.map((call) => call.slice(1, 3))).toEqual([
-      ['grant-11', 'output-11.jpg'],
-      ['grant-12', 'output-12.jpg'],
-    ]);
-  });
-
-  it('requires a fresh native selection before retrying a consumed exact grant', async () => {
-    saveScaledCopyMock
-      .mockRejectedValueOnce(new Error('DESTINATION_GRANT_CONSUMED: disk full'))
-      .mockResolvedValueOnce(undefined);
-    selectDestinationMock.mockResolvedValue({
-      destinationGrantId: 'grant-fresh',
-      relativeFileName: 'fresh.jpg',
-      selectedPath: 'C:/Exports/fresh.jpg',
-    });
-    const result = useEditQueueStore.getState().enqueueJob({
-      kind: 'scaled-copy',
-      sourcePath: 'C:/Images/photo.jpg',
-      outputPath: 'C:/Exports/photo.jpg',
-      ...exactDestination(1, 'scale-copy'),
-      width: 100,
-      height: 100,
-      smoothing: 0,
-      sharpening: 0,
-    });
-    if (!result.ok) throw new Error(result.error);
-    useEditQueueStore.getState().runQueue();
-    await waitFor(() => expect(useEditQueueStore.getState().jobs[0].status).toBe('failed'));
-
-    await useEditQueueStore.getState().retryJob(result.jobId);
-    expect(selectDestinationMock).toHaveBeenCalledWith('photo.jpg', 'scale-copy');
-    expect(useEditQueueStore.getState().jobs[0]).toMatchObject({
-      destinationGrantId: 'grant-fresh',
-      relativeFileName: 'fresh.jpg',
-      outputPath: 'C:/Exports/fresh.jpg',
-      status: 'queued',
-    });
-    useEditQueueStore.getState().runQueue();
-    await waitFor(() => expect(useEditQueueStore.getState().jobs[0].status).toBe('completed'));
-    expect(saveScaledCopyMock.mock.calls[1].slice(1, 3)).toEqual(['grant-fresh', 'fresh.jpg']);
-  });
-
-  it('honors typed grant state and treats an untyped worker failure as consumed', async () => {
-    saveScaledCopyMock.mockRejectedValueOnce({
-      message: 'canceled before scheduling',
-      destinationGrantConsumed: false,
-    });
-    const first = useEditQueueStore.getState().enqueueJob({
-      kind: 'scaled-copy',
-      sourcePath: 'C:/Images/typed.jpg',
-      outputPath: 'C:/Exports/typed.jpg',
-      ...exactDestination(20, 'scale-copy'),
-      width: 100,
-      height: 100,
-      smoothing: 0,
-      sharpening: 0,
-    });
-    if (!first.ok) throw new Error(first.error);
-    useEditQueueStore.getState().runQueue();
-    await waitFor(() => expect(useEditQueueStore.getState().jobs[0].status).toBe('failed'));
-    expect(useEditQueueStore.getState().jobs[0].destinationGrantConsumed).toBe(false);
-
-    useEditQueueStore.getState().reset();
-    saveScaledCopyMock.mockRejectedValueOnce(new Error('Task panicked during execution'));
-    const second = useEditQueueStore.getState().enqueueJob({
-      kind: 'scaled-copy',
-      sourcePath: 'C:/Images/panic.jpg',
-      outputPath: 'C:/Exports/panic.jpg',
-      ...exactDestination(21, 'scale-copy'),
-      width: 100,
-      height: 100,
-      smoothing: 0,
-      sharpening: 0,
-    });
-    if (!second.ok) throw new Error(second.error);
-    useEditQueueStore.getState().runQueue();
-    await waitFor(() => expect(useEditQueueStore.getState().jobs[0].status).toBe('failed'));
-    expect(useEditQueueStore.getState().jobs[0].destinationGrantConsumed).toBe(true);
   });
 });

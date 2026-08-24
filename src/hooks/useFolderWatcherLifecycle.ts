@@ -11,7 +11,6 @@ import { invalidateThumbnail } from '../services/thumbnailCache';
 import { reconcileFolderWatcherPayload } from '../services/folderWatcherReconciliation';
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
-import { pathIdentityKey } from '../services/pathIdentity';
 
 type ApplyFolderImages = (
   images: ImageFile[],
@@ -35,7 +34,7 @@ type FolderWatcherLifecycleOptions = {
 };
 
 function normalizePathKey(path: string): string {
-  return pathIdentityKey(path);
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 /** Owns watcher subscription, queued refreshes, and incremental payload application. */

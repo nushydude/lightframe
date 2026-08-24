@@ -1,10 +1,6 @@
 import { useEffect, useState, type RefObject } from 'react';
-import {
-  getFileName,
-  getImageMetadata,
-  saveScaledCopy,
-  selectDestination,
-} from '../services/tauriCommands';
+import { save } from '@tauri-apps/plugin-dialog';
+import { getFileName, getImageMetadata, saveScaledCopy } from '../services/tauriCommands';
 import { useEditQueueStore } from '../state/editQueueStore';
 import { useToastStore } from '../state/toastStore';
 import { useViewerStore } from '../state/viewerStore';
@@ -27,10 +23,17 @@ const SOURCE_EXTENSIONS = new Set([
 const OUTPUT_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif']);
 const SOURCE_MESSAGE = 'Scaled export supports JPEG, PNG, GIF, WebP, BMP, TIFF, and AVIF sources.';
 const OUTPUT_MESSAGE = 'Scaled export can save JPEG, PNG, GIF, WebP, BMP, or TIFF files.';
+const SAVE_FILTERS = [
+  { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
+  { name: 'PNG image', extensions: ['png'] },
+  { name: 'WebP image', extensions: ['webp'] },
+  { name: 'TIFF image', extensions: ['tif', 'tiff'] },
+  { name: 'BMP image', extensions: ['bmp'] },
+  { name: 'GIF image', extensions: ['gif'] },
+];
+
 interface PreparedScaledCopy {
   outputPath: string;
-  destinationGrantId: string;
-  relativeFileName: string;
   width: number;
   height: number;
 }
@@ -148,6 +151,7 @@ function QualityPreview({
   );
 }
 
+// fallow-ignore-next-line complexity -- preserve the v8.7.5 export orchestration during rollback
 export function QualityExportMenu({
   currentImagePath,
   onQueueOpened,
@@ -231,23 +235,16 @@ export function QualityExportMenu({
       return null;
     }
 
-    const destination = await selectDestination(
-      getFileName(defaultOutputPath(currentImagePath, parsedWidth, parsedHeight)),
-      'scale-copy'
-    );
-    const outputPath = destination?.selectedPath;
+    const outputPath = await save({
+      filters: SAVE_FILTERS,
+      defaultPath: defaultOutputPath(currentImagePath, parsedWidth, parsedHeight),
+    });
     if (!outputPath) return null;
     if (!OUTPUT_EXTENSIONS.has(pathExtension(outputPath))) {
       pushToast({ title: 'Scale Copy', kind: 'error', message: OUTPUT_MESSAGE });
       return null;
     }
-    return {
-      outputPath,
-      destinationGrantId: destination.destinationGrantId,
-      relativeFileName: destination.relativeFileName,
-      width: parsedWidth,
-      height: parsedHeight,
-    };
+    return { outputPath, width: parsedWidth, height: parsedHeight };
   };
 
   const queueCopy = async () => {
@@ -257,9 +254,6 @@ export function QualityExportMenu({
       kind: 'scaled-copy',
       sourcePath: currentImagePath,
       outputPath: prepared.outputPath,
-      destinationGrantId: prepared.destinationGrantId,
-      relativeFileName: prepared.relativeFileName,
-      destinationOperation: 'scale-copy',
       width: prepared.width,
       height: prepared.height,
       smoothing,

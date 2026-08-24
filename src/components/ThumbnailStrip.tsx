@@ -97,6 +97,7 @@ function getCurrentIndexWindow(
  * A high-performance horizontal strip of thumbnails for quick navigation.
  * Renders the scrolled viewport instead of the whole folder.
  */
+// fallow-ignore-next-line complexity -- preserve the v8.7.5 thumbnail navigation orchestration during rollback
 export function ThumbnailStrip() {
   const { images, currentIndex, setCurrentIndex } = useViewerStore(
     useShallow((state) => ({
@@ -200,8 +201,6 @@ export function ThumbnailStrip() {
     preloadThumbnails(
       visibleImages.map((image) => ({
         path: image.path,
-        sessionId: image.sessionId,
-        imageId: image.id,
         sizeBytes: image.size_bytes,
         modifiedAt: image.modified_at,
       })),
@@ -339,8 +338,6 @@ export function ThumbnailStrip() {
           const isActive = index === currentIndex;
           const url = getCachedThumbnail({
             path: image.path,
-            sessionId: image.sessionId,
-            imageId: image.id,
             sizeBytes: image.size_bytes,
             modifiedAt: image.modified_at,
           });

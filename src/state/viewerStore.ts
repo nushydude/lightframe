@@ -1,10 +1,10 @@
 import { create } from 'zustand';
-import { getRuntime } from '../services/runtime/runtime';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { recordImageSelectedTelemetry } from '../services/performanceTelemetry';
-import { closeFolderSession, overwriteWithCrop, saveRotatedImage } from '../services/tauriCommands';
+import { overwriteWithCrop, saveRotatedImage } from '../services/tauriCommands';
 import {
   getCurationFilterEmptyMessage,
   isFavoriteCuration,
@@ -20,29 +20,10 @@ import {
   normalizedToIntegerPixelRect,
 } from '../services/cropMath';
 import { getCropSourceDimensions } from '../services/cropSourceDimensions';
-import { pathIdentityKey } from '../services/pathIdentity';
 
 export type ZoomMode = 'fit' | 'fill' | 'actual' | 'custom';
 type ViewMode = 'viewer' | 'grid' | 'compare';
 type CompareFocusedPane = 'primary' | 'secondary';
-
-let projectorNavigationHandler: ((image: ImageFile) => void) | null = null;
-let projectorHydrationInProgress = false;
-
-export function registerProjectorNavigationHandler(
-  handler: ((image: ImageFile) => void) | null
-): void {
-  projectorNavigationHandler = handler;
-}
-
-export function hydrateProjectorSelection(sessionId: string, imageId: string): void {
-  projectorHydrationInProgress = true;
-  try {
-    useViewerStore.getState().openImageById(sessionId, imageId);
-  } finally {
-    projectorHydrationInProgress = false;
-  }
-}
 
 const DEFAULT_CROP_RECT: NormalizedCropRect = {
   x: 0.1,
@@ -159,7 +140,7 @@ function cloneCropRect(rect: NormalizedCropRect | null): NormalizedCropRect | nu
 }
 
 function normalizePathKey(path: string): string {
-  return pathIdentityKey(path);
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 function reconcileMarkedPaths(markedPaths: string[], images: ImageFile[]): string[] {
@@ -277,9 +258,6 @@ interface ViewerState {
   comparePrimaryIndex: number;
   compareSecondaryIndex: number;
   compareFocusedPane: CompareFocusedPane;
-  activeSessionId: string | null;
-  setActiveSessionId: (sessionId: string | null) => void;
-  openImageById: (sessionId: string, imageId: string) => void;
   isCompareZoomLocked: boolean;
 
   // Actions
@@ -390,7 +368,6 @@ const initialState = {
   curationStateByPath: {},
   favoriteFilterReturnPath: null,
   curationFilterReturnPath: null,
-  activeSessionId: null as string | null,
   comparePrimaryIndex: -1,
   compareSecondaryIndex: -1,
   compareFocusedPane: 'secondary' as CompareFocusedPane,
@@ -465,9 +442,12 @@ async function overwritePendingCrop(
   rotationDegrees: number
 ): Promise<boolean> {
   const fileName = targetPath.replace(/\\/g, '/').split('/').pop() || targetPath;
-  const confirmed = await getRuntime().confirm(
+  const confirmed = await confirm(
     `Overwrite the original image with this crop?\n\n${fileName}\n\nThis modifies the source file.`,
-    { title: 'Overwrite Cropped Image', kind: 'warning' }
+    {
+      title: 'Overwrite Cropped Image',
+      kind: 'warning',
+    }
   );
   if (!confirmed) return false;
 
@@ -673,18 +653,8 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       });
     },
 
-    setImages: (images) => {
-      const sessionIds = new Set(images.map((image) => image.sessionId).filter(Boolean));
-      const nextSessionId = sessionIds.size === 1 ? ([...sessionIds][0] ?? null) : null;
-      const currentSessionId = get().activeSessionId;
-      if (currentSessionId && nextSessionId && currentSessionId !== nextSessionId) {
-        void closeFolderSession(currentSessionId).catch(() => {});
-      }
-      set((state) => ({
-        ...getFavoriteSafeImagesState(state, images, state.curationFilter),
-        activeSessionId: nextSessionId,
-      }));
-    },
+    setImages: (images) =>
+      set((state) => getFavoriteSafeImagesState(state, images, state.curationFilter)),
 
     setShowOnlyFavorites: (showOnlyFavorites) =>
       get().setCurationFilter(showOnlyFavorites ? 'favorites' : 'all'),
@@ -800,10 +770,6 @@ export const useViewerStore = create<ViewerState>((set, get) => {
     setCurrentIndex: (index: number, options?: { zoomMode?: ZoomMode }) => {
       const { images, defaultZoomMode } = get();
       if (index < 0 || index >= images.length) return;
-      if (!projectorHydrationInProgress && projectorNavigationHandler) {
-        projectorNavigationHandler(images[index]);
-        return;
-      }
 
       set((state) => {
         const path = images[index].path;
@@ -1404,42 +1370,18 @@ export const useViewerStore = create<ViewerState>((set, get) => {
 
     setCompareZoomLocked: (locked) => set({ isCompareZoomLocked: locked }),
 
-    setActiveSessionId: (sessionId: string | null) => {
-      const currentSessionId = get().activeSessionId;
-      if (currentSessionId && currentSessionId !== sessionId) {
-        closeFolderSession(currentSessionId).catch(() => {});
-      }
-      set({ activeSessionId: sessionId });
-    },
-
-    openImageById: (sessionId, imageId) => {
-      const state = get();
-      const targetIndex = state.images.findIndex(
-        (img) => img.sessionId === sessionId && img.id === imageId
-      );
-      if (targetIndex !== -1) {
-        get().setCurrentIndex(targetIndex);
-      }
-    },
-
     beginLoadGeneration: () => {
       const nextGeneration = get().loadGeneration + 1;
       set({ loadGeneration: nextGeneration });
       return nextGeneration;
     },
 
-    reset: () => {
-      const currentSessionId = get().activeSessionId;
-      if (currentSessionId) {
-        closeFolderSession(currentSessionId).catch(() => {});
-      }
+    reset: () =>
       set((state) => ({
         ...initialState,
-        activeSessionId: null,
         defaultZoomMode: state.defaultZoomMode,
         showPerformanceTelemetry: state.showPerformanceTelemetry,
         loadGeneration: state.loadGeneration + 1,
-      }));
-    },
+      })),
   };
 });

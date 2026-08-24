@@ -5,7 +5,7 @@ import {
   cancelPendingNavigationKeydownTelemetry,
 } from './performanceTelemetry';
 import { useViewerStore } from '../state/viewerStore';
-import { getRuntime } from './runtime/runtime';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { revealCurrentImage } from './viewerActions';
 
 export interface KeyboardHandlers {
@@ -132,8 +132,8 @@ function dispatchEscapeShortcut(
 }
 
 function exitFullscreen(context: ApplicationShortcutContext): Promise<void> {
-  return getRuntime()
-    .window.setFullscreen(false)
+  return getCurrentWindow()
+    .setFullscreen(false)
     .then(() => context.setFullscreen(false))
     .catch((error) => console.error('Failed to exit fullscreen:', error));
 }
@@ -148,8 +148,8 @@ function handleEscapeQuit(
     now - context.lastUnhandledEscapeAtRef.current <= 500
   ) {
     clearPendingEscapeQuit();
-    void getRuntime()
-      .window.close()
+    void getCurrentWindow()
+      .close()
       .catch((error) => {
         console.error('Failed to close window after double Escape:', error);
       });
@@ -167,8 +167,8 @@ function dispatchWindowShortcut(
     event.preventDefault();
     try {
       const newFullscreen = !context.isFullscreen;
-      void getRuntime()
-        .window.setFullscreen(newFullscreen)
+      void getCurrentWindow()
+        .setFullscreen(newFullscreen)
         .then(() => context.setFullscreen(newFullscreen))
         .catch((error) => {
           console.error('Failed to toggle fullscreen:', error);

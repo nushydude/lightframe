@@ -28,12 +28,7 @@ const {
   revealCurrentImageMock: vi.fn(async () => undefined),
   showTransferResultMessageMock: vi.fn(async () => undefined),
   transferImagesToDestinationMock: vi.fn(async () => ({
-    successes: [] as Array<{
-      sourcePath: string;
-      targetPath: string;
-      sourceRemoved?: boolean;
-      warning?: string;
-    }>,
+    successes: [] as Array<{ sourcePath: string; targetPath: string }>,
     failures: [] as Array<{ sourcePath: string; error: string }>,
   })),
   chooseQuickDestinationFolderMock: vi.fn(async () => null),
@@ -677,13 +672,7 @@ describe('ContactSheet', () => {
 
   it('removes moved selected grid images from the folder view', async () => {
     transferImagesToDestinationMock.mockResolvedValue({
-      successes: [
-        {
-          sourcePath: 'C:/images/current.jpg',
-          targetPath: 'D:/Favorites/current.jpg',
-          sourceRemoved: true,
-        },
-      ],
+      successes: [{ sourcePath: 'C:/images/current.jpg', targetPath: 'D:/Favorites/current.jpg' }],
       failures: [],
     });
     useViewerStore.setState({
@@ -729,53 +718,6 @@ describe('ContactSheet', () => {
       );
       expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
         'C:/images/next.jpg',
-      ]);
-    });
-  });
-
-  it('retains a moved source when the destination committed but source cleanup did not', async () => {
-    transferImagesToDestinationMock.mockResolvedValue({
-      successes: [
-        {
-          sourcePath: 'C:/images/current.jpg',
-          targetPath: 'D:/Favorites/current.jpg',
-          sourceRemoved: false,
-          warning: 'Destination committed; source remains.',
-        },
-      ],
-      failures: [],
-    });
-    useViewerStore.setState({
-      images: [
-        {
-          path: 'C:/images/current.jpg',
-          file_name: 'current.jpg',
-          extension: 'jpg',
-          size_bytes: 1,
-          modified_at: '1',
-        },
-      ],
-    });
-
-    render(
-      <ContactSheet
-        onExitGridView={vi.fn(async () => true)}
-        onGoHome={() => undefined}
-        onOpenFile={() => undefined}
-        onOpenFolder={() => undefined}
-        onRefreshFolder={() => undefined}
-        onStartSlideshow={() => undefined}
-      />
-    );
-
-    fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
-    const bulkToolbar = screen.getByRole('toolbar', { name: 'Selected image actions' });
-    fireEvent.click(within(bulkToolbar).getByText('Move To'));
-    fireEvent.click(within(bulkToolbar).getAllByRole('button', { name: 'Favorites' })[1]);
-
-    await waitFor(() => {
-      expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
-        'C:/images/current.jpg',
       ]);
     });
   });

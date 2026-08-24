@@ -1,12 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { assertVersionContract } from './version-contract.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
-const tagArgumentIndex = process.argv.indexOf('--tag');
-const explicitTag = tagArgumentIndex === -1 ? undefined : process.argv.at(tagArgumentIndex + 1);
-if (tagArgumentIndex !== -1 && !explicitTag) {
-  throw new Error('Expected a tag after --tag');
-}
-const workflowTag = process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined;
-const version = await assertVersionContract({ root, tag: explicitTag ?? workflowTag });
-console.log(`version metadata and Cargo.lock synchronized at ${version}`);
+const packageJson = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+const cargoToml = await fs.readFile(path.join(root, 'src-tauri', 'Cargo.toml'), 'utf8');
+const tauriConfig = JSON.parse(
+  await fs.readFile(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8')
+);
+
+const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+assert.equal(packageJson.version, cargoVersion, 'package.json and Cargo.toml versions differ');
+assert.equal(packageJson.version, tauriConfig.version, 'package.json and tauri version differ');
+console.log(`version metadata synchronized at ${packageJson.version}`);

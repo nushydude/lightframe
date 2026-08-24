@@ -3,8 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { useSettingsStore } from '../state/settingsStore';
 import { useViewerStore } from '../state/viewerStore';
-import { initializeRuntime } from '../services/runtime/runtime';
-import { createTestRuntimeAdapter } from '../services/runtime/testAdapter';
 
 describe('useKeyboardShortcuts', () => {
   const handlers = {
@@ -86,23 +84,6 @@ describe('useKeyboardShortcuts', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(handlers.openCommandPalette).toHaveBeenCalledTimes(1);
-  });
-
-  it('opens settings on Ctrl+,', () => {
-    renderHook(() => useKeyboardShortcuts(handlers));
-
-    const event = new KeyboardEvent('keydown', {
-      key: ',',
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    act(() => {
-      window.dispatchEvent(event);
-    });
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(useViewerStore.getState().showSettings).toBe(true);
   });
 
   it('toggles performance telemetry on Ctrl+Shift+F12', () => {
@@ -384,12 +365,13 @@ describe('useKeyboardShortcuts', () => {
   });
 
   it('closes the window when Escape is pressed twice without another higher-priority action', async () => {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const closeSpy = vi.fn().mockResolvedValue(undefined);
-    initializeRuntime(
-      createTestRuntimeAdapter({
-        window: { ...createTestRuntimeAdapter().window, close: closeSpy },
-      })
-    );
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      setFullscreen: vi.fn(),
+      setTitle: vi.fn(),
+      close: closeSpy,
+    } as never);
 
     renderHook(() => useKeyboardShortcuts(handlers));
 
@@ -406,12 +388,13 @@ describe('useKeyboardShortcuts', () => {
   });
 
   it('does not close the window on the second Escape if the first one reset zoom', async () => {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const closeSpy = vi.fn().mockResolvedValue(undefined);
-    initializeRuntime(
-      createTestRuntimeAdapter({
-        window: { ...createTestRuntimeAdapter().window, close: closeSpy },
-      })
-    );
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      setFullscreen: vi.fn(),
+      setTitle: vi.fn(),
+      close: closeSpy,
+    } as never);
     useViewerStore.setState({ zoomMode: 'actual' });
 
     renderHook(() => useKeyboardShortcuts(handlers));

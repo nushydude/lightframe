@@ -1,7 +1,5 @@
-import { pathIdentityKey } from './pathIdentity';
-
 function normalizePathMetadataKey(path: string): string {
-  return pathIdentityKey(path);
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 export class BoundedPathMetadataCache<Value> {

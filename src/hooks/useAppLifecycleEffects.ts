@@ -1,5 +1,5 @@
 import { useEffect, type MutableRefObject } from 'react';
-import type { RuntimeWindow } from '../services/runtime/types';
+import type { Window } from '@tauri-apps/api/window';
 import { useAppStartupLifecycle } from './useAppStartupLifecycle';
 import { useWindowPersistence } from './useWindowPersistence';
 import {
@@ -16,7 +16,7 @@ import type { ImageCuration } from '../types/curation';
 
 type AppLifecycleOptions = Parameters<typeof useAppStartupLifecycle>[0] &
   Parameters<typeof useWindowPersistence>[0] & {
-    appWindow: RuntimeWindow;
+    appWindow: Window;
     isMainWindow: boolean;
     isProjectorWindow: boolean;
     isSecondary: boolean;

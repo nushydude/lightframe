@@ -1,11 +1,9 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Seek};
-#[cfg(test)]
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub struct ExifData {
     pub make: Option<String>,
     pub model: Option<String>,
@@ -34,14 +32,9 @@ fn empty_exif_data() -> ExifData {
     }
 }
 
-#[cfg(test)]
 fn read_embedded_exif_metadata(path: &Path) -> Result<ExifData, String> {
     let file =
         std::fs::File::open(path).map_err(|error| format!("Failed to open file: {error}"))?;
-    read_embedded_exif_metadata_from_file(file)
-}
-
-fn read_embedded_exif_metadata_from_file(file: fs::File) -> Result<ExifData, String> {
     let mut reader = std::io::BufReader::new(file);
     let exifreader = exif::Reader::new();
     let exif = exifreader
@@ -83,40 +76,11 @@ fn read_embedded_exif_metadata_from_file(file: fs::File) -> Result<ExifData, Str
     Ok(data)
 }
 
-pub fn get_exif_metadata_from_authorized_files(
-    image_file: fs::File,
-    sidecar: Option<(String, fs::File)>,
-) -> Result<ExifData, String> {
-    let limits = crate::image_resource_policy::PolicyLimits::for_operation(
-        crate::image_resource_policy::OperationClass::MetadataOnly,
-    );
-    let image_size = image_file
-        .metadata()
-        .map_err(|error| format!("Failed to inspect EXIF source handle: {error}"))?
-        .len();
-    crate::image_resource_policy::validate_file_size_bytes(image_size, &limits)
-        .map_err(|error| format!("EXIF source rejected: {error}"))?;
-    let embedded = read_embedded_exif_metadata_from_file(image_file);
-    let sidecar = sidecar
-        .map(|(file_name, file)| read_xmp_sidecar_from_file(&file_name, file))
-        .transpose()
-        .map(Option::flatten);
-    merge_exif_results(embedded, sidecar)
-}
-
-#[cfg(test)]
 pub fn get_exif_metadata_blocking(file_path: String) -> Result<ExifData, String> {
     let path = Path::new(&file_path);
     let embedded = read_embedded_exif_metadata(path);
     let sidecar = read_xmp_sidecar_metadata(path);
 
-    merge_exif_results(embedded, sidecar)
-}
-
-fn merge_exif_results(
-    embedded: Result<ExifData, String>,
-    sidecar: Result<Option<ExifData>, String>,
-) -> Result<ExifData, String> {
     match (embedded, sidecar) {
         (Ok(mut data), Ok(Some(sidecar_data))) => {
             merge_sidecar_metadata(&mut data, sidecar_data);
@@ -129,7 +93,6 @@ fn merge_exif_results(
     }
 }
 
-#[cfg(test)]
 fn read_xmp_sidecar_metadata(image_path: &Path) -> Result<Option<ExifData>, String> {
     let Some(sidecar_path) = find_xmp_sidecar_path(image_path) else {
         return Ok(None);
@@ -140,31 +103,12 @@ fn read_xmp_sidecar_metadata(image_path: &Path) -> Result<Option<ExifData>, Stri
         return Err("XMP sidecar is too large to read safely".to_string());
     }
 
-    let file = fs::File::open(&sidecar_path)
-        .map_err(|error| format!("Failed to open XMP sidecar: {error}"))?;
-    read_xmp_sidecar_from_file(
-        sidecar_path.file_name().and_then(|value| value.to_str()).unwrap_or("sidecar.xmp"),
-        file,
-    )
-}
-
-fn read_xmp_sidecar_from_file(
-    file_name: &str,
-    mut file: fs::File,
-) -> Result<Option<ExifData>, String> {
-    let metadata =
-        file.metadata().map_err(|error| format!("Failed to read XMP sidecar metadata: {error}"))?;
-    if metadata.len() > MAX_XMP_SIDECAR_BYTES {
-        return Err("XMP sidecar is too large to read safely".to_string());
-    }
-    file.seek(std::io::SeekFrom::Start(0))
-        .map_err(|error| format!("Failed to seek XMP sidecar: {error}"))?;
-    let mut xmp = String::new();
-    file.take(MAX_XMP_SIDECAR_BYTES + 1)
-        .read_to_string(&mut xmp)
+    let xmp = fs::read_to_string(&sidecar_path)
         .map_err(|error| format!("Failed to read XMP sidecar: {error}"))?;
     let mut data = empty_exif_data();
-    data.raw.insert("XMP Sidecar".to_string(), file_name.to_string());
+    if let Some(file_name) = sidecar_path.file_name().and_then(|value| value.to_str()) {
+        data.raw.insert("XMP Sidecar".to_string(), file_name.to_string());
+    }
 
     apply_xmp_text_field(&xmp, "tiff:Make", "XMP Make", &mut data.raw, &mut data.make);
     apply_xmp_text_field(&xmp, "tiff:Model", "XMP Model", &mut data.raw, &mut data.model);
@@ -214,7 +158,6 @@ fn read_xmp_sidecar_from_file(
     Ok(Some(data))
 }
 
-#[cfg(test)]
 fn find_xmp_sidecar_path(image_path: &Path) -> Option<PathBuf> {
     let mut candidates = vec![image_path.with_extension("xmp"), image_path.with_extension("XMP")];
     if let Some(file_name) = image_path.file_name().and_then(|value| value.to_str()) {
@@ -337,29 +280,4 @@ fn parse_xmp_u32(value: &str) -> Option<u32> {
     let digits: String =
         value.trim().chars().take_while(|character| character.is_ascii_digit()).collect();
     digits.parse::<u32>().ok()
-}
-
-#[cfg(test)]
-mod resource_policy_tests {
-    use super::*;
-
-    #[test]
-    fn oversized_exif_source_is_rejected_before_parser_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("oversized.jpg");
-        let limits = crate::image_resource_policy::PolicyLimits::for_operation(
-            crate::image_resource_policy::OperationClass::MetadataOnly,
-        );
-        let file = fs::File::create(&path).unwrap();
-        file.set_len(limits.max_file_size_bytes + 1).unwrap();
-        drop(file);
-
-        let error =
-            match get_exif_metadata_from_authorized_files(fs::File::open(path).unwrap(), None) {
-                Ok(_) => panic!("oversized EXIF source unexpectedly reached the parser"),
-                Err(error) => error,
-            };
-        assert!(error.contains("EXIF source rejected"));
-        assert!(error.contains("exceeds maximum limit"));
-    }
 }

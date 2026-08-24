@@ -1,6 +1,6 @@
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { RuntimeWindow } from '../services/runtime/types';
+import type { Window } from '@tauri-apps/api/window';
 import { useWindowPersistence } from './useWindowPersistence';
 
 const boundsMocks = vi.hoisted(() => ({
@@ -8,6 +8,7 @@ const boundsMocks = vi.hoisted(() => ({
   persistWindowBoundsSafely: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@tauri-apps/api/window', () => ({ currentMonitor: boundsMocks.currentMonitor }));
 vi.mock('../services/windowBounds', () => ({
   displayKeyFromMonitor: vi.fn().mockReturnValue(null),
   persistWindowBoundsSafely: boundsMocks.persistWindowBoundsSafely,
@@ -24,7 +25,7 @@ describe('useWindowPersistence', () => {
       isMinimized: vi.fn().mockResolvedValue(false),
       outerPosition: vi.fn().mockResolvedValue({ x: 0, y: 0 }),
       innerSize: vi.fn().mockResolvedValue({ width: 800, height: 600 }),
-    } as unknown as RuntimeWindow;
+    } as unknown as Window;
 
     const { unmount } = renderHook(() =>
       useWindowPersistence({

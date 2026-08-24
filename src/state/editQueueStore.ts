@@ -1,12 +1,5 @@
 import { create } from 'zustand';
-import {
-  getFileName,
-  saveCroppedCopyWithGrant,
-  saveScaledCopyWithGrant,
-  selectDestination,
-  type CropRect,
-} from '../services/tauriCommands';
-import { pathIdentityKey } from '../services/pathIdentity';
+import { saveCroppedCopy, saveScaledCopy, type CropRect } from '../services/tauriCommands';
 
 type EditQueueJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
 type EditQueueJobKind = 'scaled-copy' | 'cropped-copy';
@@ -22,10 +15,6 @@ interface EditQueueJobBase {
   kind: EditQueueJobKind;
   sourcePath: string;
   outputPath: string;
-  destinationGrantId: string;
-  relativeFileName: string;
-  destinationOperation: 'crop-copy' | 'scale-copy';
-  destinationGrantConsumed?: boolean;
   status: EditQueueJobStatus;
   createdAt: number;
   startedAt?: number;
@@ -75,7 +64,7 @@ interface EditQueueState {
   enqueueJob: (input: EditQueueJobInput) => EnqueueEditQueueJobResult;
   runQueue: () => void;
   pauseQueue: () => void;
-  retryJob: (jobId: string) => Promise<void>;
+  retryJob: (jobId: string) => void;
   cancelJob: (jobId: string) => void;
   clearFinished: () => void;
   reset: () => void;
@@ -121,7 +110,7 @@ function getJobErrorMessage(error: unknown): string {
 }
 
 function getNormalizedOutputPathKey(path: string): string {
-  return pathIdentityKey(path);
+  return path.replace(/\\/g, '/').toLowerCase();
 }
 
 function getDuplicateOutputPathError(outputPath: string): string {
@@ -215,10 +204,9 @@ function findNextQueuedJobIndex(jobs: EditQueueJob[], startIndex: number): numbe
 
 async function runJob(job: EditQueueJob): Promise<void> {
   if (job.kind === 'scaled-copy') {
-    await saveScaledCopyWithGrant(
+    await saveScaledCopy(
       job.sourcePath,
-      job.destinationGrantId,
-      job.relativeFileName,
+      job.outputPath,
       job.width,
       job.height,
       job.smoothing,
@@ -227,44 +215,7 @@ async function runJob(job: EditQueueJob): Promise<void> {
     return;
   }
 
-  await saveCroppedCopyWithGrant(
-    job.sourcePath,
-    job.cropRect,
-    job.destinationGrantId,
-    job.relativeFileName,
-    job.rotationDegrees
-  );
-}
-
-const CONSUMED_GRANT_ERROR_PREFIX = 'DESTINATION_GRANT_CONSUMED:';
-const RETAINED_GRANT_ERROR_PREFIX = 'DESTINATION_GRANT_NOT_CONSUMED:';
-
-function classifyJobFailure(error: unknown): { message: string; grantConsumed: boolean } {
-  if (typeof error === 'object' && error !== null) {
-    const typed = error as { message?: unknown; destinationGrantConsumed?: unknown };
-    if (typeof typed.message === 'string' && typeof typed.destinationGrantConsumed === 'boolean') {
-      return {
-        message: typed.message,
-        grantConsumed: typed.destinationGrantConsumed,
-      };
-    }
-  }
-  const message = getJobErrorMessage(error);
-  if (message.startsWith(CONSUMED_GRANT_ERROR_PREFIX)) {
-    return {
-      message: message.slice(CONSUMED_GRANT_ERROR_PREFIX.length).trim(),
-      grantConsumed: true,
-    };
-  }
-  if (message.startsWith(RETAINED_GRANT_ERROR_PREFIX)) {
-    return {
-      message: message.slice(RETAINED_GRANT_ERROR_PREFIX.length).trim(),
-      grantConsumed: false,
-    };
-  }
-  // An untyped worker/channel failure cannot prove that the one-shot grant survived. Requiring a
-  // fresh selection is the fail-closed behavior and prevents an automatic retry with a spent ID.
-  return { message, grantConsumed: true };
+  await saveCroppedCopy(job.sourcePath, job.cropRect, job.outputPath, job.rotationDegrees);
 }
 
 export const useEditQueueStore = create<EditQueueState>((set, get) => {
@@ -327,12 +278,10 @@ export const useEditQueueStore = create<EditQueueState>((set, get) => {
             return;
           }
           set((state) => {
-            const failure = classifyJobFailure(error);
             const didUpdate = updateJobById(state.jobs, nextJob.id, 'running', {
               status: 'failed',
               finishedAt: Date.now(),
-              error: failure.message,
-              destinationGrantConsumed: failure.grantConsumed,
+              error: getJobErrorMessage(error),
             });
             if (!didUpdate) {
               return {};
@@ -386,37 +335,19 @@ export const useEditQueueStore = create<EditQueueState>((set, get) => {
       void drainQueue();
     },
     pauseQueue: () => set({ isRunning: false }),
-    retryJob: async (jobId) => {
+    retryJob: (jobId) => {
       const job = get().jobs.find((job) => job.id === jobId);
       if (!job || (job.status !== 'failed' && job.status !== 'canceled')) {
         return;
       }
 
       const previousStatus = job.status;
-      let refreshedDestination:
-        | { outputPath: string; destinationGrantId: string; relativeFileName: string }
-        | undefined;
-      if (job.destinationGrantConsumed) {
-        const selection = await selectDestination(
-          getFileName(job.outputPath),
-          job.destinationOperation
-        );
-        if (!selection) {
-          return;
-        }
-        refreshedDestination = {
-          outputPath: selection.selectedPath,
-          destinationGrantId: selection.destinationGrantId,
-          relativeFileName: selection.relativeFileName,
-        };
-      }
-      const retryOutputPath = refreshedDestination?.outputPath ?? job.outputPath;
-      if (hasActiveOutputPathConflict(get().jobs, retryOutputPath)) {
+      if (hasActiveOutputPathConflict(get().jobs, job.outputPath)) {
         set((state) => ({
           ...(updateJobAtIndex(
             state.jobs,
             state.jobs.findIndex((item) => item.id === jobId),
-            { error: getDuplicateOutputPathError(retryOutputPath) }
+            { error: getDuplicateOutputPathError(job.outputPath) }
           )
             ? { jobsVersion: state.jobsVersion + 1 }
             : {}),
@@ -433,8 +364,6 @@ export const useEditQueueStore = create<EditQueueState>((set, get) => {
             startedAt: undefined,
             finishedAt: undefined,
             error: undefined,
-            destinationGrantConsumed: false,
-            ...refreshedDestination,
           }
         )
           ? { jobsVersion: state.jobsVersion + 1 }
