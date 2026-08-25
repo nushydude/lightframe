@@ -127,6 +127,13 @@ vi.mock('../hooks/useZoomPan', () => ({
 
 describe('ImageCanvas', () => {
   const originalImage = globalThis.Image;
+  const currentImage = {
+    path: 'C:/images/current.jpg',
+    file_name: 'current.jpg',
+    extension: 'jpg',
+    size_bytes: 1,
+    modified_at: '1',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -165,6 +172,228 @@ describe('ImageCanvas', () => {
   afterEach(() => {
     vi.useRealTimers();
     globalThis.Image = originalImage;
+  });
+
+  function seedCurrentImage() {
+    useViewerStore.setState({
+      currentImagePath: currentImage.path,
+      currentIndex: 0,
+      images: [currentImage],
+    });
+  }
+
+  function stubCanvasRect() {
+    return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          width: 800,
+          height: 600,
+          left: 100,
+          top: 50,
+          right: 900,
+          bottom: 650,
+          x: 100,
+          y: 50,
+          toJSON: () => ({}),
+        }) as DOMRect
+    );
+  }
+
+  function firePointerTap(canvas: Element, x: number, y = 300, pointerId = 1) {
+    fireEvent.pointerDown(canvas, {
+      pointerId,
+      pointerType: 'touch',
+      button: 0,
+      clientX: x,
+      clientY: y,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId,
+      pointerType: 'touch',
+      button: 0,
+      clientX: x,
+      clientY: y,
+    });
+  }
+
+  it('dispatches previous navigation from a double-tap on the left viewer zone', () => {
+    seedCurrentImage();
+    const rectSpy = stubCanvasRect();
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+
+    const { container } = render(
+      <ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={onNext} />
+    );
+    const canvas = container.querySelector('.image-canvas') as HTMLDivElement;
+
+    firePointerTap(canvas, 240);
+    firePointerTap(canvas, 245);
+
+    expect(onPrev).toHaveBeenCalledTimes(1);
+    expect(onNext).not.toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('dispatches next navigation from a double-tap on the right viewer zone', () => {
+    seedCurrentImage();
+    const rectSpy = stubCanvasRect();
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+
+    const { container } = render(
+      <ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={onNext} />
+    );
+    const canvas = container.querySelector('.image-canvas') as HTMLDivElement;
+
+    firePointerTap(canvas, 760);
+    firePointerTap(canvas, 755);
+
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onPrev).not.toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('does not navigate for a single tap or a moved pointer gesture', () => {
+    seedCurrentImage();
+    const rectSpy = stubCanvasRect();
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+
+    const { container } = render(
+      <ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={onNext} />
+    );
+    const canvas = container.querySelector('.image-canvas') as HTMLDivElement;
+
+    firePointerTap(canvas, 240);
+    fireEvent.pointerDown(canvas, {
+      pointerId: 2,
+      pointerType: 'touch',
+      button: 0,
+      clientX: 760,
+      clientY: 300,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 2,
+      pointerType: 'touch',
+      button: 0,
+      clientX: 790,
+      clientY: 330,
+    });
+    firePointerTap(canvas, 760, 300, 3);
+
+    expect(onPrev).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('does not steal crop or zoomed-pan interactions', async () => {
+    seedCurrentImage();
+    const rectSpy = stubCanvasRect();
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+    const { container, rerender } = render(
+      <ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={onNext} />
+    );
+    const canvas = container.querySelector('.image-canvas') as HTMLDivElement;
+
+    await act(async () => {
+      useViewerStore.getState().enterCropMode();
+      await Promise.resolve();
+    });
+    firePointerTap(canvas, 240);
+    firePointerTap(canvas, 240);
+
+    await act(async () => {
+      useViewerStore.getState().exitCropMode();
+      useViewerStore.getState().setZoomMode('custom');
+      await Promise.resolve();
+    });
+    rerender(<ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={onNext} />);
+    firePointerTap(canvas, 760);
+    firePointerTap(canvas, 760);
+
+    expect(onPrev).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('prevents handled virtual navigation from bubbling into fullscreen double-click handling', () => {
+    seedCurrentImage();
+    const rectSpy = stubCanvasRect();
+    const onPrev = vi.fn();
+    const onFullscreenDoubleClick = vi.fn();
+
+    const { container } = render(
+      <div onDoubleClick={onFullscreenDoubleClick}>
+        <ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={vi.fn()} />
+      </div>
+    );
+    const canvas = container.querySelector('.image-canvas') as HTMLDivElement;
+
+    firePointerTap(canvas, 240);
+    firePointerTap(canvas, 240);
+    fireEvent.doubleClick(canvas);
+
+    expect(onPrev).toHaveBeenCalledTimes(1);
+    expect(onFullscreenDoubleClick).not.toHaveBeenCalled();
+
+    rectSpy.mockRestore();
+  });
+
+  it('keeps mouse double-clicks on the fullscreen path instead of virtual navigation', () => {
+    seedCurrentImage();
+    const rectSpy = stubCanvasRect();
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+    const onFullscreenDoubleClick = vi.fn();
+
+    const { container } = render(
+      <div onDoubleClick={onFullscreenDoubleClick}>
+        <ImageCanvas onVirtualNavPrev={onPrev} onVirtualNavNext={onNext} />
+      </div>
+    );
+    const canvas = container.querySelector('.image-canvas') as HTMLDivElement;
+
+    fireEvent.pointerDown(canvas, {
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 240,
+      clientY: 300,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 240,
+      clientY: 300,
+    });
+    fireEvent.pointerDown(canvas, {
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 240,
+      clientY: 300,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 240,
+      clientY: 300,
+    });
+    fireEvent.doubleClick(canvas);
+
+    expect(onPrev).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+    expect(onFullscreenDoubleClick).toHaveBeenCalledTimes(1);
+
+    rectSpy.mockRestore();
   });
 
   it('preloads adjacent images with preview intent by default', async () => {

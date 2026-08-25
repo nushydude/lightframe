@@ -1,4 +1,13 @@
-import { useRef, useState, useCallback, useEffect, useMemo, type SyntheticEvent } from 'react';
+import {
+  useRef,
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type SyntheticEvent,
+} from 'react';
 import { useViewerStore, type ZoomMode } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
 import {
@@ -45,6 +54,8 @@ import { getAdjacentPreloadPlan, type NavigationDirection } from './imageCanvasP
 type ImageCanvasProps = {
   onWheelNext?: () => void;
   onWheelPrev?: () => void;
+  onVirtualNavNext?: () => void;
+  onVirtualNavPrev?: () => void;
 };
 
 type LoadedImageAsset = {
@@ -59,10 +70,25 @@ type MetadataLoadState = {
 };
 
 const PREVIEW_STALL_FULL_RESOLUTION_DELAY_MS = 350;
+const VIRTUAL_NAV_DOUBLE_TAP_MS = 320;
+const VIRTUAL_NAV_MAX_MOVE_PX = 12;
+const VIRTUAL_NAV_MAX_TAP_DISTANCE_PX = 40;
 const EMPTY_METADATA_LOAD_STATE: MetadataLoadState = {
   path: null,
   metadata: null,
   resolved: false,
+};
+
+type VirtualNavTap = {
+  time: number;
+  x: number;
+  y: number;
+};
+
+type VirtualNavPointerStart = {
+  pointerId: number;
+  x: number;
+  y: number;
 };
 
 function isAbortError(error: unknown): boolean {
@@ -71,7 +97,12 @@ function isAbortError(error: unknown): boolean {
 
 /** Main image display canvas with zoom/pan support */
 // fallow-ignore-next-line complexity -- image loading orchestration boundary
-export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
+export function ImageCanvas({
+  onWheelNext,
+  onWheelPrev,
+  onVirtualNavNext,
+  onVirtualNavPrev,
+}: ImageCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const isMountedRef = useRef(true);
@@ -83,6 +114,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
   const metadataByPathRef = useRef(new BoundedPathMetadataCache<ImageMetadata>());
   const previousIndexRef = useRef<number | null>(null);
   const navigationDirectionRef = useRef<NavigationDirection>('idle');
+  const virtualNavPointerStartRef = useRef<VirtualNavPointerStart | null>(null);
+  const lastVirtualNavTapRef = useRef<VirtualNavTap | null>(null);
+  const suppressNextDoubleClickRef = useRef(false);
   const zoomStateRef = useRef<{ zoomMode: ZoomMode; zoomLevel: number }>({
     zoomMode: 'fit',
     zoomLevel: 1,
@@ -858,6 +892,100 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
     !isFullResolutionReady &&
     !fullLoadFailed;
 
+  const isVirtualNavigationEnabled =
+    Boolean(onVirtualNavNext && onVirtualNavPrev) &&
+    !isCropMode &&
+    !pendingCropPreview &&
+    !isDragging &&
+    zoomMode !== 'actual' &&
+    zoomMode !== 'custom' &&
+    zoomLevel <= 1;
+
+  const handleVirtualNavPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isVirtualNavigationEnabled || event.pointerType !== 'touch') {
+        virtualNavPointerStartRef.current = null;
+        lastVirtualNavTapRef.current = null;
+        return;
+      }
+
+      virtualNavPointerStartRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+      };
+    },
+    [isVirtualNavigationEnabled]
+  );
+
+  const handleVirtualNavPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isVirtualNavigationEnabled || event.pointerType !== 'touch') {
+        lastVirtualNavTapRef.current = null;
+        return;
+      }
+
+      const start = virtualNavPointerStartRef.current;
+      virtualNavPointerStartRef.current = null;
+      if (!start || start.pointerId !== event.pointerId) {
+        lastVirtualNavTapRef.current = null;
+        return;
+      }
+
+      const moveDistance = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+      if (moveDistance > VIRTUAL_NAV_MAX_MOVE_PX) {
+        lastVirtualNavTapRef.current = null;
+        return;
+      }
+
+      const now = event.timeStamp;
+      const lastTap = lastVirtualNavTapRef.current;
+      lastVirtualNavTapRef.current = {
+        time: now,
+        x: event.clientX,
+        y: event.clientY,
+      };
+
+      if (
+        !lastTap ||
+        now - lastTap.time > VIRTUAL_NAV_DOUBLE_TAP_MS ||
+        Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) >
+          VIRTUAL_NAV_MAX_TAP_DISTANCE_PX
+      ) {
+        return;
+      }
+
+      const container = containerRef.current;
+      if (!container) {
+        return;
+      }
+
+      const { left, width } = container.getBoundingClientRect();
+      const isLeftZone = event.clientX < left + width / 2;
+      if (isLeftZone) {
+        onVirtualNavPrev?.();
+      } else {
+        onVirtualNavNext?.();
+      }
+
+      suppressNextDoubleClickRef.current = true;
+      lastVirtualNavTapRef.current = null;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [isVirtualNavigationEnabled, onVirtualNavNext, onVirtualNavPrev]
+  );
+
+  const handleVirtualNavDoubleClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressNextDoubleClickRef.current) {
+      return;
+    }
+
+    suppressNextDoubleClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
   const updateImageBounds = useCallback(() => {
     const container = containerRef.current;
     const image = imgRef.current;
@@ -924,6 +1052,9 @@ export function ImageCanvas({ onWheelNext, onWheelPrev }: ImageCanvasProps) {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onPointerDown={handleVirtualNavPointerDown}
+      onPointerUp={handleVirtualNavPointerUp}
+      onDoubleClick={handleVirtualNavDoubleClick}
       onWheel={handleWheel}
     >
       {isTiledRendererActive && metadata && (

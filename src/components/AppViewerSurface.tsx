@@ -225,7 +225,12 @@ function ViewerMode(
 ) {
   return (
     <>
-      <ImageCanvas onWheelNext={props.onNext} onWheelPrev={props.onPrev} />
+      <ImageCanvas
+        onWheelNext={props.onNext}
+        onWheelPrev={props.onPrev}
+        onVirtualNavNext={props.onNext}
+        onVirtualNavPrev={props.onPrev}
+      />
       <ViewerChromeForMode {...props} />
       {props.showThumbnails && !props.isSlideshowActive && <ThumbnailStrip />}
     </>
