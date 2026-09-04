@@ -29,11 +29,15 @@ export function useThumbnailRefreshSignal() {
   const isThumbnailConsumerActive = useCallback(() => isMountedRef.current, []);
 
   useEffect(() => {
+    isMountedRef.current = true;
+
     return () => {
       isMountedRef.current = false;
       if (batchRafRef.current !== null) {
         window.cancelAnimationFrame(batchRafRef.current);
+        batchRafRef.current = null;
       }
+      hasPendingThumbnailUpdatesRef.current = false;
     };
   }, []);
 

@@ -13,6 +13,7 @@ export const IMAGE_WORK_PRIORITY = {
   currentPreview: 'current-preview',
   currentMetadata: 'current-metadata',
   currentFull: 'current-full',
+  foregroundThumbnail: 'foreground-thumbnail',
   visibleThumbnail: 'visible-thumbnail',
   adjacentDirectional: 'adjacent-directional',
   backgroundPreload: 'background-preload',
@@ -42,7 +43,7 @@ type ImageWorkSnapshot = {
   queuedByPriority: Record<ImageWorkPriority, number>;
 };
 
-type ImageWorkBucket = 'interactive' | 'visible' | 'background';
+type ImageWorkBucket = 'interactive' | 'foreground' | 'visible' | 'background';
 type ImageWorkListener = () => void;
 
 type ImageWorkConsumer<T> = {
@@ -76,6 +77,7 @@ type ScheduleOptions<T> = {
 type SchedulerOptions = {
   maxConcurrent?: number;
   maxInteractiveConcurrent?: number;
+  maxForegroundConcurrent?: number;
   maxVisibleConcurrent?: number;
   maxBackgroundConcurrent?: number;
   onSnapshot?: (snapshot: ImageWorkSnapshot) => void;
@@ -93,6 +95,8 @@ function priorityBucket(priority: ImageWorkPriority): ImageWorkBucket {
     case IMAGE_WORK_PRIORITY.currentMetadata:
     case IMAGE_WORK_PRIORITY.currentFull:
       return 'interactive';
+    case IMAGE_WORK_PRIORITY.foregroundThumbnail:
+      return 'foreground';
     case IMAGE_WORK_PRIORITY.visibleThumbnail:
       return 'visible';
     default:
@@ -105,6 +109,7 @@ function createPrioritySnapshot(): Record<ImageWorkPriority, number> {
     [IMAGE_WORK_PRIORITY.currentPreview]: 0,
     [IMAGE_WORK_PRIORITY.currentMetadata]: 0,
     [IMAGE_WORK_PRIORITY.currentFull]: 0,
+    [IMAGE_WORK_PRIORITY.foregroundThumbnail]: 0,
     [IMAGE_WORK_PRIORITY.visibleThumbnail]: 0,
     [IMAGE_WORK_PRIORITY.adjacentDirectional]: 0,
     [IMAGE_WORK_PRIORITY.backgroundPreload]: 0,
@@ -116,9 +121,10 @@ function compareJobs(left: ImageWorkJob<unknown>, right: ImageWorkJob<unknown>):
     [IMAGE_WORK_PRIORITY.currentPreview]: 0,
     [IMAGE_WORK_PRIORITY.currentFull]: 1,
     [IMAGE_WORK_PRIORITY.currentMetadata]: 2,
-    [IMAGE_WORK_PRIORITY.adjacentDirectional]: 3,
-    [IMAGE_WORK_PRIORITY.visibleThumbnail]: 4,
-    [IMAGE_WORK_PRIORITY.backgroundPreload]: 5,
+    [IMAGE_WORK_PRIORITY.foregroundThumbnail]: 3,
+    [IMAGE_WORK_PRIORITY.adjacentDirectional]: 4,
+    [IMAGE_WORK_PRIORITY.visibleThumbnail]: 5,
+    [IMAGE_WORK_PRIORITY.backgroundPreload]: 6,
   };
 
   const priorityDelta = priorityOrder[left.priority] - priorityOrder[right.priority];
@@ -141,6 +147,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
   let droppedQueued = 0;
   let maxConcurrent = options.maxConcurrent ?? 6;
   let maxInteractiveConcurrent = options.maxInteractiveConcurrent ?? 2;
+  let maxForegroundConcurrent = options.maxForegroundConcurrent ?? 2;
   let maxVisibleConcurrent = options.maxVisibleConcurrent ?? 3;
   let maxBackgroundConcurrent = options.maxBackgroundConcurrent ?? 1;
 
@@ -209,6 +216,10 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     const bucket = priorityBucket(job.priority);
     if (bucket === 'interactive') {
       return countRunning('interactive') < maxInteractiveConcurrent;
+    }
+
+    if (bucket === 'foreground') {
+      return countRunning('foreground') < maxForegroundConcurrent;
     }
 
     if (bucket === 'visible') {
@@ -458,6 +469,9 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     if (typeof next.maxInteractiveConcurrent === 'number') {
       maxInteractiveConcurrent = Math.max(1, Math.floor(next.maxInteractiveConcurrent));
     }
+    if (typeof next.maxForegroundConcurrent === 'number') {
+      maxForegroundConcurrent = Math.max(1, Math.floor(next.maxForegroundConcurrent));
+    }
     if (typeof next.maxVisibleConcurrent === 'number') {
       maxVisibleConcurrent = Math.max(1, Math.floor(next.maxVisibleConcurrent));
     }
@@ -482,6 +496,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
     droppedQueued = 0;
     maxConcurrent = options.maxConcurrent ?? 6;
     maxInteractiveConcurrent = options.maxInteractiveConcurrent ?? 2;
+    maxForegroundConcurrent = options.maxForegroundConcurrent ?? 2;
     maxVisibleConcurrent = options.maxVisibleConcurrent ?? 3;
     maxBackgroundConcurrent = options.maxBackgroundConcurrent ?? 1;
     notify();
@@ -500,6 +515,7 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
 const imageWorkTelemetryScheduler = createImageWorkScheduler({
   maxConcurrent: 6,
   maxInteractiveConcurrent: 2,
+  maxForegroundConcurrent: 2,
   maxVisibleConcurrent: 3,
   maxBackgroundConcurrent: 1,
   onSnapshot: (snapshot) => {
@@ -508,14 +524,17 @@ const imageWorkTelemetryScheduler = createImageWorkScheduler({
       snapshot.activeByPriority[IMAGE_WORK_PRIORITY.currentMetadata] +
       snapshot.activeByPriority[IMAGE_WORK_PRIORITY.currentFull];
     const visibleCount = snapshot.activeByPriority[IMAGE_WORK_PRIORITY.visibleThumbnail];
+    const thumbnailInFlight =
+      snapshot.activeByPriority[IMAGE_WORK_PRIORITY.foregroundThumbnail] + visibleCount;
     const backgroundCount =
       snapshot.activeByPriority[IMAGE_WORK_PRIORITY.adjacentDirectional] +
       snapshot.activeByPriority[IMAGE_WORK_PRIORITY.backgroundPreload];
 
     setThumbnailQueueDepthTelemetry(
-      snapshot.queuedByPriority[IMAGE_WORK_PRIORITY.visibleThumbnail]
+      snapshot.queuedByPriority[IMAGE_WORK_PRIORITY.foregroundThumbnail] +
+        snapshot.queuedByPriority[IMAGE_WORK_PRIORITY.visibleThumbnail]
     );
-    setThumbnailInFlightTelemetry(visibleCount);
+    setThumbnailInFlightTelemetry(thumbnailInFlight);
     setImageWorkQueueDepthTelemetry(snapshot.queueDepth);
     setImageWorkActiveCountTelemetry(snapshot.inFlight);
     setImageWorkActiveInteractiveTelemetry(interactiveCount);
