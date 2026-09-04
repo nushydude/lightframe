@@ -3164,14 +3164,52 @@ body,
 
 .marked-actions-panel {
   right: 0;
-  min-width: 168px;
+  min-width: 220px;
+  max-width: calc(100vw - 24px);
+  gap: 0;
+  padding: 8px;
+}
+
+.marked-actions-panel-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 8px;
+}
+
+.marked-actions-panel-count,
+.marked-actions-panel-note {
+  color: var(--text-secondary);
 }
 
 .marked-actions-panel-count {
-  padding: 2px 8px 6px;
-  color: var(--text-secondary);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.marked-actions-panel-note {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.marked-actions-panel .top-bar-menu-section {
+  gap: 3px;
+}
+
+.marked-actions-panel .top-bar-menu-section + .top-bar-menu-section {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.marked-actions-menu-item {
+  white-space: nowrap;
+}
+
+.marked-actions-panel .top-bar-submenu-panel .top-bar-menu-item {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .context-menu {

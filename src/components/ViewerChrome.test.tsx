@@ -1152,7 +1152,7 @@ describe('ViewerChrome', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
     await act(async () => {
-      fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
+      fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete Marked' }));
     });
 
     expect(useViewerStore.getState().markedPaths).toEqual([
@@ -1193,7 +1193,7 @@ describe('ViewerChrome', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
     await act(async () => {
-      fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete' }));
+      fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Delete Marked' }));
     });
 
     await waitFor(() => {
@@ -1247,7 +1247,7 @@ describe('ViewerChrome', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
-    fireEvent.click(within(bulkToolbar).getByLabelText('Copy marked images'));
+    fireEvent.click(within(bulkToolbar).getByLabelText('Copy marked images to a destination'));
     const destinationButton = within(bulkToolbar).getAllByRole('button', { name: 'Export' })[0];
 
     await act(async () => {
@@ -1299,7 +1299,7 @@ describe('ViewerChrome', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
     const bulkToolbar = await screen.findByRole('toolbar', { name: 'Marked image actions' });
-    fireEvent.click(within(bulkToolbar).getByLabelText('Copy marked images'));
+    fireEvent.click(within(bulkToolbar).getByLabelText('Copy marked images to a destination'));
     const destinationButton = within(bulkToolbar).getAllByRole('button', { name: 'Export' })[0];
 
     await act(async () => {
@@ -1558,6 +1558,82 @@ describe('ViewerChrome', () => {
     expect(screen.queryByRole('toolbar', { name: 'Marked image actions' })).not.toBeInTheDocument();
   });
 
+  it('presents marked actions as grouped commands with non-interactive status text', async () => {
+    const longDestinationLabel =
+      'A very long client export folder name that should not inherit fixed menu no-wrap styling';
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+        {
+          path: 'C:/Images/next.jpg',
+          file_name: 'next.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '2',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/photo.jpg', 'C:/Images/next.jpg'],
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        quickDestinations: [
+          { id: 'long-export', label: longDestinationLabel, path: 'D:/Very Long Export' },
+        ],
+      },
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    const markedActionsTrigger = screen.getByRole('button', { name: 'Marked image actions' });
+    expect(markedActionsTrigger).toHaveTextContent('More');
+    expect(markedActionsTrigger).not.toHaveTextContent('2 marked');
+
+    fireEvent.click(markedActionsTrigger);
+    const markedActions = await screen.findByRole('toolbar', { name: 'Marked image actions' });
+    const markedCount = within(markedActions).getByText('2 marked');
+
+    expect(markedCount.closest('button, summary')).toBeNull();
+    expect(within(markedActions).getByText('Current image marked')).toBeInTheDocument();
+    expect(within(markedActions).getByText('Marking')).toBeInTheDocument();
+    expect(within(markedActions).getByText('Navigate')).toBeInTheDocument();
+    expect(within(markedActions).getByText('Files')).toBeInTheDocument();
+    expect(within(markedActions).getByText('Danger')).toBeInTheDocument();
+    expect(
+      within(markedActions).getByRole('button', { name: 'Mark All Visible Images' })
+    ).toBeInTheDocument();
+    expect(
+      within(markedActions).getByRole('button', { name: 'Go to Last Marked' })
+    ).toBeInTheDocument();
+    const copyToFolder = within(markedActions).getByLabelText(
+      'Copy marked images to a destination'
+    );
+    expect(copyToFolder).toHaveTextContent('Copy to Folder...');
+    expect(copyToFolder).toHaveClass('marked-actions-menu-item');
+    expect(
+      within(markedActions).getByLabelText('Move marked images to a destination')
+    ).toHaveTextContent('Move to Folder...');
+    expect(within(markedActions).getByRole('button', { name: 'Delete Marked' })).toHaveClass(
+      'top-bar-menu-item--danger'
+    );
+
+    fireEvent.click(copyToFolder);
+    within(markedActions)
+      .getAllByRole('button', { name: longDestinationLabel })
+      .forEach((destinationButton) => {
+        expect(destinationButton).not.toHaveClass('marked-actions-menu-item');
+      });
+  });
+
   it('jumps to the most recently marked image from the marked actions menu', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/first.jpg',
@@ -1591,7 +1667,7 @@ describe('ViewerChrome', () => {
     render(<ViewerChrome {...defaultProps} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Jump to Last Marked' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Go to Last Marked' }));
 
     expect(useViewerStore.getState().currentIndex).toBe(2);
     expect(useViewerStore.getState().currentImagePath).toBe('C:/Images/last.jpg');

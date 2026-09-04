@@ -1133,10 +1133,14 @@ export function ViewerChrome({
   const renderMarkedTransferSubmenu = (mode: 'copy' | 'move') => (
     <details className="top-bar-submenu">
       <summary
-        className="top-bar-menu-item"
-        aria-label={mode === 'copy' ? 'Copy marked images' : 'Move marked images'}
+        className="top-bar-menu-item marked-actions-menu-item"
+        aria-label={
+          mode === 'copy'
+            ? 'Copy marked images to a destination'
+            : 'Move marked images to a destination'
+        }
       >
-        {mode === 'copy' ? 'Copy To' : 'Move To'}
+        {mode === 'copy' ? 'Copy to Folder...' : 'Move to Folder...'}
       </summary>
       <div className="top-bar-submenu-panel">
         {quickDestinations.length === 0 ? (
@@ -1620,7 +1624,7 @@ export function ViewerChrome({
                   aria-label="Marked image actions"
                   role="button"
                 >
-                  {markedPaths.length} marked
+                  More
                 </summary>
                 {isMarkedActionsMenuOpen && (
                   <div
@@ -1628,33 +1632,56 @@ export function ViewerChrome({
                     role="toolbar"
                     aria-label="Marked image actions"
                   >
-                    <div className="marked-actions-panel-count" aria-live="polite">
-                      {markedPaths.length} marked
-                      {isCurrentMarked ? ' current' : ''}
+                    <div className="marked-actions-panel-status" aria-live="polite">
+                      <span className="marked-actions-panel-count">
+                        {markedPaths.length} marked
+                      </span>
+                      {isCurrentMarked && (
+                        <span className="marked-actions-panel-note">Current image marked</span>
+                      )}
                     </div>
-                    <button
-                      className="top-bar-menu-item"
-                      onClick={markAllVisibleImages}
-                      type="button"
-                    >
-                      Mark All
-                    </button>
-                    <button className="top-bar-menu-item" onClick={jumpToLastMarked} type="button">
-                      Jump to Last Marked
-                    </button>
-                    <button className="top-bar-menu-item" onClick={clearMarkedPaths} type="button">
-                      Clear
-                    </button>
-                    <span className="contact-sheet-bulk-divider" aria-hidden="true" />
-                    {renderMarkedTransferSubmenu('copy')}
-                    {renderMarkedTransferSubmenu('move')}
-                    <button
-                      className="top-bar-menu-item"
-                      onClick={() => void handleDeleteMarked()}
-                      type="button"
-                    >
-                      Delete
-                    </button>
+                    <section className="top-bar-menu-section" aria-label="Marking actions">
+                      <div className="top-bar-menu-section-label">Marking</div>
+                      <button
+                        className="top-bar-menu-item marked-actions-menu-item"
+                        onClick={markAllVisibleImages}
+                        type="button"
+                      >
+                        Mark All Visible Images
+                      </button>
+                    </section>
+                    <section className="top-bar-menu-section" aria-label="Navigation actions">
+                      <div className="top-bar-menu-section-label">Navigate</div>
+                      <button
+                        className="top-bar-menu-item marked-actions-menu-item"
+                        onClick={jumpToLastMarked}
+                        type="button"
+                      >
+                        Go to Last Marked
+                      </button>
+                      <button
+                        className="top-bar-menu-item marked-actions-menu-item"
+                        onClick={clearMarkedPaths}
+                        type="button"
+                      >
+                        Clear Marked
+                      </button>
+                    </section>
+                    <section className="top-bar-menu-section" aria-label="File operations">
+                      <div className="top-bar-menu-section-label">Files</div>
+                      {renderMarkedTransferSubmenu('copy')}
+                      {renderMarkedTransferSubmenu('move')}
+                    </section>
+                    <section className="top-bar-menu-section" aria-label="Destructive actions">
+                      <div className="top-bar-menu-section-label">Danger</div>
+                      <button
+                        className="top-bar-menu-item top-bar-menu-item--danger marked-actions-menu-item"
+                        onClick={() => void handleDeleteMarked()}
+                        type="button"
+                      >
+                        Delete Marked
+                      </button>
+                    </section>
                   </div>
                 )}
               </details>
