@@ -1,7 +1,7 @@
 {
   "name": "lightframe",
   "private": true,
-  "version": "8.7.9-beta.1",
+  "version": "8.7.9-1",
   "type": "module",
   "packageManager": "pnpm@10.33.2",
   "scripts": {
