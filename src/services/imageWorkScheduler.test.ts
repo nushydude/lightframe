@@ -121,6 +121,63 @@ describe('imageWorkScheduler', () => {
     expect(started).toEqual(['blocker', 'shared', 'visible']);
   });
 
+  it('keeps foreground thumbnail capacity separate from current-image work', async () => {
+    const scheduler = createImageWorkScheduler({
+      maxConcurrent: 4,
+      maxInteractiveConcurrent: 1,
+      maxForegroundConcurrent: 2,
+      maxVisibleConcurrent: 1,
+      maxBackgroundConcurrent: 1,
+    });
+    const firstForeground = createDeferred<string>();
+    const secondForeground = createDeferred<string>();
+    const started: string[] = [];
+
+    const foregroundA = scheduler.schedule({
+      key: 'foreground-a',
+      priority: IMAGE_WORK_PRIORITY.foregroundThumbnail,
+      sourcePath: 'C:/images/a.jpg',
+      run: async () => {
+        started.push('foreground-a');
+        return firstForeground.promise;
+      },
+    });
+    const foregroundB = scheduler.schedule({
+      key: 'foreground-b',
+      priority: IMAGE_WORK_PRIORITY.foregroundThumbnail,
+      sourcePath: 'C:/images/b.jpg',
+      run: async () => {
+        started.push('foreground-b');
+        return secondForeground.promise;
+      },
+    });
+
+    const current = scheduler.schedule({
+      key: 'current-preview',
+      priority: IMAGE_WORK_PRIORITY.currentPreview,
+      sourcePath: 'C:/images/current.jpg',
+      run: async () => {
+        started.push('current-preview');
+        return 'current-preview';
+      },
+    });
+
+    expect(scheduler.getSnapshot()).toMatchObject({
+      inFlight: 3,
+      activeByPriority: {
+        [IMAGE_WORK_PRIORITY.foregroundThumbnail]: 2,
+        [IMAGE_WORK_PRIORITY.currentPreview]: 1,
+      },
+    });
+    await expect(current.promise).resolves.toBe('current-preview');
+    expect(started).toEqual(['foreground-a', 'foreground-b', 'current-preview']);
+
+    firstForeground.resolve('foreground-a');
+    secondForeground.resolve('foreground-b');
+    await expect(foregroundA.promise).resolves.toBe('foreground-a');
+    await expect(foregroundB.promise).resolves.toBe('foreground-b');
+  });
+
   it('drops queued stale work before execution and reports it in the snapshot', async () => {
     const scheduler = createImageWorkScheduler({
       maxConcurrent: 1,

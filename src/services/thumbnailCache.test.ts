@@ -429,4 +429,64 @@ describe('thumbnailCache', () => {
 
     clearThumbnailCacheForTests();
   });
+
+  it('starts foreground thumbnails without releasing stale running capacity', async () => {
+    const {
+      clearThumbnailCacheForTests,
+      evictThumbnailsExcept,
+      getCachedThumbnail,
+      loadThumbnail,
+      preloadThumbnails,
+    } = await loadThumbnailCacheModule();
+
+    const deferredByPath = new Map<
+      string,
+      ReturnType<typeof createDeferred<{ file_path: string; cache_key: string }>>
+    >();
+    getThumbnailMock.mockImplementation((path: string) => {
+      let deferred = deferredByPath.get(path);
+      if (!deferred) {
+        deferred = createDeferred<{ file_path: string; cache_key: string }>();
+        deferredByPath.set(path, deferred);
+      }
+      return deferred.promise;
+    });
+
+    const stalePaths = ['C:/images/stale-a.jpg', 'C:/images/stale-b.jpg', 'C:/images/stale-c.jpg'];
+    const stalePromises = stalePaths.map((path) => loadThumbnail(path).catch(() => undefined));
+    preloadThumbnails(['C:/images/fresh.jpg'], { priority: 'foreground-thumbnail' });
+
+    expect(getThumbnailMock).toHaveBeenCalledTimes(4);
+    evictThumbnailsExcept(new Set(['C:/images/fresh.jpg']));
+
+    await vi.waitFor(() => {
+      expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/fresh.jpg', undefined, undefined);
+    });
+
+    deferredByPath.get('C:/images/fresh.jpg')?.resolve({
+      file_path: 'C:/cache/fresh.jpg',
+      cache_key: 'FRESH',
+    });
+    await vi.waitFor(() => {
+      expect(getCachedThumbnail('C:/images/fresh.jpg')).toBe(
+        'asset://localhost/C:/cache/fresh.jpg?v=FRESH'
+      );
+    });
+
+    for (let index = 0; index < 20; index += 1) {
+      const path = `C:/images/rapid-${index}.jpg`;
+      preloadThumbnails([path], { priority: 'foreground-thumbnail' });
+      evictThumbnailsExcept(new Set([path]));
+    }
+    expect(getThumbnailMock).toHaveBeenCalledTimes(6);
+
+    stalePaths.forEach((path, index) => {
+      deferredByPath.get(path)?.resolve({
+        file_path: `C:/cache/stale-${index}.jpg`,
+        cache_key: `STALE-${index}`,
+      });
+    });
+    await Promise.all(stalePromises);
+    clearThumbnailCacheForTests();
+  });
 });

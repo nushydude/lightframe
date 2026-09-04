@@ -23,6 +23,7 @@ type ThumbnailCacheEntry = {
   lastAccessedAt: number;
   retainedImage?: RetainedImageHandle;
   inFlightPromise?: Promise<string>;
+  inFlightCancel?: () => void;
 };
 
 type ThumbnailLoadedCallback = (path: string) => void;
@@ -30,6 +31,7 @@ type ThumbnailLoadedCallback = (path: string) => void;
 type PreloadThumbnailOptions = {
   onLoaded?: ThumbnailLoadedCallback;
   isActive?: () => boolean;
+  priority?: 'foreground-thumbnail' | 'visible-thumbnail';
 };
 
 export type ThumbnailRequest = {
@@ -219,6 +221,7 @@ function resolveSuccess(path: string, token: string, asset: GeneratedImageAsset)
     updateThumbnailEntryAsset(entry, url, asset.width, asset.height);
     touchEntry(entry);
     entry.inFlightPromise = undefined;
+    entry.inFlightCancel = undefined;
   }
 
   if (isCurrentToken) {
@@ -233,6 +236,7 @@ function resolveSuccess(path: string, token: string, asset: GeneratedImageAsset)
 function resolveError(path: string, token: string, error: unknown): never {
   const entry = thumbnailCache.get(path);
   if (entry?.token === token) {
+    entry.inFlightCancel = undefined;
     deleteThumbnailCacheEntry(path);
     requestMetadataByPath.delete(path);
     clearListeners(path);
@@ -251,7 +255,7 @@ function createAbortError(message: string): Error {
 
 function loadThumbnailWithPriority(
   request: string | ThumbnailRequest,
-  priority: 'visible-thumbnail' | 'background-preload' = 'visible-thumbnail'
+  priority: 'foreground-thumbnail' | 'visible-thumbnail' = 'visible-thumbnail'
 ): Promise<string> {
   const normalized = normalizeRequest(request);
   const { path, sizeBytes, modifiedAt } = normalized;
@@ -274,31 +278,32 @@ function loadThumbnailWithPriority(
   }
 
   requestMetadataByPath.set(path, { path, sizeBytes, modifiedAt });
-  entry.inFlightPromise = imageWorkScheduler
-    .schedule({
-      key: requestKey(path, token),
-      sourcePath: path,
-      priority,
-      generationToken: token,
-      run: async ({ signal }) => {
-        if (signal.aborted) {
-          throw createAbortError('Thumbnail work aborted before execution.');
-        }
+  const scheduled = imageWorkScheduler.schedule({
+    key: requestKey(path, token),
+    sourcePath: path,
+    priority,
+    generationToken: token,
+    run: async ({ signal }) => {
+      if (signal.aborted) {
+        throw createAbortError('Thumbnail work aborted before execution.');
+      }
 
-        const latestRequest = requestMetadataByPath.get(path);
-        if (!latestRequest || metadataToken(latestRequest) !== token) {
-          throw createAbortError('Thumbnail request became stale before execution.');
-        }
+      const latestRequest = requestMetadataByPath.get(path);
+      if (!latestRequest || metadataToken(latestRequest) !== token) {
+        throw createAbortError('Thumbnail request became stale before execution.');
+      }
 
-        const asset = await getThumbnail(path, sizeBytes, modifiedAt ?? undefined);
-        if (signal.aborted) {
-          throw createAbortError('Thumbnail work aborted after execution.');
-        }
+      const asset = await getThumbnail(path, sizeBytes, modifiedAt ?? undefined);
+      if (signal.aborted) {
+        throw createAbortError('Thumbnail work aborted after execution.');
+      }
 
-        return asset;
-      },
-    })
-    .promise.then((asset) => resolveSuccess(path, token, asset))
+      return asset;
+    },
+  });
+  entry.inFlightCancel = scheduled.cancel;
+  entry.inFlightPromise = scheduled.promise
+    .then((asset) => resolveSuccess(path, token, asset))
     .catch((error) => resolveError(path, token, error));
 
   syncThumbnailTelemetry();
@@ -332,6 +337,7 @@ export function loadThumbnail(request: string | ThumbnailRequest): Promise<strin
 }
 
 export function invalidateThumbnail(path: string): void {
+  thumbnailCache.get(path)?.inFlightCancel?.();
   imageWorkScheduler.cancelQueued(
     (job) => job.sourcePath === path && job.key.startsWith(`thumbnail:${path}::`)
   );
@@ -356,7 +362,7 @@ export function preloadThumbnails(
       addListener(path, options);
     }
 
-    void loadThumbnailWithPriority(request, 'visible-thumbnail').catch(() => {
+    void loadThumbnailWithPriority(request, options.priority ?? 'visible-thumbnail').catch(() => {
       // Ignore preload failures and let future attempts retry.
     });
   });
@@ -374,7 +380,7 @@ export function evictThumbnailsExcept(
   clearStaleListeners(latestKeepPaths);
   imageWorkScheduler.cancelQueued(
     (job) =>
-      job.priority === 'visible-thumbnail' &&
+      (job.priority === 'visible-thumbnail' || job.priority === 'foreground-thumbnail') &&
       job.key.startsWith('thumbnail:') &&
       !latestKeepPaths.has(job.sourcePath)
   );

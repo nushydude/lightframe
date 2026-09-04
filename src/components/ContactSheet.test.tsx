@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContactSheet } from './ContactSheet';
 import { useViewerStore } from '../state/viewerStore';
@@ -17,6 +17,8 @@ const {
   chooseQuickDestinationFolderMock,
   openSecondaryWindowMock,
   refreshProjectorStateMock,
+  handleThumbnailLoadedMock,
+  preloadThumbnailsMock,
   writeImageCurationMock,
   writeImageCurationBatchMock,
 } = vi.hoisted(() => ({
@@ -34,6 +36,8 @@ const {
   chooseQuickDestinationFolderMock: vi.fn(async () => null),
   openSecondaryWindowMock: vi.fn(async () => undefined),
   refreshProjectorStateMock: vi.fn(async () => undefined),
+  handleThumbnailLoadedMock: vi.fn(),
+  preloadThumbnailsMock: vi.fn(),
   writeImageCurationMock: vi.fn(async () => undefined),
   writeImageCurationBatchMock: vi.fn((): Promise<void> => Promise.resolve()),
 }));
@@ -46,12 +50,12 @@ vi.mock('../services/thumbnailCache', () => ({
   evictThumbnailsExcept: vi.fn(),
   getCachedThumbnail: vi.fn(() => undefined),
   invalidateThumbnail: vi.fn(),
-  preloadThumbnails: vi.fn(),
+  preloadThumbnails: preloadThumbnailsMock,
 }));
 
 vi.mock('../hooks/useThumbnailRefreshSignal', () => ({
   useThumbnailRefreshSignal: () => ({
-    handleThumbnailLoaded: vi.fn(),
+    handleThumbnailLoaded: handleThumbnailLoadedMock,
     isThumbnailConsumerActive: () => true,
   }),
 }));
@@ -96,9 +100,41 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+function mockAnimationFrames() {
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+  const pendingFrames: FrameRequestCallback[] = [];
+
+  window.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+    pendingFrames.push(callback);
+    return pendingFrames.length;
+  }) as typeof window.requestAnimationFrame;
+  window.cancelAnimationFrame = vi.fn() as typeof window.cancelAnimationFrame;
+
+  return {
+    flushNextFrame: () => pendingFrames.shift()?.(0),
+    pendingFrames,
+    restore: () => {
+      window.requestAnimationFrame = originalRequestAnimationFrame;
+      window.cancelAnimationFrame = originalCancelAnimationFrame;
+    },
+  };
+}
+
+function createContactSheetImages(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    path: `C:/images/${index}.jpg`,
+    file_name: `${index}.jpg`,
+    extension: 'jpg',
+    size_bytes: 1,
+    modified_at: String(index),
+  }));
+}
+
 describe('ContactSheet', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    handleThumbnailLoadedMock.mockImplementation(() => undefined);
     projectorState.isProjectorOpen = false;
     vi.stubGlobal(
       'ResizeObserver',
@@ -313,6 +349,332 @@ describe('ContactSheet', () => {
       expect(document.activeElement).toBe(input);
     }
     expect(input).toHaveValue('photo-7');
+  });
+
+  it('preserves grid scroll when the same folder is published with new image identities', () => {
+    const images = createContactSheetImages(40);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const { container, unmount } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      content.scrollTop = 720;
+      fireEvent.scroll(content);
+      act(() => animationFrames.flushNextFrame());
+
+      act(() => useViewerStore.setState({ images: images.map((image) => ({ ...image })) }));
+
+      expect(content.scrollTop).toBe(720);
+      expect(screen.getByRole('gridcell', { name: '4.jpg' })).toBeInTheDocument();
+      unmount();
+    } finally {
+      animationFrames.restore();
+    }
+  });
+
+  it('preserves grid scroll during a meaningful image-list reconciliation', () => {
+    const images = createContactSheetImages(40);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const { container, unmount } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      content.scrollTop = 900;
+      fireEvent.scroll(content);
+      act(() => animationFrames.flushNextFrame());
+
+      act(() =>
+        useViewerStore.setState({
+          images: [
+            ...images,
+            {
+              path: 'C:/images/appended.jpg',
+              file_name: 'appended.jpg',
+              extension: 'jpg',
+              size_bytes: 1,
+              modified_at: '40',
+            },
+          ],
+        })
+      );
+
+      expect(content.scrollTop).toBe(900);
+      expect(screen.getByRole('gridcell', { name: '7.jpg' })).toBeInTheDocument();
+      unmount();
+    } finally {
+      animationFrames.restore();
+    }
+  });
+
+  it('clamps preserved scroll when a same-query result list shrinks', () => {
+    const images = createContactSheetImages(40);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const { container, unmount } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 400 });
+      content.scrollTop = 1_800;
+      fireEvent.scroll(content);
+      act(() => animationFrames.flushNextFrame());
+
+      act(() => useViewerStore.setState({ images: images.slice(0, 4) }));
+
+      expect(content.scrollTop).toBeGreaterThan(0);
+      expect(content.scrollTop).toBeLessThanOrEqual(720);
+      expect(screen.getByRole('gridcell', { name: '3.jpg' })).toBeInTheDocument();
+      unmount();
+    } finally {
+      animationFrames.restore();
+    }
+  });
+
+  it('resets the grid scroll and virtual window when the normalized query changes', () => {
+    const images = createContactSheetImages(40);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const { container, unmount } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      content.scrollTop = 900;
+      fireEvent.scroll(content);
+      act(() => animationFrames.flushNextFrame());
+      expect(screen.getByRole('gridcell', { name: '7.jpg' })).toBeInTheDocument();
+
+      const input = screen.getByRole('searchbox', { name: 'Search filenames' });
+      fireEvent.change(input, { target: { value: 'jpg' } });
+
+      expect(content.scrollTop).toBe(0);
+      expect(screen.getByRole('gridcell', { name: '0.jpg' })).toBeInTheDocument();
+      expect(screen.queryByRole('gridcell', { name: '7.jpg' })).not.toBeInTheDocument();
+
+      content.scrollTop = 900;
+      fireEvent.scroll(content);
+      act(() => animationFrames.flushNextFrame());
+      fireEvent.change(input, { target: { value: ' JPG ' } });
+      expect(content.scrollTop).toBe(900);
+      unmount();
+    } finally {
+      animationFrames.restore();
+    }
+  });
+
+  it('commits the latest scroll sample received before one animation frame', () => {
+    const images = createContactSheetImages(80);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const { container, unmount } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      content.scrollTop = 100;
+      fireEvent.scroll(content);
+      content.scrollTop = 1_800;
+      fireEvent.scroll(content);
+
+      expect(animationFrames.pendingFrames).toHaveLength(1);
+      act(() => animationFrames.flushNextFrame());
+
+      expect(screen.getByRole('gridcell', { name: '10.jpg' })).toBeInTheDocument();
+      expect(screen.queryByRole('gridcell', { name: '0.jpg' })).not.toBeInTheDocument();
+      unmount();
+    } finally {
+      animationFrames.restore();
+    }
+  });
+
+  it('waits for an idle viewport before starting thumbnail work for the latest window', () => {
+    vi.useFakeTimers();
+    const images = createContactSheetImages(80);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const { container, unmount } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 400 });
+      Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 12_000 });
+      preloadThumbnailsMock.mockClear();
+
+      act(() => {
+        content.scrollTop = 100;
+        fireEvent.scroll(content);
+        content.scrollTop = 900;
+        fireEvent.scroll(content);
+        content.scrollTop = 1_800;
+        fireEvent.scroll(content);
+      });
+      act(() => {
+        animationFrames.flushNextFrame();
+      });
+      expect(preloadThumbnailsMock).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(99);
+      });
+      expect(preloadThumbnailsMock).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+
+      expect(preloadThumbnailsMock).toHaveBeenCalledTimes(1);
+      const requests = preloadThumbnailsMock.mock.calls[0]?.[0] as Array<{ path: string }>;
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests[0]?.path).toBe('C:/images/7.jpg');
+      expect(requests.some((request) => request.path === 'C:/images/0.jpg')).toBe(false);
+      unmount();
+    } finally {
+      animationFrames.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes only for thumbnail completions in the current virtual window', () => {
+    vi.useFakeTimers();
+    const images = createContactSheetImages(80);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+
+    try {
+      const contactSheet = () => (
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const rendered = render(contactSheet());
+      const { container, unmount } = rendered;
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 400 });
+      expect(content.style.overflowAnchor).toBe('none');
+
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      const oldViewportOnLoaded = preloadThumbnailsMock.mock.calls[0]?.[1]?.onLoaded;
+      expect(oldViewportOnLoaded).toEqual(expect.any(Function));
+
+      act(() => {
+        content.scrollTop = 1_800;
+        fireEvent.scroll(content);
+        animationFrames.flushNextFrame();
+      });
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      const currentViewportOnLoaded =
+        preloadThumbnailsMock.mock.calls[preloadThumbnailsMock.mock.calls.length - 1]?.[1]
+          ?.onLoaded;
+      expect(currentViewportOnLoaded).toEqual(expect.any(Function));
+
+      const scrollTo = vi.mocked(content.scrollTo);
+      const scrollTopBeforeCompletion = content.scrollTop;
+      scrollTo.mockClear();
+      handleThumbnailLoadedMock.mockImplementation(() => {
+        rendered.rerender(contactSheet());
+      });
+      handleThumbnailLoadedMock.mockClear();
+      act(() => {
+        oldViewportOnLoaded?.('C:/images/0.jpg');
+      });
+      expect(handleThumbnailLoadedMock).not.toHaveBeenCalled();
+
+      act(() => {
+        currentViewportOnLoaded?.('C:/images/7.jpg');
+      });
+      expect(handleThumbnailLoadedMock).toHaveBeenCalledTimes(1);
+      expect(content.scrollTop).toBe(scrollTopBeforeCompletion);
+      expect(scrollTo).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      animationFrames.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('prunes selected paths when images are removed from the active folder', () => {
+    const images = createContactSheetImages(3);
+    useViewerStore.setState({ currentIndex: 0, images });
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByText('0.jpg'), { ctrlKey: true });
+    fireEvent.click(screen.getByText('1.jpg'), { ctrlKey: true });
+    expect(screen.getAllByText('2 selected')[0]).toBeInTheDocument();
+
+    act(() => useViewerStore.setState({ images: [images[0], images[2]] }));
+
+    expect(screen.getAllByText('1 selected')[0]).toBeInTheDocument();
   });
 
   it('focuses an off-screen target after End and Home virtualize it', () => {

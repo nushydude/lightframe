@@ -51,6 +51,7 @@ const GRID_GAP = 20;
 const GRID_LABEL_HEIGHT = 20;
 const GRID_ROW_HEIGHT = GRID_ITEM_SIZE + GRID_GAP + GRID_LABEL_HEIGHT;
 const GRID_OVERSCAN_ROWS = 3;
+const THUMBNAIL_PRELOAD_IDLE_DELAY_MS = 100;
 
 interface ContactSheetProps {
   onExitGridView: () => Promise<boolean>;
@@ -111,6 +112,9 @@ export function ContactSheet({
   const gridRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const scrollRafRef = useRef<number | null>(null);
+  const thumbnailPreloadTimeoutRef = useRef<number | null>(null);
+  const pendingScrollTopRef = useRef(0);
+  const visibleThumbnailPathsRef = useRef<ReadonlySet<string>>(new Set());
   const bulkCurationPendingRef = useRef(false);
   const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
 
@@ -129,8 +133,12 @@ export function ContactSheet({
   const totalRows = Math.ceil(searchResults.length / columns);
   const activeRow = currentResultIndex >= 0 ? Math.floor(currentResultIndex / columns) : 0;
   const visibleRange = useMemo(() => {
-    const firstRow = Math.max(0, Math.floor(scrollTop / GRID_ROW_HEIGHT) - GRID_OVERSCAN_ROWS);
     const rowCount = Math.ceil(viewportHeight / GRID_ROW_HEIGHT) + GRID_OVERSCAN_ROWS * 2;
+    const maxFirstRow = Math.max(0, totalRows - rowCount);
+    const firstRow = Math.min(
+      maxFirstRow,
+      Math.max(0, Math.floor(scrollTop / GRID_ROW_HEIGHT) - GRID_OVERSCAN_ROWS)
+    );
     const lastRow = Math.min(totalRows, firstRow + rowCount);
 
     return {
@@ -144,6 +152,19 @@ export function ContactSheet({
   const visibleResults = useMemo(
     () => searchResults.slice(visibleRange.startIndex, visibleRange.endIndex),
     [searchResults, visibleRange.endIndex, visibleRange.startIndex]
+  );
+  const visibleThumbnailPaths = useMemo(
+    () => new Set(visibleResults.map(({ image }) => image.path)),
+    [visibleResults]
+  );
+  visibleThumbnailPathsRef.current = visibleThumbnailPaths;
+  const handleVisibleThumbnailLoaded = useCallback(
+    (path: string) => {
+      if (visibleThumbnailPathsRef.current.has(path)) {
+        handleThumbnailLoaded();
+      }
+    },
+    [handleThumbnailLoaded]
   );
   const currentImagePath = currentIndex >= 0 ? (images[currentIndex]?.path ?? null) : null;
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
@@ -188,6 +209,7 @@ export function ContactSheet({
         Math.max(1, Math.floor((availableWidth + GRID_GAP) / (GRID_ITEM_SIZE + GRID_GAP)))
       );
       setViewportHeight(content.clientHeight);
+      pendingScrollTopRef.current = content.scrollTop;
       setScrollTop(content.scrollTop);
     };
 
@@ -197,6 +219,20 @@ export function ContactSheet({
 
     return () => observer.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+
+    const effectiveViewportHeight = content.clientHeight || viewportHeight;
+    const maxScrollTop = Math.max(0, totalRows * GRID_ROW_HEIGHT - effectiveViewportHeight);
+    const nextScrollTop = Math.min(pendingScrollTopRef.current, maxScrollTop);
+    if (nextScrollTop === pendingScrollTopRef.current) return;
+
+    content.scrollTop = nextScrollTop;
+    pendingScrollTopRef.current = nextScrollTop;
+    setScrollTop((current) => (current === nextScrollTop ? current : nextScrollTop));
+  }, [scrollTop, totalRows, viewportHeight]);
 
   useEffect(() => {
     if (!contentRef.current || currentIndex < 0) return;
@@ -212,23 +248,12 @@ export function ContactSheet({
         top: nextScrollTop,
         behavior: 'auto',
       });
+      pendingScrollTopRef.current = nextScrollTop;
       setScrollTop(nextScrollTop);
     }
   }, [activeRow, currentIndex]);
 
   useEffect(() => {
-    preloadThumbnails(
-      visibleResults.map(({ image }) => ({
-        path: image.path,
-        sizeBytes: image.size_bytes,
-        modifiedAt: image.modified_at,
-      })),
-      {
-        onLoaded: handleThumbnailLoaded,
-        isActive: isThumbnailConsumerActive,
-      }
-    );
-
     const keepStart = Math.max(0, visibleRange.startIndex - columns * GRID_OVERSCAN_ROWS * 4);
     const keepEnd = Math.min(
       searchResults.length,
@@ -238,9 +263,35 @@ export function ContactSheet({
       searchResults.slice(keepStart, keepEnd).map(({ image }) => image.path)
     );
     evictThumbnailsExcept(keepPaths);
+
+    if (thumbnailPreloadTimeoutRef.current !== null) {
+      window.clearTimeout(thumbnailPreloadTimeoutRef.current);
+    }
+    thumbnailPreloadTimeoutRef.current = window.setTimeout(() => {
+      thumbnailPreloadTimeoutRef.current = null;
+      preloadThumbnails(
+        visibleResults.map(({ image }) => ({
+          path: image.path,
+          sizeBytes: image.size_bytes,
+          modifiedAt: image.modified_at,
+        })),
+        {
+          onLoaded: handleVisibleThumbnailLoaded,
+          isActive: isThumbnailConsumerActive,
+          priority: 'foreground-thumbnail',
+        }
+      );
+    }, THUMBNAIL_PRELOAD_IDLE_DELAY_MS);
+
+    return () => {
+      if (thumbnailPreloadTimeoutRef.current !== null) {
+        window.clearTimeout(thumbnailPreloadTimeoutRef.current);
+        thumbnailPreloadTimeoutRef.current = null;
+      }
+    };
   }, [
     columns,
-    handleThumbnailLoaded,
+    handleVisibleThumbnailLoaded,
     images,
     isThumbnailConsumerActive,
     searchResults,
@@ -266,19 +317,24 @@ export function ContactSheet({
     const visiblePaths = new Set(searchResults.map(({ image }) => image.path));
     setSelectedPaths((current) => current.filter((path) => visiblePaths.has(path)));
     setLastSelectedIndex(null);
+  }, [searchResults]);
+
+  useEffect(() => {
+    pendingScrollTopRef.current = 0;
     setScrollTop(0);
     if (contentRef.current) {
       contentRef.current.scrollTop = 0;
     }
-  }, [normalizedQuery, searchResults]);
+  }, [normalizedQuery]);
 
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const nextScrollTop = event.currentTarget.scrollTop;
+    pendingScrollTopRef.current = nextScrollTop;
     if (scrollRafRef.current !== null) return;
 
     scrollRafRef.current = window.requestAnimationFrame(() => {
       scrollRafRef.current = null;
-      setScrollTop(nextScrollTop);
+      setScrollTop(pendingScrollTopRef.current);
     });
   };
 
@@ -303,6 +359,7 @@ export function ContactSheet({
       top: nextScrollTop,
       behavior: 'auto',
     });
+    pendingScrollTopRef.current = nextScrollTop;
     setScrollTop(nextScrollTop);
   };
 
@@ -986,7 +1043,12 @@ export function ContactSheet({
           </button>
         </div>
       )}
-      <div className="contact-sheet-content" ref={contentRef} onScroll={handleScroll}>
+      <div
+        className="contact-sheet-content"
+        ref={contentRef}
+        onScroll={handleScroll}
+        style={{ overflowAnchor: 'none' }}
+      >
         {searchResults.length === 0 && normalizedQuery ? (
           <div className="contact-sheet-empty">No filenames match “{searchQuery.trim()}”.</div>
         ) : (
