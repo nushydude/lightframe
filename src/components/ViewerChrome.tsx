@@ -308,6 +308,9 @@ export function ViewerChrome({
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
   const [isMarkedActionsMenuOpen, setIsMarkedActionsMenuOpen] = useState(false);
+  const [markedTransferMenuMode, setMarkedTransferMenuMode] = useState<'copy' | 'move' | null>(
+    null
+  );
   const [isEditQueuePanelOpen, setIsEditQueuePanelOpen] = useState(false);
   const [isCustomizingToolbar, setIsCustomizingToolbar] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -379,6 +382,7 @@ export function ViewerChrome({
   );
 
   const closeOverflowMenus = useCallback(() => {
+    setMarkedTransferMenuMode(null);
     const menuNodes = [chromeRootRef.current, ...menuRefs.map((ref) => ref.current)];
 
     for (const node of menuNodes) {
@@ -1130,45 +1134,57 @@ export function ViewerChrome({
     </details>
   );
 
-  const renderMarkedTransferSubmenu = (mode: 'copy' | 'move') => (
-    <details className="top-bar-submenu">
-      <summary
-        className="top-bar-menu-item marked-actions-menu-item"
-        aria-label={
-          mode === 'copy'
-            ? 'Copy marked images to a destination'
-            : 'Move marked images to a destination'
-        }
-      >
-        {mode === 'copy' ? 'Copy to Folder...' : 'Move to Folder...'}
-      </summary>
-      <div className="top-bar-submenu-panel">
-        {quickDestinations.length === 0 ? (
-          <span className="top-bar-menu-empty">
-            No destinations configured yet. Use Choose Folder or add saved folders in Settings.
-          </span>
-        ) : (
-          quickDestinations.map((destination) => (
-            <button
-              key={`${mode}:${destination.id}`}
-              className="top-bar-menu-item"
-              onClick={() => void handleBulkTransfer(destination, mode)}
-              type="button"
-            >
-              {destination.label}
-            </button>
-          ))
-        )}
-        <button
-          className="top-bar-menu-item"
-          onClick={() => void handleChooseBulkTransferFolder(mode)}
-          type="button"
+  const renderMarkedTransferSubmenu = (mode: 'copy' | 'move') => {
+    const isExpanded = markedTransferMenuMode === mode;
+
+    return (
+      <details className="top-bar-submenu marked-actions-transfer-submenu" open={isExpanded}>
+        <summary
+          className="top-bar-menu-item marked-actions-menu-item"
+          aria-expanded={isExpanded}
+          aria-label={
+            mode === 'copy'
+              ? 'Copy marked images to a destination'
+              : 'Move marked images to a destination'
+          }
+          onClick={(event) => {
+            event.preventDefault();
+            setMarkedTransferMenuMode((currentMode) => (currentMode === mode ? null : mode));
+          }}
         >
-          Choose Folder...
-        </button>
-      </div>
-    </details>
-  );
+          <span>{mode === 'copy' ? 'Copy to Folder...' : 'Move to Folder...'}</span>
+          <span className="marked-actions-disclosure" aria-hidden="true">
+            ▾
+          </span>
+        </summary>
+        <div className="top-bar-submenu-panel">
+          {quickDestinations.length === 0 ? (
+            <span className="top-bar-menu-empty">
+              No destinations configured yet. Use Choose Folder or add saved folders in Settings.
+            </span>
+          ) : (
+            quickDestinations.map((destination) => (
+              <button
+                key={`${mode}:${destination.id}`}
+                className="top-bar-menu-item"
+                onClick={() => void handleBulkTransfer(destination, mode)}
+                type="button"
+              >
+                {destination.label}
+              </button>
+            ))
+          )}
+          <button
+            className="top-bar-menu-item"
+            onClick={() => void handleChooseBulkTransferFolder(mode)}
+            type="button"
+          >
+            Choose Folder...
+          </button>
+        </div>
+      </details>
+    );
+  };
 
   const secondaryActionDefinitions: SecondaryActionDefinition[] = [
     {
@@ -1617,7 +1633,12 @@ export function ViewerChrome({
               <details
                 className="top-bar-menu marked-actions-trigger"
                 ref={markedActionsMenuRef}
-                onToggle={(event) => setIsMarkedActionsMenuOpen(event.currentTarget.open)}
+                onToggle={(event) => {
+                  setIsMarkedActionsMenuOpen(event.currentTarget.open);
+                  if (!event.currentTarget.open) {
+                    setMarkedTransferMenuMode(null);
+                  }
+                }}
               >
                 <summary
                   className="image-counter marked-actions-summary"

@@ -3207,6 +3207,35 @@ body,
   white-space: nowrap;
 }
 
+.marked-actions-transfer-submenu > summary.marked-actions-menu-item {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.marked-actions-disclosure {
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  transform: rotate(-90deg);
+  transition:
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.marked-actions-transfer-submenu[open] > summary .marked-actions-disclosure {
+  color: var(--text-primary);
+  transform: rotate(0deg);
+}
+
+.marked-actions-panel .top-bar-submenu-panel {
+  max-height: min(220px, 38vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .marked-actions-panel .top-bar-submenu-panel .top-bar-menu-item {
   overflow-wrap: anywhere;
   white-space: normal;

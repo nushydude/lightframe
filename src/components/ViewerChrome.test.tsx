@@ -1634,6 +1634,58 @@ describe('ViewerChrome', () => {
       });
   });
 
+  it('keeps marked Copy and Move destination menus mutually exclusive', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.jpg',
+      images: [
+        {
+          path: 'C:/Images/photo.jpg',
+          file_name: 'photo.jpg',
+          extension: 'jpg',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+      markedPaths: ['C:/Images/photo.jpg'],
+    });
+    useSettingsStore.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        quickDestinations: [{ id: 'export', label: 'Export', path: 'D:/Export' }],
+      },
+    }));
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    const markedActions = await screen.findByRole('toolbar', { name: 'Marked image actions' });
+    const copySummary = within(markedActions).getByLabelText('Copy marked images to a destination');
+    const moveSummary = within(markedActions).getByLabelText('Move marked images to a destination');
+    const copyMenu = copySummary.closest('details');
+    const moveMenu = moveSummary.closest('details');
+
+    expect(copySummary).toHaveAttribute('aria-expanded', 'false');
+    expect(moveSummary).toHaveAttribute('aria-expanded', 'false');
+    expect(copyMenu).not.toHaveAttribute('open');
+    expect(moveMenu).not.toHaveAttribute('open');
+
+    fireEvent.click(copySummary);
+
+    expect(copySummary).toHaveAttribute('aria-expanded', 'true');
+    expect(moveSummary).toHaveAttribute('aria-expanded', 'false');
+    expect(copyMenu).toHaveAttribute('open');
+    expect(moveMenu).not.toHaveAttribute('open');
+
+    fireEvent.click(moveSummary);
+
+    expect(copySummary).toHaveAttribute('aria-expanded', 'false');
+    expect(moveSummary).toHaveAttribute('aria-expanded', 'true');
+    expect(copyMenu).not.toHaveAttribute('open');
+    expect(moveMenu).toHaveAttribute('open');
+  });
+
   it('jumps to the most recently marked image from the marked actions menu', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/first.jpg',
