@@ -6,7 +6,6 @@ import { invalidateThumbnail } from '../services/thumbnailCache';
 import { recordImageSelectedTelemetry } from '../services/performanceTelemetry';
 import { overwriteWithCrop, saveRotatedImage } from '../services/tauriCommands';
 import {
-  getCurationFilterEmptyMessage,
   isFavoriteCuration,
   matchesCurationFilter,
   sortImagesForCurationFilter,
@@ -559,7 +558,7 @@ function getFavoriteSafeImagesState(
   nextCurationStateByPath = state.curationStateByPath,
   preferredCurrentPath = state.currentImagePath
 ): Partial<ViewerState> {
-  const filteredState = getFilteredImagesState(
+  return getFilteredImagesState(
     state,
     nextAllImages,
     nextCurationFilter,
@@ -567,26 +566,6 @@ function getFavoriteSafeImagesState(
     nextCurationStateByPath,
     preferredCurrentPath
   );
-
-  if (
-    nextCurationFilter === 'all' ||
-    nextAllImages.length === 0 ||
-    (filteredState.images?.length ?? 0) > 0
-  ) {
-    return filteredState;
-  }
-
-  const emptyMessage = getCurationFilterEmptyMessage(nextCurationFilter);
-  return {
-    ...getFilteredImagesState(
-      state,
-      nextAllImages,
-      'all',
-      nextFavoritePaths,
-      nextCurationStateByPath
-    ),
-    errorMessage: emptyMessage,
-  };
 }
 
 export const useViewerStore = create<ViewerState>((set, get) => {

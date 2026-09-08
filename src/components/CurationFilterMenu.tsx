@@ -49,8 +49,10 @@ export function CurationFilterMenu({
                 }
               }}
               type="button"
+              aria-pressed={isActive}
             >
               {option.label}
+              {isActive && <span className="sr-only"> selected</span>}
             </button>
           );
         })}

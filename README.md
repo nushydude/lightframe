@@ -27,7 +27,11 @@ uses cross-platform Tauri where possible.
 - Deep zoom for large JPEG images through cached viewport tiles, with Windows-native tiled detail for
   HEIC/HEIF when the OS codec is available.
 - Thumbnail strip and virtualized contact sheet grid for large folders.
-- Favorites, 0-5 star ratings, curation filters, saved review presets, and side-by-side compare mode.
+- Explicit keep/reject/unreviewed review decisions, favorites, 0-5 star ratings, curation filters,
+  saved review presets, review progress counts, and side-by-side compare mode.
+- Use P to keep, X to reject, and U to reset a review decision. Decisions preserve stars and
+  favorites; rejecting never moves or deletes a file. Optional auto-advance applies only to saved
+  single-image viewer decisions and defaults off.
 - Bulk selection in the contact sheet with batch favorite/rating updates and quick copy/move actions.
 - Crop preview, crop copy, crop overwrite, rotation preview/save, high-quality scaled export, and a
   retryable background edit queue for crop/scale jobs.
@@ -35,9 +39,9 @@ uses cross-platform Tauri where possible.
   clipboard, and move to trash.
 - Projector mode that opens a synced fullscreen secondary window for second-display review.
 - EXIF/file info panel with XMP sidecar support for RAW workflows.
-- Settings for theme, default fit mode, slideshow behavior, folder auto-refresh, window bounds,
-  projector behavior, performance mode, update channel, recent folders, quick destinations, and
-  external editor.
+- Settings for theme, default fit mode, slideshow behavior, folder auto-refresh, optional
+  viewer-only auto-advance after review decisions, window bounds, projector behavior, performance
+  mode, update channel, recent folders, quick destinations, and external editor.
 - Format-support diagnostics, generated-cache controls, performance telemetry overlay, and support
   snapshot export.
 - Built-in update checks through the Tauri updater plugin.
@@ -165,8 +169,9 @@ Settings check that manifest instead of the stable `/latest` release.
   editing queue, telemetry, and tests.
 - `src-tauri/` contains the Tauri shell, Rust commands, folder watching, native Windows codec
   integration, generated asset caches, image editing operations, and Rust tests. Curation metadata
-  uses 256 incrementally updated shards with a write-ahead journal; legacy `curation.json` data is
-  migrated automatically and retained as a backup.
+  uses 256 incrementally updated shards with a write-ahead journal; legacy `curation.json` data
+  infers kept status from existing favorites or nonzero ratings during automatic migration and is
+  retained as a backup.
 - `.github/workflows/ci.yml` runs frontend, Rust, and Windows packaged-startup quality gates.
 - `.github/workflows/release.yml` builds draft Windows stable and prerelease packages from version
   tags.

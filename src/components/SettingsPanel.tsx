@@ -506,6 +506,26 @@ export function SettingsPanel() {
             </div>
 
             <div className="setting-row">
+              <label className="setting-label" htmlFor="setting-auto-advance-review">
+                Advance after review decision
+              </label>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={settings.autoAdvanceAfterReviewDecision}
+                  onChange={(e) => handleChange('autoAdvanceAfterReviewDecision', e.target.checked)}
+                  id="setting-auto-advance-review"
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <p className="setting-help">
+              Viewer-only keep/reject/unreviewed decisions can move to the next image after they
+              save. Bulk actions and rating changes stay on the current image. Decisions preserve
+              stars and favorites. Reject never moves or deletes a file.
+            </p>
+
+            <div className="setting-row">
               <span className="setting-label">Remember window size</span>
               <label className="toggle-switch">
                 <input

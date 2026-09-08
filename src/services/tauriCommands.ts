@@ -10,7 +10,7 @@ import {
 } from '@tauri-apps/api/window';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { ImageFile, ImageMetadata } from '../types/image';
-import type { ImageCuration } from '../types/curation';
+import type { ImageCuration, ReviewStatus, RustImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
 import { settingsFromRust, settingsToRust } from '../types/settings';
 import { projectorWindowTitle } from './windowTitle';
@@ -114,6 +114,7 @@ export interface ImageCurationUpdate {
   filePath: string;
   favorite: boolean;
   rating: number;
+  reviewStatus: ReviewStatus;
 }
 
 interface ImageTransferSuccess {
@@ -285,37 +286,89 @@ export async function saveDiagnosticsSnapshot(path: string, content: string): Pr
 
 /** Read persisted curation metadata (favorite + rating) for scanned images */
 export async function readCurationMetadata(): Promise<Record<string, ImageCuration>> {
-  return invoke<Record<string, ImageCuration>>('read_curation_metadata');
+  return curationRecordFromRust(
+    await invoke<Record<string, RustImageCuration>>('read_curation_metadata')
+  );
 }
 
 /** Read curation metadata only for the supplied active-folder or startup paths. */
 export async function readCurationMetadataForPaths(
   filePaths: string[]
 ): Promise<Record<string, ImageCuration>> {
-  return invoke<Record<string, ImageCuration>>('read_curation_metadata_for_paths', { filePaths });
+  return curationRecordFromRust(
+    await invoke<Record<string, RustImageCuration>>('read_curation_metadata_for_paths', {
+      filePaths,
+    })
+  );
 }
 
-/** Write favorite/rating metadata for a single image path */
+/** Write favorite/rating/review metadata for a single image path */
 export async function writeImageCuration(
   filePath: string,
   favorite: boolean,
-  rating: number
+  rating: number,
+  reviewStatus: ReviewStatus
 ): Promise<void> {
-  return invoke('write_image_curation', { filePath, favorite, rating });
+  assertReviewStatus(reviewStatus);
+  return invoke('write_image_curation', { filePath, favorite, rating, reviewStatus });
 }
 
-/** Write favorite/rating metadata for multiple image paths in one backend pass */
+/** Write favorite/rating/review metadata for multiple image paths in one backend pass */
 export async function writeImageCurationBatch(updates: ImageCurationUpdate[]): Promise<void> {
   if (updates.length === 0) {
     return;
   }
 
-  return invoke('write_image_curation_batch', { updates });
+  updates.forEach((update) => assertReviewStatus(update.reviewStatus));
+  return invoke('write_image_curation_batch', {
+    updates: updates.map((update) => ({
+      filePath: update.filePath,
+      favorite: update.favorite,
+      rating: update.rating,
+      reviewStatus: update.reviewStatus,
+    })),
+  });
 }
 
-/** Remove curation metadata for a single image path */
+/** Reset only the review decision for a single image path */
+export async function resetImageReviewDecision(filePath: string): Promise<void> {
+  return invoke('reset_image_review_decision', { filePath });
+}
+
+/** Remove all curation metadata for a single image path */
 export async function clearImageCuration(filePath: string): Promise<void> {
   return invoke('clear_image_curation', { filePath });
+}
+
+function curationRecordFromRust(
+  raw: Record<string, RustImageCuration>
+): Record<string, ImageCuration> {
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, value]) => {
+      const path = typeof value.path === 'string' && value.path.trim() ? value.path.trim() : key;
+      const favorite = Boolean(value.favorite);
+      const rating =
+        typeof value.rating === 'number' && Number.isFinite(value.rating) ? value.rating : 0;
+      const explicitStatus = parseReviewStatus(value.review_status);
+      const reviewStatus = explicitStatus ?? (favorite || rating > 0 ? 'keep' : 'unreviewed');
+      const updated_at =
+        typeof value.updated_at === 'number' && Number.isFinite(value.updated_at)
+          ? value.updated_at
+          : 0;
+
+      return [path, { path, favorite, rating, reviewStatus, updated_at }];
+    })
+  );
+}
+
+function parseReviewStatus(value: unknown): ReviewStatus | null {
+  return value === 'keep' || value === 'reject' || value === 'unreviewed' ? value : null;
+}
+
+function assertReviewStatus(value: unknown): asserts value is ReviewStatus {
+  if (parseReviewStatus(value) === null) {
+    throw new TypeError(`Invalid review status: ${String(value)}`);
+  }
 }
 
 /** Move a file to the OS trash / recycle bin */

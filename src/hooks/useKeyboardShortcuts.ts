@@ -82,6 +82,7 @@ export function useKeyboardShortcuts(handlers: KeyboardHandlers) {
       if (
         dispatchApplicationShortcut(e, {
           currentImagePath,
+          viewMode,
           isFullscreen,
           isSlideshowActive,
           showSettings,

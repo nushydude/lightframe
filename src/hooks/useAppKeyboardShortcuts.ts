@@ -6,6 +6,7 @@ import {
   deleteCurrentImage,
   openCurrentImageInEditor,
 } from '../services/viewerActions';
+import { setReviewDecisionForCurrentImage } from '../services/reviewDecisionActions';
 
 export function useAppKeyboardShortcuts({
   openFilePicker,
@@ -78,6 +79,9 @@ export function useAppKeyboardShortcuts({
     setRatingCurrent: (rating) => {
       const path = useViewerStore.getState().currentImagePath;
       if (path) void setRating(path, rating);
+    },
+    setReviewStatusCurrent: (status) => {
+      void setReviewDecisionForCurrentImage(status);
     },
   };
 

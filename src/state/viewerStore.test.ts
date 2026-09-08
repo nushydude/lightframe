@@ -340,6 +340,28 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().currentImagePath).toBe('3.jpg');
   });
 
+  it('filters explicit review decisions independently of rating and favorite', () => {
+    useViewerStore.getState().setImages([
+      { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
+      { path: '3.jpg', file_name: '3', extension: 'jpg', size_bytes: 0, modified_at: null },
+    ]);
+    useViewerStore.getState().syncFavoriteFilter({
+      '1.jpg': { favorite: true, rating: 5, reviewStatus: 'unreviewed' },
+      '2.jpg': { favorite: false, rating: 0, reviewStatus: 'reject' },
+      '3.jpg': { favorite: false, rating: 0, reviewStatus: 'keep' },
+    });
+
+    useViewerStore.getState().setCurationFilter('unreviewed');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg']);
+
+    useViewerStore.getState().setCurationFilter('reject');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['2.jpg']);
+
+    useViewerStore.getState().setCurationFilter('keep');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['3.jpg']);
+  });
+
   it('removes multiple images in one pass while preserving the nearest current image', () => {
     useViewerStore.setState({
       images: [
@@ -386,7 +408,7 @@ describe('viewerStore', () => {
     expect(invalidateThumbnailMock).toHaveBeenCalledTimes(3);
   });
 
-  it('keeps the full list visible when favorites-only has no matches', () => {
+  it('shows an empty list when favorites-only has no matches', () => {
     useViewerStore.getState().setImages([
       { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
       { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
@@ -394,12 +416,12 @@ describe('viewerStore', () => {
 
     useViewerStore.getState().setShowOnlyFavorites(true);
 
-    expect(useViewerStore.getState().showOnlyFavorites).toBe(false);
-    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg', '2.jpg']);
-    expect(useViewerStore.getState().errorMessage).toContain('No favorite images');
+    expect(useViewerStore.getState().showOnlyFavorites).toBe(true);
+    expect(useViewerStore.getState().images).toEqual([]);
+    expect(useViewerStore.getState().currentImagePath).toBeNull();
   });
 
-  it('keeps the full list visible when a curation filter has no matches', () => {
+  it('shows an empty list when a curation filter has no matches', () => {
     useViewerStore.getState().setImages([
       { path: '1.jpg', file_name: '1', extension: 'jpg', size_bytes: 0, modified_at: null },
       { path: '2.jpg', file_name: '2', extension: 'jpg', size_bytes: 0, modified_at: null },
@@ -407,9 +429,9 @@ describe('viewerStore', () => {
 
     useViewerStore.getState().setCurationFilter('rated5');
 
-    expect(useViewerStore.getState().curationFilter).toBe('all');
-    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual(['1.jpg', '2.jpg']);
-    expect(useViewerStore.getState().errorMessage).toContain('No 5-star images');
+    expect(useViewerStore.getState().curationFilter).toBe('rated5');
+    expect(useViewerStore.getState().images).toEqual([]);
+    expect(useViewerStore.getState().currentImagePath).toBeNull();
   });
 
   it('should reset store to initial state', () => {

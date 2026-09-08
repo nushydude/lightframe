@@ -4,8 +4,12 @@ import {
   acquireSlideshowDisplayInhibition,
   getImageCaption,
   getParentFolder,
+  readCurationMetadata,
   releaseSlideshowDisplayInhibition,
+  resetImageReviewDecision,
   updateRecentFoldersJumpList,
+  writeImageCuration,
+  writeImageCurationBatch,
 } from './tauriCommands';
 
 describe('tauriCommands path helpers', () => {
@@ -52,6 +56,78 @@ describe('tauriCommands display inhibition wrappers', () => {
       ['acquire_slideshow_display_inhibition'],
       ['release_slideshow_display_inhibition'],
     ]);
+  });
+});
+
+describe('tauriCommands curation wrappers', () => {
+  it('maps rust review_status payloads and infers legacy keep from ratings', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      'C:/Images/explicit.jpg': {
+        path: 'C:/Images/explicit.jpg',
+        favorite: false,
+        rating: 4,
+        review_status: 'unreviewed',
+        updated_at: 12,
+      },
+      'C:/Images/legacy.jpg': {
+        path: 'C:/Images/legacy.jpg',
+        favorite: false,
+        rating: 5,
+        updated_at: 13,
+      },
+    });
+
+    await expect(readCurationMetadata()).resolves.toMatchObject({
+      'C:/Images/explicit.jpg': { reviewStatus: 'unreviewed', rating: 4 },
+      'C:/Images/legacy.jpg': { reviewStatus: 'keep', rating: 5 },
+    });
+  });
+
+  it('sends reviewStatus through single and batch write commands', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await writeImageCuration('C:/Images/one.jpg', false, 0, 'reject');
+    await writeImageCurationBatch([
+      { filePath: 'C:/Images/two.jpg', favorite: true, rating: 5, reviewStatus: 'keep' },
+    ]);
+    await resetImageReviewDecision('C:/Images/two.jpg');
+
+    expect(vi.mocked(invoke).mock.calls.slice(-3)).toEqual([
+      [
+        'write_image_curation',
+        { filePath: 'C:/Images/one.jpg', favorite: false, rating: 0, reviewStatus: 'reject' },
+      ],
+      [
+        'write_image_curation_batch',
+        {
+          updates: [
+            { filePath: 'C:/Images/two.jpg', favorite: true, rating: 5, reviewStatus: 'keep' },
+          ],
+        },
+      ],
+      ['reset_image_review_decision', { filePath: 'C:/Images/two.jpg' }],
+    ]);
+  });
+
+  it('rejects malformed review statuses before IPC writes', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    vi.mocked(invoke).mockClear();
+
+    await expect(
+      writeImageCuration('C:/Images/one.jpg', false, 0, 'maybe' as never)
+    ).rejects.toThrow('Invalid review status: maybe');
+    await expect(
+      writeImageCurationBatch([
+        {
+          filePath: 'C:/Images/two.jpg',
+          favorite: false,
+          rating: 0,
+          reviewStatus: 'maybe' as never,
+        },
+      ])
+    ).rejects.toThrow('Invalid review status: maybe');
+
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
   });
 });
 

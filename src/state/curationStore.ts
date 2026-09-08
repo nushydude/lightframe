@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import type { ImageCuration } from '../types/curation';
+import type { ImageCuration, ReviewStatus } from '../types/curation';
 import {
   clearImageCuration as clearImageCurationCommand,
   readCurationMetadata,
   readCurationMetadataForPaths,
+  resetImageReviewDecision as resetImageReviewDecisionCommand,
   writeImageCuration,
   writeImageCurationBatch,
   type ImageCurationUpdate,
@@ -12,9 +13,12 @@ import {
 export type CurationIntent =
   | { kind: 'toggleFavorite'; filePath: string }
   | { kind: 'setRating'; filePath: string; rating: number }
+  | { kind: 'setReviewStatus'; filePath: string; reviewStatus: ReviewStatus }
+  | { kind: 'resetReviewDecision'; filePath: string }
   | { kind: 'setFavoriteForPaths'; filePaths: string[]; favorite: boolean }
   | { kind: 'setRatingForPaths'; filePaths: string[]; rating: number }
-  | { kind: 'clear'; filePath: string };
+  | { kind: 'setReviewStatusForPaths'; filePaths: string[]; reviewStatus: ReviewStatus }
+  | { kind: 'clearAll'; filePath: string };
 
 type CurationLoadStatus = 'idle' | 'loading' | 'loaded' | 'error';
 type CurationMutationStatus = 'idle' | 'saving' | 'error';
@@ -45,8 +49,11 @@ interface CurationState {
   loadCuration: (filePaths?: string[]) => Promise<void>;
   toggleFavorite: (filePath: string) => Promise<void>;
   setRating: (filePath: string, rating: number) => Promise<void>;
+  setReviewStatus: (filePath: string, reviewStatus: ReviewStatus) => Promise<boolean>;
+  resetReviewDecision: (filePath: string) => Promise<void>;
   setFavoriteForPaths: (filePaths: string[], favorite: boolean) => Promise<void>;
   setRatingForPaths: (filePaths: string[], rating: number) => Promise<void>;
+  setReviewStatusForPaths: (filePaths: string[], reviewStatus: ReviewStatus) => Promise<void>;
   clearImageCuration: (filePath: string) => Promise<void>;
   retryLastFailedOperation: () => Promise<void>;
   dismissError: () => void;
@@ -111,17 +118,33 @@ function clampRating(rating: number): number {
   return Math.max(0, Math.min(5, Math.round(rating)));
 }
 
-function buildEntry(filePath: string, favorite: boolean, rating: number): ImageCuration {
+function normalizeReviewStatus(value: unknown): ReviewStatus {
+  return value === 'keep' || value === 'reject' || value === 'unreviewed' ? value : 'unreviewed';
+}
+
+function assertReviewStatus(value: unknown): asserts value is ReviewStatus {
+  if (value !== 'keep' && value !== 'reject' && value !== 'unreviewed') {
+    throw new TypeError(`Invalid review status: ${String(value)}`);
+  }
+}
+
+function buildEntry(
+  filePath: string,
+  favorite: boolean,
+  rating: number,
+  reviewStatus: ReviewStatus
+): ImageCuration {
   return {
     path: filePath,
     favorite,
     rating: clampRating(rating),
+    reviewStatus,
     updated_at: Math.floor(Date.now() / 1000),
   };
 }
 
-function shouldPersist(favorite: boolean, rating: number): boolean {
-  return favorite || clampRating(rating) > 0;
+function shouldPersist(favorite: boolean, rating: number, reviewStatus: ReviewStatus): boolean {
+  return favorite || clampRating(rating) > 0 || reviewStatus !== 'unreviewed';
 }
 
 function shouldPromoteRatingToFavorite(rating: number): boolean {
@@ -157,11 +180,18 @@ function normalizeCuration(
     if (!normalizedPath) continue;
     const rating = clampRating(value.rating);
     const favorite = Boolean(value.favorite);
-    if (!shouldPersist(favorite, rating)) continue;
+    const hasExplicitReviewStatus = Object.prototype.hasOwnProperty.call(value, 'reviewStatus');
+    const reviewStatus = hasExplicitReviewStatus
+      ? normalizeReviewStatus(value.reviewStatus)
+      : favorite || rating > 0
+        ? 'keep'
+        : 'unreviewed';
+    if (!shouldPersist(favorite, rating, reviewStatus)) continue;
     normalized[normalizedPath] = {
       path: normalizedPath,
       favorite,
       rating,
+      reviewStatus,
       updated_at: value.updated_at ?? Math.floor(Date.now() / 1000),
     };
   }
@@ -184,13 +214,18 @@ function getMutableCurationIndex(state: CurationState): CurationIndex {
 
 function applyLocalUpdates(
   set: (updater: (state: CurationState) => Partial<CurationState>) => void,
-  updates: Array<{ filePath: string; favorite: boolean; rating: number }>
+  updates: Array<{
+    filePath: string;
+    favorite: boolean;
+    rating: number;
+    reviewStatus: ReviewStatus;
+  }>
 ): void {
   set((state) => {
     const index = getMutableCurationIndex(state);
     for (const update of updates) {
-      const nextEntry = shouldPersist(update.favorite, update.rating)
-        ? buildEntry(update.filePath, update.favorite, update.rating)
+      const nextEntry = shouldPersist(update.favorite, update.rating, update.reviewStatus)
+        ? buildEntry(update.filePath, update.favorite, update.rating, update.reviewStatus)
         : null;
       setCurationIndexEntry(index, update.filePath, nextEntry);
       const favoritePath = nextEntry?.path ?? update.filePath;
@@ -245,6 +280,122 @@ function commitLoadedCuration(
   });
 }
 
+type CurationSet = (
+  partial: Partial<CurationState> | ((state: CurationState) => Partial<CurationState>)
+) => void;
+type CurationGet = () => CurationState;
+type SinglePathIntent = Extract<
+  CurationIntent,
+  { kind: 'toggleFavorite' | 'setRating' | 'setReviewStatus' | 'resetReviewDecision' | 'clearAll' }
+>;
+type BatchIntent = Extract<
+  CurationIntent,
+  { kind: 'setFavoriteForPaths' | 'setRatingForPaths' | 'setReviewStatusForPaths' }
+>;
+
+function currentUpdateValues(index: CurationIndex, filePath: string): ImageCurationUpdate {
+  const current = curationIndexEntry(index, filePath);
+  return {
+    filePath,
+    favorite: Boolean(current?.favorite),
+    rating: clampRating(current?.rating ?? 0),
+    reviewStatus: normalizeReviewStatus(current?.reviewStatus),
+  };
+}
+
+function buildSingleUpdate(
+  intent: SinglePathIntent,
+  index: CurationIndex
+): ImageCurationUpdate | null {
+  const current = currentUpdateValues(index, intent.filePath);
+  switch (intent.kind) {
+    case 'toggleFavorite':
+      return { ...current, favorite: !current.favorite };
+    case 'setRating': {
+      const rating = clampRating(intent.rating);
+      return {
+        ...current,
+        rating,
+        favorite: current.favorite || shouldPromoteRatingToFavorite(rating),
+      };
+    }
+    case 'setReviewStatus': {
+      assertReviewStatus(intent.reviewStatus);
+      const reviewStatus = normalizeReviewStatus(intent.reviewStatus);
+      return current.reviewStatus === reviewStatus ? null : { ...current, reviewStatus };
+    }
+    case 'resetReviewDecision':
+      return current.reviewStatus === 'unreviewed'
+        ? null
+        : { ...current, reviewStatus: 'unreviewed' };
+    case 'clearAll':
+      return { filePath: intent.filePath, favorite: false, rating: 0, reviewStatus: 'unreviewed' };
+  }
+}
+
+async function persistSingleUpdate(
+  intent: SinglePathIntent,
+  update: ImageCurationUpdate
+): Promise<void> {
+  if (intent.kind === 'resetReviewDecision') {
+    await resetImageReviewDecisionCommand(intent.filePath);
+    return;
+  }
+  if (intent.kind === 'clearAll') {
+    await clearImageCurationCommand(intent.filePath);
+    return;
+  }
+  await writeImageCuration(update.filePath, update.favorite, update.rating, update.reviewStatus);
+}
+
+function buildBatchUpdates(intent: BatchIntent, index: CurationIndex): ImageCurationUpdate[] {
+  return uniqueValidPaths(intent.filePaths).map((filePath) => {
+    const current = currentUpdateValues(index, filePath);
+    const rating =
+      intent.kind === 'setRatingForPaths' ? clampRating(intent.rating) : current.rating;
+    const favorite =
+      intent.kind === 'setFavoriteForPaths'
+        ? intent.favorite
+        : current.favorite ||
+          (intent.kind === 'setRatingForPaths' && shouldPromoteRatingToFavorite(rating));
+    const reviewStatus =
+      intent.kind === 'setReviewStatusForPaths'
+        ? (assertReviewStatus(intent.reviewStatus), normalizeReviewStatus(intent.reviewStatus))
+        : current.reviewStatus;
+    return { filePath, favorite, rating, reviewStatus };
+  });
+}
+
+function isSinglePathIntent(intent: CurationIntent): intent is SinglePathIntent {
+  return (
+    intent.kind === 'toggleFavorite' ||
+    intent.kind === 'setRating' ||
+    intent.kind === 'setReviewStatus' ||
+    intent.kind === 'resetReviewDecision' ||
+    intent.kind === 'clearAll'
+  );
+}
+
+async function persistMutation(
+  set: CurationSet,
+  get: CurationGet,
+  intent: CurationIntent
+): Promise<boolean> {
+  const index = getMutableCurationIndex(get());
+  if (isSinglePathIntent(intent)) {
+    const update = buildSingleUpdate(intent, index);
+    if (!update) return false;
+    await persistSingleUpdate(intent, update);
+    applyLocalUpdates(set, [update]);
+    return true;
+  }
+
+  const batchUpdates = buildBatchUpdates(intent, index);
+  await writeImageCurationBatch(batchUpdates);
+  applyLocalUpdates(set, batchUpdates);
+  return batchUpdates.length > 0;
+}
+
 export const useCurationStore = create<CurationState>((set, get) => {
   const beginMutation = (): number => {
     const revision = ++nextMutationRevision;
@@ -258,41 +409,9 @@ export const useCurationStore = create<CurationState>((set, get) => {
     return revision;
   };
 
-  const executeMutation = async (intent: CurationIntent, revision: number): Promise<void> => {
+  const executeMutation = async (intent: CurationIntent, revision: number): Promise<boolean> => {
     try {
-      if (intent.kind === 'toggleFavorite') {
-        const current = curationIndexEntry(getMutableCurationIndex(get()), intent.filePath);
-        const favorite = !current?.favorite;
-        const rating = clampRating(current?.rating ?? 0);
-        await writeImageCuration(intent.filePath, favorite, rating);
-        applyLocalUpdates(set, [{ filePath: intent.filePath, favorite, rating }]);
-      } else if (intent.kind === 'setRating') {
-        const current = curationIndexEntry(getMutableCurationIndex(get()), intent.filePath);
-        const rating = clampRating(intent.rating);
-        const favorite = Boolean(current?.favorite) || shouldPromoteRatingToFavorite(rating);
-        await writeImageCuration(intent.filePath, favorite, rating);
-        applyLocalUpdates(set, [{ filePath: intent.filePath, favorite, rating }]);
-      } else if (intent.kind === 'clear') {
-        await clearImageCurationCommand(intent.filePath);
-        applyLocalUpdates(set, [{ filePath: intent.filePath, favorite: false, rating: 0 }]);
-      } else {
-        const paths = uniqueValidPaths(intent.filePaths);
-        const index = getMutableCurationIndex(get());
-        const batchUpdates: ImageCurationUpdate[] = paths.map((filePath) => {
-          const current = curationIndexEntry(index, filePath);
-          const currentRating = clampRating(current?.rating ?? 0);
-          const rating =
-            intent.kind === 'setFavoriteForPaths' ? currentRating : clampRating(intent.rating);
-          const favorite =
-            intent.kind === 'setFavoriteForPaths'
-              ? intent.favorite
-              : Boolean(current?.favorite) || shouldPromoteRatingToFavorite(rating);
-          return { filePath, favorite, rating };
-        });
-        await writeImageCurationBatch(batchUpdates);
-        applyLocalUpdates(set, batchUpdates);
-      }
-
+      const changed = await persistMutation(set, get, intent);
       if (get().mutationRevision === revision) {
         set({
           mutationStatus: 'idle',
@@ -301,6 +420,7 @@ export const useCurationStore = create<CurationState>((set, get) => {
           errorDismissed: false,
         });
       }
+      return changed;
     } catch (error) {
       const message = normalizeCurationError(error);
       if (get().mutationRevision === revision) {
@@ -315,18 +435,26 @@ export const useCurationStore = create<CurationState>((set, get) => {
     }
   };
 
-  const enqueueIntent = (intent: CurationIntent): Promise<void> => {
+  const enqueueIntent = (
+    intent: CurationIntent,
+    onPersisted?: (changed: boolean) => void
+  ): Promise<void> => {
     if (
       intent.kind === 'toggleFavorite' ||
       intent.kind === 'setRating' ||
-      intent.kind === 'clear'
+      intent.kind === 'setReviewStatus' ||
+      intent.kind === 'resetReviewDecision' ||
+      intent.kind === 'clearAll'
     ) {
       if (!intent.filePath) return Promise.resolve();
     } else if (uniqueValidPaths(intent.filePaths).length === 0) {
       return Promise.resolve();
     }
     const revision = beginMutation();
-    return enqueueCurationMutation(() => executeMutation(intent, revision));
+    return enqueueCurationMutation(async () => {
+      const changed = await executeMutation(intent, revision);
+      onPersisted?.(changed);
+    });
   };
 
   return {
@@ -379,11 +507,21 @@ export const useCurationStore = create<CurationState>((set, get) => {
 
     toggleFavorite: (filePath) => enqueueIntent({ kind: 'toggleFavorite', filePath }),
     setRating: (filePath, rating) => enqueueIntent({ kind: 'setRating', filePath, rating }),
+    setReviewStatus: async (filePath, reviewStatus) => {
+      let changed = false;
+      await enqueueIntent({ kind: 'setReviewStatus', filePath, reviewStatus }, (didPersist) => {
+        changed = didPersist;
+      });
+      return changed;
+    },
+    resetReviewDecision: (filePath) => enqueueIntent({ kind: 'resetReviewDecision', filePath }),
     setFavoriteForPaths: (filePaths, favorite) =>
       enqueueIntent({ kind: 'setFavoriteForPaths', filePaths, favorite }),
     setRatingForPaths: (filePaths, rating) =>
       enqueueIntent({ kind: 'setRatingForPaths', filePaths, rating }),
-    clearImageCuration: (filePath) => enqueueIntent({ kind: 'clear', filePath }),
+    setReviewStatusForPaths: (filePaths, reviewStatus) =>
+      enqueueIntent({ kind: 'setReviewStatusForPaths', filePaths, reviewStatus }),
+    clearImageCuration: (filePath) => enqueueIntent({ kind: 'clearAll', filePath }),
 
     retryLastFailedOperation: () => {
       const failedOperation = get().failedOperation;

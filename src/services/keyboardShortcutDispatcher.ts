@@ -7,6 +7,7 @@ import {
 import { useViewerStore } from '../state/viewerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { revealCurrentImage } from './viewerActions';
+import type { ReviewStatus } from '../types/curation';
 
 export interface KeyboardHandlers {
   openFilePicker: () => void;
@@ -27,10 +28,12 @@ export interface KeyboardHandlers {
   toggleFavoriteCurrent: () => void;
   toggleMarkedCurrent: () => void;
   setRatingCurrent: (rating: number) => void;
+  setReviewStatusCurrent?: (status: ReviewStatus) => void;
 }
 
 export interface ApplicationShortcutContext {
   currentImagePath: string | null;
+  viewMode: 'viewer' | 'grid' | 'compare';
   isFullscreen: boolean;
   isSlideshowActive: boolean;
   showSettings: boolean;
@@ -201,26 +204,77 @@ function dispatchWindowShortcut(
   return false;
 }
 
+type CurationShortcut = {
+  keys: readonly string[];
+  requiresCurrentImage?: boolean;
+  allowRepeat?: boolean;
+  allowModifiers?: boolean;
+  run: (context: ApplicationShortcutContext) => void;
+};
+
+const REVIEW_STATUS_SHORTCUTS: Record<string, ReviewStatus> = {
+  p: 'keep',
+  P: 'keep',
+  x: 'reject',
+  X: 'reject',
+  u: 'unreviewed',
+  U: 'unreviewed',
+};
+
+const CURATION_ACTION_SHORTCUTS: readonly CurationShortcut[] = [
+  {
+    keys: ['g', 'G'],
+    requiresCurrentImage: true,
+    allowModifiers: true,
+    allowRepeat: true,
+    run: ({ handlers }) => handlers.toggleGridView(),
+  },
+  {
+    keys: ['f', 'F'],
+    requiresCurrentImage: true,
+    allowRepeat: true,
+    run: ({ handlers }) => handlers.toggleFavoriteCurrent(),
+  },
+  {
+    keys: ['m', 'M'],
+    requiresCurrentImage: true,
+    allowRepeat: true,
+    run: ({ handlers }) => handlers.toggleMarkedCurrent(),
+  },
+];
+
+function hasActionModifier(event: KeyboardEvent): boolean {
+  return event.ctrlKey || event.metaKey || event.altKey;
+}
+
+function matchesCurationShortcut(event: KeyboardEvent, shortcut: CurationShortcut): boolean {
+  return (
+    shortcut.keys.includes(event.key) &&
+    (shortcut.allowRepeat || !event.repeat) &&
+    (shortcut.allowModifiers || !hasActionModifier(event))
+  );
+}
+
 function dispatchCurationActionShortcut(
   event: KeyboardEvent,
   context: ApplicationShortcutContext
 ): boolean {
-  const { handlers } = context;
-  if (['g', 'G'].includes(event.key) && context.currentImagePath) {
+  const shortcut = CURATION_ACTION_SHORTCUTS.find((candidate) =>
+    matchesCurationShortcut(event, candidate)
+  );
+  if (shortcut && (!shortcut.requiresCurrentImage || context.currentImagePath)) {
     event.preventDefault();
-    handlers.toggleGridView();
+    shortcut.run(context);
     return true;
   }
-  if (!event.ctrlKey && !event.metaKey && !event.altKey && ['f', 'F'].includes(event.key)) {
+
+  const reviewStatus = context.viewMode === 'grid' ? undefined : REVIEW_STATUS_SHORTCUTS[event.key];
+  if (reviewStatus && !event.repeat && !hasActionModifier(event)) {
     event.preventDefault();
-    if (context.currentImagePath) handlers.toggleFavoriteCurrent();
+    if (context.currentImagePath) context.handlers.setReviewStatusCurrent?.(reviewStatus);
     return true;
   }
-  if (!event.ctrlKey && !event.metaKey && !event.altKey && ['m', 'M'].includes(event.key)) {
-    event.preventDefault();
-    if (context.currentImagePath) handlers.toggleMarkedCurrent();
-    return true;
-  }
+
   return false;
 }
 

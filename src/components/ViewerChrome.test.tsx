@@ -117,6 +117,62 @@ describe('ViewerChrome', () => {
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
   });
 
+  it('shows folder-wide review progress while the current image list is filtered', () => {
+    const allImages = [
+      {
+        path: 'C:/Images/photo.jpg',
+        file_name: 'photo.jpg',
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: '1',
+      },
+      {
+        path: 'C:/Images/other.jpg',
+        file_name: 'other.jpg',
+        extension: 'jpg',
+        size_bytes: 200,
+        modified_at: '2',
+      },
+      {
+        path: 'C:/Images/third.jpg',
+        file_name: 'third.jpg',
+        extension: 'jpg',
+        size_bytes: 300,
+        modified_at: '3',
+      },
+    ];
+    useViewerStore.setState({
+      currentImagePath: allImages[2].path,
+      images: [allImages[2]],
+      allImages,
+      currentIndex: 0,
+      curationFilter: 'unreviewed',
+    });
+    useCurationStore.setState({
+      curationByPath: {
+        [allImages[0].path]: {
+          path: allImages[0].path,
+          favorite: false,
+          rating: 0,
+          reviewStatus: 'keep',
+          updated_at: 1,
+        },
+        [allImages[1].path]: {
+          path: allImages[1].path,
+          favorite: false,
+          rating: 0,
+          reviewStatus: 'reject',
+          updated_at: 1,
+        },
+      },
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+
+    expect(screen.getByText('1 / 1')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3 reviewed')).toBeInTheDocument();
+  });
+
   it('shows a same-basename caption while browsing and copies it', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
@@ -341,6 +397,7 @@ describe('ViewerChrome', () => {
           path: 'C:/Images/photo.jpg',
           favorite: true,
           rating: 0,
+          reviewStatus: 'keep',
           updated_at: 1,
         },
       },

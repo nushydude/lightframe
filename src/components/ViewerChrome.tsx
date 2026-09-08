@@ -46,7 +46,15 @@ import { useCurationStore } from '../state/curationStore';
 import { useEditQueueStore } from '../state/editQueueStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
-import { getCurationFilterLabel, type CurationFilter } from '../services/curationFilter';
+import {
+  getCurationFilterLabel,
+  getCurationProgressLabel,
+  getReviewStatus,
+  getReviewStatusLabel,
+  type CurationFilter,
+} from '../services/curationFilter';
+import { setReviewDecisionForCurrentImage } from '../services/reviewDecisionActions';
+import type { ReviewStatus } from '../types/curation';
 import type { PinnableToolbarActionId, QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
 import { EditQueuePanel } from './EditQueuePanel';
@@ -93,6 +101,11 @@ const ZOOM_CONTROL_DUPLICATE_GUARD_MS = 250;
 const COMPACT_BOTTOM_CONTROLS_QUERY = '(max-width: 1120px)';
 const COMPACT_ROTATE_CONTROLS_QUERY = '(max-width: 820px)';
 const RATING_VALUES = [0, 1, 2, 3, 4, 5] as const;
+const REVIEW_STATUS_OPTIONS: Array<{ value: ReviewStatus; shortcut: string }> = [
+  { value: 'keep', shortcut: 'P' },
+  { value: 'reject', shortcut: 'X' },
+  { value: 'unreviewed', shortcut: 'U' },
+];
 
 type SecondaryActionGroup = 'file' | 'organize' | 'workspace' | 'view';
 
@@ -204,6 +217,41 @@ function RatingControls({
   );
 }
 
+function ReviewDecisionControls({
+  currentStatus,
+  onSetStatus,
+  className = '',
+}: {
+  currentStatus: ReviewStatus;
+  onSetStatus: (status: ReviewStatus) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`review-decision-controls ${className}`.trim()}
+      role="group"
+      aria-label="Review decision"
+    >
+      {REVIEW_STATUS_OPTIONS.map(({ value, shortcut }) => (
+        <button
+          key={value}
+          className={`control-btn control-btn--text review-decision-btn has-tooltip ${
+            currentStatus === value ? 'active' : ''
+          }`}
+          onClick={() => onSetStatus(value)}
+          data-tooltip={`${getReviewStatusLabel(value)} (${shortcut})`}
+          title={`${getReviewStatusLabel(value)} (${shortcut})`}
+          aria-label={`Mark as ${getReviewStatusLabel(value)}`}
+          aria-pressed={currentStatus === value}
+          type="button"
+        >
+          {getReviewStatusLabel(value)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Top bar and navigation overlay controls */
 // fallow-ignore-next-line complexity -- viewer chrome orchestration boundary
 export function ViewerChrome({
@@ -222,6 +270,7 @@ export function ViewerChrome({
 }: ViewerChromeProps) {
   const currentImagePath = useViewerStore((state) => state.currentImagePath);
   const images = useViewerStore((state) => state.images);
+  const allImages = useViewerStore((state) => state.allImages);
   const currentIndex = useViewerStore((state) => state.currentIndex);
   const folderPath = useViewerStore((state) => state.folderPath);
   const isFullscreen = useViewerStore((state) => state.isFullscreen);
@@ -269,6 +318,7 @@ export function ViewerChrome({
   const curationByPath = useCurationStore((state) => state.curationByPath);
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setRating = useCurationStore((state) => state.setRating);
+  const setReviewStatusForPaths = useCurationStore((state) => state.setReviewStatusForPaths);
   const enqueueEditJob = useEditQueueStore((state) => state.enqueueJob);
   const editQueueActiveCount = useEditQueueStore((state) => state.summary.activeCount);
   const editQueueFailedCount = useEditQueueStore((state) => state.summary.failedCount);
@@ -513,6 +563,9 @@ export function ViewerChrome({
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const currentRating = currentCuration?.rating ?? 0;
+  const currentReviewStatus = getReviewStatus(currentCuration);
+  const folderImages = allImages.length > 0 ? allImages : images;
+  const reviewProgressLabel = getCurationProgressLabel(folderImages, curationByPath);
   const slideshowToggleLabel = isSlideshowPaused ? 'Resume slideshow' : 'Pause slideshow';
   const slideshowShuffleLabel = shuffleSlideshow
     ? 'Turn slideshow shuffle off'
@@ -672,6 +725,16 @@ export function ViewerChrome({
       return;
     }
     await setRating(currentImagePath, rating);
+  };
+
+  const handleSetReviewStatus = async (status: ReviewStatus) => {
+    await setReviewDecisionForCurrentImage(status);
+  };
+
+  const handleSetMarkedReviewStatus = async (status: ReviewStatus) => {
+    if (markedPaths.length === 0) return;
+    await setReviewStatusForPaths(markedPaths, status);
+    closeOverflowMenus();
   };
 
   const handleToggleInfo = () => {
@@ -1455,6 +1518,8 @@ export function ViewerChrome({
           )}
           {isFavorite && <span className="image-counter">★</span>}
           {currentRating > 0 && <span className="image-counter">{currentRating}/5</span>}
+          <span className="image-counter">{getReviewStatusLabel(currentReviewStatus)}</span>
+          <span className="image-counter">{reviewProgressLabel}</span>
           {hasPendingEdits && <span className="image-counter">Unsaved edits</span>}
         </div>
 
@@ -1670,6 +1735,19 @@ export function ViewerChrome({
                       >
                         Mark All Visible Images
                       </button>
+                    </section>
+                    <section className="top-bar-menu-section" aria-label="Review decision actions">
+                      <div className="top-bar-menu-section-label">Decision</div>
+                      {REVIEW_STATUS_OPTIONS.map(({ value, shortcut }) => (
+                        <button
+                          key={value}
+                          className="top-bar-menu-item marked-actions-menu-item"
+                          onClick={() => void handleSetMarkedReviewStatus(value)}
+                          type="button"
+                        >
+                          {getReviewStatusLabel(value)} Marked ({shortcut})
+                        </button>
+                      ))}
                     </section>
                     <section className="top-bar-menu-section" aria-label="Navigation actions">
                       <div className="top-bar-menu-section-label">Navigate</div>
@@ -2467,6 +2545,13 @@ export function ViewerChrome({
                 </div>
               )}
               <div className="bottom-menu-section bottom-menu-section--visible">
+                <div className="bottom-menu-label">Decision</div>
+                <ReviewDecisionControls
+                  currentStatus={currentReviewStatus}
+                  onSetStatus={(value) => void handleSetReviewStatus(value)}
+                />
+              </div>
+              <div className="bottom-menu-section bottom-menu-section--visible">
                 <div className="bottom-menu-label">Rating</div>
                 <RatingControls
                   currentRating={currentRating}
@@ -2477,6 +2562,12 @@ export function ViewerChrome({
           </details>
         ) : (
           <>
+            <div className="control-divider control-divider--review-decision" />
+            <ReviewDecisionControls
+              currentStatus={currentReviewStatus}
+              onSetStatus={(value) => void handleSetReviewStatus(value)}
+              className="review-decision-controls--inline"
+            />
             <div className="control-divider control-divider--rating" />
             <RatingControls
               currentRating={currentRating}

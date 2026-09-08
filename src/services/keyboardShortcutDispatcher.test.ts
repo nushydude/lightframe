@@ -28,6 +28,7 @@ function handlers(overrides: Partial<KeyboardHandlers> = {}): KeyboardHandlers {
     toggleFavoriteCurrent: vi.fn(),
     toggleMarkedCurrent: vi.fn(),
     setRatingCurrent: vi.fn(),
+    setReviewStatusCurrent: vi.fn(),
     ...overrides,
   };
 }
@@ -38,6 +39,7 @@ function applicationContext(
 ): ApplicationShortcutContext {
   return {
     currentImagePath: 'C:/Images/a.jpg',
+    viewMode: 'viewer',
     isFullscreen: false,
     isSlideshowActive: false,
     showSettings: false,
@@ -83,6 +85,43 @@ describe('dispatchApplicationShortcut', () => {
     const event = new KeyboardEvent('keydown', { key: 'f', cancelable: true });
     expect(dispatchApplicationShortcut(event, context)).toBe(true);
     expect(toggleFavoriteCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches review decision shortcuts only for unmodified non-repeat keys', () => {
+    const setReviewStatusCurrent = vi.fn();
+    const shortcutHandlers = handlers({ setReviewStatusCurrent });
+    const context = applicationContext(shortcutHandlers);
+
+    const keepEvent = new KeyboardEvent('keydown', { key: 'p', cancelable: true });
+    expect(dispatchApplicationShortcut(keepEvent, context)).toBe(true);
+    expect(setReviewStatusCurrent).toHaveBeenCalledWith('keep');
+
+    const repeatedRejectEvent = new KeyboardEvent('keydown', {
+      key: 'x',
+      repeat: true,
+      cancelable: true,
+    });
+    expect(dispatchApplicationShortcut(repeatedRejectEvent, context)).toBe(false);
+
+    const modifiedUnreviewedEvent = new KeyboardEvent('keydown', {
+      key: 'u',
+      ctrlKey: true,
+      cancelable: true,
+    });
+    expect(dispatchApplicationShortcut(modifiedUnreviewedEvent, context)).toBe(false);
+    expect(setReviewStatusCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves review decision shortcuts to the grid owner in grid mode', () => {
+    const setReviewStatusCurrent = vi.fn();
+    const shortcutHandlers = handlers({ setReviewStatusCurrent });
+    const context = applicationContext(shortcutHandlers, { viewMode: 'grid' });
+
+    const keepEvent = new KeyboardEvent('keydown', { key: 'p', cancelable: true });
+
+    expect(dispatchApplicationShortcut(keepEvent, context)).toBe(false);
+    expect(keepEvent.defaultPrevented).toBe(false);
+    expect(setReviewStatusCurrent).not.toHaveBeenCalled();
   });
 });
 

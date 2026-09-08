@@ -11,11 +11,34 @@ const JOURNAL_FILE_NAME: &str = "pending.json";
 const LOCK_FILE_NAME: &str = "store.lock";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReviewStatus {
+    Keep,
+    Reject,
+    Unreviewed,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct ImageCuration {
     pub path: String,
     pub favorite: bool,
     pub rating: u8,
+    pub review_status: ReviewStatus,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawImageCuration {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    favorite: bool,
+    #[serde(default)]
+    rating: u8,
+    #[serde(default)]
+    review_status: Option<ReviewStatus>,
+    #[serde(default)]
+    updated_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -24,12 +47,29 @@ pub(crate) struct ImageCurationUpdate {
     pub file_path: String,
     pub favorite: bool,
     pub rating: i32,
+    pub review_status: ReviewStatus,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawImageCurationUpdate {
+    file_path: String,
+    favorite: bool,
+    rating: i32,
+    #[serde(default)]
+    review_status: Option<ReviewStatus>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CurationJournal {
     updated_at: u64,
     updates: Vec<ImageCurationUpdate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawCurationJournal {
+    updated_at: u64,
+    updates: Vec<RawImageCurationUpdate>,
 }
 
 fn store_directory(config_dir: &Path) -> PathBuf {
@@ -80,9 +120,11 @@ fn parse_shard_id(path: &Path) -> Option<u8> {
     u8::from_str_radix(hex, 16).ok()
 }
 
-fn normalize_metadata(metadata: HashMap<String, ImageCuration>) -> HashMap<String, ImageCuration> {
+fn normalize_metadata(
+    metadata: HashMap<String, RawImageCuration>,
+) -> HashMap<String, ImageCuration> {
     let mut normalized = HashMap::new();
-    for (key, mut value) in metadata {
+    for (key, value) in metadata {
         let normalized_path = if value.path.trim().is_empty() {
             key.trim().to_string()
         } else {
@@ -92,10 +134,24 @@ fn normalize_metadata(metadata: HashMap<String, ImageCuration>) -> HashMap<Strin
             continue;
         }
 
-        value.path = normalized_path.clone();
-        value.rating = value.rating.min(5);
-        if value.favorite || value.rating > 0 {
-            normalized.insert(normalized_path, value);
+        let rating = value.rating.min(5);
+        let inferred_review_status = if value.favorite || rating > 0 {
+            ReviewStatus::Keep
+        } else {
+            ReviewStatus::Unreviewed
+        };
+        let review_status = value.review_status.unwrap_or(inferred_review_status);
+        if value.favorite || rating > 0 || !matches!(review_status, ReviewStatus::Unreviewed) {
+            normalized.insert(
+                normalized_path.clone(),
+                ImageCuration {
+                    path: normalized_path,
+                    favorite: value.favorite,
+                    rating,
+                    review_status,
+                    updated_at: value.updated_at,
+                },
+            );
         }
     }
     normalized
@@ -109,7 +165,7 @@ fn read_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration>, Str
         format!("Failed to read curation metadata '{}': {}", path.display(), error)
     })?;
     let parsed =
-        serde_json::from_str::<HashMap<String, ImageCuration>>(&content).map_err(|error| {
+        serde_json::from_str::<HashMap<String, RawImageCuration>>(&content).map_err(|error| {
             format!("Failed to parse curation metadata '{}': {}", path.display(), error)
         })?;
     Ok(normalize_metadata(parsed))
@@ -120,7 +176,7 @@ fn read_metadata_file_unquarantined(path: &Path) -> Result<HashMap<String, Image
         format!("Failed to read curation metadata '{}': {}", path.display(), error)
     })?;
     let parsed =
-        serde_json::from_str::<HashMap<String, ImageCuration>>(&content).map_err(|error| {
+        serde_json::from_str::<HashMap<String, RawImageCuration>>(&content).map_err(|error| {
             format!("Failed to parse curation metadata '{}': {}", path.display(), error)
         })?;
     Ok(normalize_metadata(parsed))
@@ -184,7 +240,7 @@ fn read_shard_metadata_file(path: &Path) -> Result<HashMap<String, ImageCuration
     let content = fs::read_to_string(path).map_err(|error| {
         format!("Failed to read curation metadata '{}': {}", path.display(), error)
     })?;
-    match serde_json::from_str::<HashMap<String, ImageCuration>>(&content) {
+    match serde_json::from_str::<HashMap<String, RawImageCuration>>(&content) {
         Ok(parsed) => Ok(normalize_metadata(parsed)),
         Err(parse_error) => {
             let quarantine_path = build_unique_sibling_path(path, "corrupt")?;
@@ -445,13 +501,34 @@ fn normalize_updates(updates: Vec<ImageCurationUpdate>) -> Vec<ImageCurationUpda
         .collect()
 }
 
+fn normalize_raw_update(update: RawImageCurationUpdate) -> Option<ImageCurationUpdate> {
+    let file_path = update.file_path.trim().to_string();
+    if file_path.is_empty() {
+        return None;
+    }
+
+    let rating = update.rating.clamp(0, 5);
+    let inferred_review_status =
+        if update.favorite || rating > 0 { ReviewStatus::Keep } else { ReviewStatus::Unreviewed };
+    let review_status = update.review_status.unwrap_or(inferred_review_status);
+
+    Some(ImageCurationUpdate { file_path, favorite: update.favorite, rating, review_status })
+}
+
+fn normalize_journal(journal: RawCurationJournal) -> CurationJournal {
+    CurationJournal {
+        updated_at: journal.updated_at,
+        updates: journal.updates.into_iter().filter_map(normalize_raw_update).collect(),
+    }
+}
+
 fn apply_update(
     metadata: &mut HashMap<String, ImageCuration>,
     update: &ImageCurationUpdate,
     updated_at: u64,
 ) {
     let rating = update.rating.clamp(0, 5) as u8;
-    if !update.favorite && rating == 0 {
+    if !update.favorite && rating == 0 && matches!(update.review_status, ReviewStatus::Unreviewed) {
         metadata.remove(&update.file_path);
         return;
     }
@@ -461,6 +538,7 @@ fn apply_update(
             path: update.file_path.clone(),
             favorite: update.favorite,
             rating,
+            review_status: update.review_status.clone(),
             updated_at,
         },
     );
@@ -499,8 +577,9 @@ fn recover_pending_journal(config_dir: &Path) -> Result<(), String> {
     }
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("Failed to read pending curation journal: {error}"))?;
-    let journal: CurationJournal = serde_json::from_str(&content)
+    let journal: RawCurationJournal = serde_json::from_str(&content)
         .map_err(|error| format!("Failed to parse pending curation journal: {error}"))?;
+    let journal = normalize_journal(journal);
     apply_updates(config_dir, &journal)?;
     fs::remove_file(&path)
         .map_err(|error| format!("Failed to clear recovered curation journal: {error}"))
@@ -598,6 +677,42 @@ pub(crate) fn write_curation_updates(
 
     let _store_lock = acquire_store_lock(config_dir)?;
     prepare_store(config_dir)?;
+    write_curation_updates_locked(config_dir, updates, updated_at)
+}
+
+/// Preserve each stored spelling and its independent metadata while resetting a canonical
+/// identity. Legacy shards hash the original spelling, so a scoped lookup cannot discover all
+/// case/separator variants. Hold the store lock across lookup and the single journal transaction.
+pub(crate) fn reset_review_decision(
+    config_dir: &Path,
+    file_path: &str,
+    updated_at: u64,
+) -> Result<(), String> {
+    let _store_lock = acquire_store_lock(config_dir)?;
+    let metadata = read_curation_metadata_locked(config_dir)?;
+    let requested_key = normalize_lookup_path(file_path);
+    let updates = metadata
+        .into_values()
+        .filter(|entry| normalize_lookup_path(&entry.path) == requested_key)
+        .filter(|entry| entry.review_status != ReviewStatus::Unreviewed)
+        .map(|entry| ImageCurationUpdate {
+            file_path: entry.path,
+            favorite: entry.favorite,
+            rating: i32::from(entry.rating),
+            review_status: ReviewStatus::Unreviewed,
+        })
+        .collect::<Vec<_>>();
+    if updates.is_empty() {
+        return Ok(());
+    }
+    write_curation_updates_locked(config_dir, updates, updated_at)
+}
+
+fn write_curation_updates_locked(
+    config_dir: &Path,
+    updates: Vec<ImageCurationUpdate>,
+    updated_at: u64,
+) -> Result<(), String> {
     let journal = CurationJournal { updated_at, updates };
     let journal_content = serde_json::to_string(&journal)
         .map_err(|error| format!("Failed to serialize curation journal: {error}"))?;
@@ -614,7 +729,21 @@ mod tests {
     use tempfile::tempdir;
 
     fn update(path: &str, favorite: bool, rating: i32) -> ImageCurationUpdate {
-        ImageCurationUpdate { file_path: path.to_string(), favorite, rating }
+        ImageCurationUpdate {
+            file_path: path.to_string(),
+            favorite,
+            rating,
+            review_status: ReviewStatus::Unreviewed,
+        }
+    }
+
+    fn decision_update(
+        path: &str,
+        favorite: bool,
+        rating: i32,
+        review_status: ReviewStatus,
+    ) -> ImageCurationUpdate {
+        ImageCurationUpdate { file_path: path.to_string(), favorite, rating, review_status }
     }
 
     #[test]
@@ -624,6 +753,7 @@ mod tests {
             .unwrap();
         let metadata = read_curation_metadata(dir.path()).unwrap();
         assert_eq!(metadata["C:/images/photo.jpg"].rating, 5);
+        assert_eq!(metadata["C:/images/photo.jpg"].review_status, ReviewStatus::Unreviewed);
         assert_eq!(metadata["C:/images/photo.jpg"].updated_at, 42);
 
         write_curation_updates(dir.path(), vec![update("C:/images/photo.jpg", false, 0)], 44)
@@ -645,9 +775,162 @@ mod tests {
 
         assert_eq!(metadata.len(), 1);
         assert_eq!(metadata["C:/images/one.jpg"].rating, 5);
+        assert_eq!(metadata["C:/images/one.jpg"].review_status, ReviewStatus::Keep);
         assert!(!legacy_path.exists());
         assert!(dir.path().join("curation.v1.migrated.json").exists());
         assert!(shard_path(dir.path(), shard_id("C:/images/one.jpg")).exists());
+    }
+
+    #[test]
+    fn reset_review_decision_updates_original_shards_and_preserves_metadata_after_reload() {
+        let dir = tempdir().unwrap();
+        let stored_path = "C:\\Images\\Photo.JPG";
+        let alias_path = "C:/IMAGES/PHOTO.jpg";
+        write_curation_updates(
+            dir.path(),
+            vec![
+                decision_update(stored_path, true, 5, ReviewStatus::Keep),
+                decision_update(alias_path, false, 4, ReviewStatus::Reject),
+                decision_update("C:/images/other.jpg", false, 0, ReviewStatus::Reject),
+            ],
+            10,
+        )
+        .unwrap();
+
+        reset_review_decision(dir.path(), " c:/images/photo.jpg ", 20).unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+        assert_eq!(metadata.len(), 3);
+        assert_eq!(metadata[stored_path].review_status, ReviewStatus::Unreviewed);
+        assert!(metadata[stored_path].favorite);
+        assert_eq!(metadata[stored_path].rating, 5);
+        assert_eq!(metadata[stored_path].updated_at, 20);
+        assert_eq!(metadata[alias_path].review_status, ReviewStatus::Unreviewed);
+        assert!(!metadata[alias_path].favorite);
+        assert_eq!(metadata[alias_path].rating, 4);
+        assert_eq!(metadata["C:/images/other.jpg"].review_status, ReviewStatus::Reject);
+        assert!(!journal_path(dir.path()).exists());
+        assert!(!metadata.contains_key("c:/images/photo.jpg"));
+
+        reset_review_decision(dir.path(), "c:/images/photo.jpg", 30).unwrap();
+        assert_eq!(read_curation_metadata(dir.path()).unwrap(), metadata);
+    }
+
+    #[test]
+    fn reset_review_decision_removes_only_empty_curation_and_never_the_image() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("Photo.JPG");
+        fs::write(&image_path, b"unchanged image contents").unwrap();
+        let stored_path = image_path.to_string_lossy().into_owned();
+        write_curation_updates(
+            dir.path(),
+            vec![decision_update(&stored_path, false, 0, ReviewStatus::Reject)],
+            10,
+        )
+        .unwrap();
+
+        reset_review_decision(dir.path(), &normalize_lookup_path(&stored_path), 20).unwrap();
+
+        assert!(read_curation_metadata(dir.path()).unwrap().is_empty());
+        assert_eq!(fs::read(&image_path).unwrap(), b"unchanged image contents");
+        assert!(!journal_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn explicit_unreviewed_with_rating_survives_normalization() {
+        let dir = tempdir().unwrap();
+        write_curation_updates(
+            dir.path(),
+            vec![decision_update("C:/images/photo.jpg", false, 3, ReviewStatus::Unreviewed)],
+            12,
+        )
+        .unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+
+        assert_eq!(metadata["C:/images/photo.jpg"].rating, 3);
+        assert_eq!(metadata["C:/images/photo.jpg"].review_status, ReviewStatus::Unreviewed);
+    }
+
+    #[test]
+    fn explicit_reject_persists_without_rating_or_favorite() {
+        let dir = tempdir().unwrap();
+        write_curation_updates(
+            dir.path(),
+            vec![decision_update("C:/images/photo.jpg", false, 0, ReviewStatus::Reject)],
+            12,
+        )
+        .unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+
+        assert_eq!(metadata["C:/images/photo.jpg"].review_status, ReviewStatus::Reject);
+        assert_eq!(metadata["C:/images/photo.jpg"].rating, 0);
+        assert!(!metadata["C:/images/photo.jpg"].favorite);
+    }
+
+    #[test]
+    fn invalid_review_status_rejects_ipc_update_deserialization() {
+        let parsed = serde_json::from_str::<ImageCurationUpdate>(
+            r#"{
+                "filePath": "C:/images/photo.jpg",
+                "favorite": false,
+                "rating": 0,
+                "reviewStatus": "maybe"
+            }"#,
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn invalid_review_status_rejects_pending_journal_deserialization() {
+        let parsed = serde_json::from_str::<RawCurationJournal>(
+            r#"{
+                "updated_at": 42,
+                "updates": [
+                    {
+                        "filePath": "C:/images/photo.jpg",
+                        "favorite": false,
+                        "rating": 0,
+                        "reviewStatus": "maybe"
+                    }
+                ]
+            }"#,
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn malformed_stored_review_status_is_quarantined_not_defaulted() {
+        let dir = tempdir().unwrap();
+        let path = "C:/images/photo.jpg";
+        let shard_path = shard_path(dir.path(), shard_id(path));
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+        fs::write(
+            &shard_path,
+            r#"{
+                "C:/images/photo.jpg": {
+                    "path": "C:/images/photo.jpg",
+                    "favorite": false,
+                    "rating": 0,
+                    "review_status": "maybe",
+                    "updated_at": 1
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+
+        assert!(metadata.is_empty());
+        assert!(!shard_path.exists());
+        assert!(store_directory(dir.path()).read_dir().unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".corrupt-")));
     }
 
     #[test]
@@ -655,7 +938,14 @@ mod tests {
         let dir = tempdir().unwrap();
         prepare_store(dir.path()).unwrap();
         let updates = (0..100)
-            .map(|index| update(&format!("C:/images/{index}.jpg"), true, index % 6))
+            .map(|index| {
+                decision_update(
+                    &format!("C:/images/{index}.jpg"),
+                    true,
+                    index % 6,
+                    if index % 2 == 0 { ReviewStatus::Reject } else { ReviewStatus::Unreviewed },
+                )
+            })
             .collect();
         let journal = CurationJournal { updated_at: 88, updates };
         let content = serde_json::to_string(&journal).unwrap();
@@ -667,6 +957,38 @@ mod tests {
 
         assert_eq!(metadata.len(), 100);
         assert!(metadata.values().all(|entry| entry.updated_at == 88));
+        assert_eq!(metadata["C:/images/0.jpg"].review_status, ReviewStatus::Reject);
+        assert_eq!(metadata["C:/images/1.jpg"].review_status, ReviewStatus::Unreviewed);
+        assert!(!journal_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn recovers_a_legacy_pending_journal_without_review_status() {
+        let dir = tempdir().unwrap();
+        prepare_store(dir.path()).unwrap();
+        fs::create_dir_all(store_directory(dir.path())).unwrap();
+        fs::write(
+            journal_path(dir.path()),
+            r#"{
+                "updated_at": 42,
+                "updates": [
+                    { "filePath": "C:/images/favorite.jpg", "favorite": true, "rating": 0 },
+                    { "filePath": "C:/images/rated.jpg", "favorite": false, "rating": 4 },
+                    { "filePath": "C:/images/plain.jpg", "favorite": false, "rating": 0 },
+                    { "filePath": "   ", "favorite": true, "rating": 5 }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let metadata = read_curation_metadata(dir.path()).unwrap();
+
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(metadata["C:/images/favorite.jpg"].review_status, ReviewStatus::Keep);
+        assert_eq!(metadata["C:/images/favorite.jpg"].updated_at, 42);
+        assert_eq!(metadata["C:/images/rated.jpg"].review_status, ReviewStatus::Keep);
+        assert_eq!(metadata["C:/images/rated.jpg"].rating, 4);
+        assert!(!metadata.contains_key("C:/images/plain.jpg"));
         assert!(!journal_path(dir.path()).exists());
     }
 
@@ -707,8 +1029,13 @@ mod tests {
         let live_path = "C:/images/live.jpg";
         let shard = shard_id(live_path);
         fs::create_dir_all(store_directory(dir.path())).unwrap();
-        let live_entry =
-            ImageCuration { path: live_path.to_string(), favorite: true, rating: 5, updated_at: 2 };
+        let live_entry = ImageCuration {
+            path: live_path.to_string(),
+            favorite: true,
+            rating: 5,
+            review_status: ReviewStatus::Keep,
+            updated_at: 2,
+        };
         fs::write(
             shard_path(dir.path(), shard),
             serde_json::to_string(&HashMap::from([(live_path.to_string(), live_entry)])).unwrap(),
@@ -721,6 +1048,7 @@ mod tests {
             path: stale_path.to_string(),
             favorite: true,
             rating: 1,
+            review_status: ReviewStatus::Keep,
             updated_at: 1,
         };
         fs::write(
@@ -780,7 +1108,13 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             path.to_string(),
-            ImageCuration { path: path.to_string(), favorite: true, rating: 5, updated_at: 100 },
+            ImageCuration {
+                path: path.to_string(),
+                favorite: true,
+                rating: 5,
+                review_status: ReviewStatus::Keep,
+                updated_at: 100,
+            },
         );
         fs::write(&backup_path, serde_json::to_string(&map).unwrap()).unwrap();
         fs::write(&shard_file, "{corrupt-json-truncated").unwrap();
@@ -839,7 +1173,13 @@ mod tests {
                 let path = format!("C:/library/unrelated/{index}.jpg");
                 grouped.entry(shard_id(&path)).or_default().insert(
                     path.clone(),
-                    ImageCuration { path, favorite: true, rating: 3, updated_at: 1 },
+                    ImageCuration {
+                        path,
+                        favorite: true,
+                        rating: 3,
+                        review_status: ReviewStatus::Keep,
+                        updated_at: 1,
+                    },
                 );
             }
             let requested =
@@ -847,7 +1187,13 @@ mod tests {
             for path in &requested {
                 grouped.entry(shard_id(path)).or_default().insert(
                     path.clone(),
-                    ImageCuration { path: path.clone(), favorite: true, rating: 5, updated_at: 2 },
+                    ImageCuration {
+                        path: path.clone(),
+                        favorite: true,
+                        rating: 5,
+                        review_status: ReviewStatus::Keep,
+                        updated_at: 2,
+                    },
                 );
             }
             for (id, shard) in grouped {
@@ -906,7 +1252,13 @@ mod tests {
         let mut valid_map = HashMap::new();
         valid_map.insert(
             path.to_string(),
-            ImageCuration { path: path.to_string(), favorite: true, rating: 4, updated_at: 50 },
+            ImageCuration {
+                path: path.to_string(),
+                favorite: true,
+                rating: 4,
+                review_status: ReviewStatus::Keep,
+                updated_at: 50,
+            },
         );
         fs::write(&older_valid_backup, serde_json::to_string(&valid_map).unwrap()).unwrap();
         fs::write(&shard_file, "{corrupt-destination-shard").unwrap();
@@ -934,14 +1286,26 @@ mod tests {
         let mut older_map = HashMap::new();
         older_map.insert(
             path.to_string(),
-            ImageCuration { path: path.to_string(), favorite: false, rating: 2, updated_at: 10 },
+            ImageCuration {
+                path: path.to_string(),
+                favorite: false,
+                rating: 2,
+                review_status: ReviewStatus::Keep,
+                updated_at: 10,
+            },
         );
         fs::write(&older_valid_backup, serde_json::to_string(&older_map).unwrap()).unwrap();
 
         let mut newer_map = HashMap::new();
         newer_map.insert(
             path.to_string(),
-            ImageCuration { path: path.to_string(), favorite: true, rating: 5, updated_at: 20 },
+            ImageCuration {
+                path: path.to_string(),
+                favorite: true,
+                rating: 5,
+                review_status: ReviewStatus::Keep,
+                updated_at: 20,
+            },
         );
         fs::write(&newer_valid_backup, serde_json::to_string(&newer_map).unwrap()).unwrap();
 

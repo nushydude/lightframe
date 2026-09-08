@@ -69,6 +69,7 @@ export interface AppSettings {
   openProjectorInGridView: boolean;
   performanceMode: PerformanceMode;
   autoRefreshFolder: boolean;
+  autoAdvanceAfterReviewDecision: boolean;
   updateChannel: UpdateChannel;
   savedViewPresets: CurationFilter[];
   recentFolders: RecentFolder[];
@@ -99,8 +100,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   openProjectorInGridView: false,
   performanceMode: 'balanced',
   autoRefreshFolder: true,
+  autoAdvanceAfterReviewDecision: false,
   updateChannel: 'stable',
-  savedViewPresets: ['favorites', 'rated4', 'unreviewed'],
+  savedViewPresets: ['favorites', 'rated4', 'keep', 'reject', 'unreviewed'],
   recentFolders: [],
   quickDestinations: [],
   pinnedToolbarActions: [],
@@ -136,6 +138,7 @@ export function settingsToRust(settings: AppSettings): Record<string, unknown> {
     open_projector_in_grid_view: settings.openProjectorInGridView,
     performance_mode: settings.performanceMode,
     auto_refresh_folder: settings.autoRefreshFolder,
+    auto_advance_after_review_decision: settings.autoAdvanceAfterReviewDecision,
     update_channel: settings.updateChannel,
     saved_view_presets: settings.savedViewPresets,
     recent_folders: settings.recentFolders.map((folder) => ({
@@ -202,6 +205,10 @@ export function settingsFromRust(raw: Record<string, unknown>): AppSettings {
       ? raw.performance_mode
       : DEFAULT_SETTINGS.performanceMode,
     autoRefreshFolder: booleanSetting(raw.auto_refresh_folder, DEFAULT_SETTINGS.autoRefreshFolder),
+    autoAdvanceAfterReviewDecision: booleanSetting(
+      raw.auto_advance_after_review_decision,
+      DEFAULT_SETTINGS.autoAdvanceAfterReviewDecision
+    ),
     updateChannel: parseUpdateChannel(raw.update_channel),
     savedViewPresets: parseSavedViewPresets(raw.saved_view_presets),
     recentFolders: parseRecentFolders(raw.recent_folders),

@@ -40,9 +40,16 @@ import {
   showTransferResultMessage,
   transferImagesToDestination,
 } from '../services/viewerActions';
-import { getCurationFilterCountLabel } from '../services/curationFilter';
+import {
+  getCurationFilterCountLabel,
+  getCurationProgressLabel,
+  getReviewStatus,
+  getReviewStatusLabel,
+} from '../services/curationFilter';
+import type { ReviewStatus } from '../types/curation';
 import type { QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
+import { FilteredCurationEmptyState } from './FilteredCurationEmptyState';
 import { ToolbarIcon } from './ToolbarIcon';
 import { isInteractiveTargetOutsideGrid } from '../services/keyboardTarget';
 
@@ -76,6 +83,7 @@ export function ContactSheet({
   onStartSlideshow,
 }: ContactSheetProps) {
   const images = useViewerStore((state) => state.images);
+  const allImages = useViewerStore((state) => state.allImages);
   const currentIndex = useViewerStore((state) => state.currentIndex);
   const isFullscreen = useViewerStore((state) => state.isFullscreen);
   const rotation = useViewerStore((state) => state.rotation);
@@ -92,6 +100,7 @@ export function ContactSheet({
   const toggleFavorite = useCurationStore((state) => state.toggleFavorite);
   const setFavoriteForPaths = useCurationStore((state) => state.setFavoriteForPaths);
   const setRatingForPaths = useCurationStore((state) => state.setRatingForPaths);
+  const setReviewStatusForPaths = useCurationStore((state) => state.setReviewStatusForPaths);
   const quickDestinations = useSettingsStore((state) => state.settings.quickDestinations);
   const externalEditorPath = useSettingsStore((state) => state.settings.externalEditorPath);
   const externalEditorLabel = useSettingsStore((state) => state.settings.externalEditorLabel);
@@ -174,6 +183,10 @@ export function ContactSheet({
   const cropDisabledByRotation = rotation !== 0;
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
   const hasSelection = selectedPaths.length > 0;
+  const folderImages = allImages.length > 0 ? allImages : images;
+  const reviewProgressLabel = getCurationProgressLabel(folderImages, curationByPath);
+  const isFilteredEmpty =
+    curationFilter !== 'all' && folderImages.length > 0 && images.length === 0 && !normalizedQuery;
 
   useLayoutEffect(() => {
     const activeElement = document.activeElement;
@@ -472,6 +485,10 @@ export function ContactSheet({
     await runBulkCurationAction(() => setRatingForPaths([...selectedPaths], rating));
   };
 
+  const handleBulkReviewStatus = async (reviewStatus: ReviewStatus) => {
+    await runBulkCurationAction(() => setReviewStatusForPaths([...selectedPaths], reviewStatus));
+  };
+
   const handleCopyCurrent = async () => {
     await copyCurrentImage(currentImagePath);
   };
@@ -669,6 +686,26 @@ export function ContactSheet({
       }
 
       if (isInteractiveTargetOutsideGrid(e.target, gridRef.current)) return;
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
+        const reviewStatusByKey: Record<string, ReviewStatus> = {
+          p: 'keep',
+          P: 'keep',
+          x: 'reject',
+          X: 'reject',
+          u: 'unreviewed',
+          U: 'unreviewed',
+        };
+        const reviewStatus = reviewStatusByKey[e.key];
+        if (reviewStatus) {
+          e.preventDefault();
+          const targetPaths =
+            selectedPaths.length > 0 ? selectedPaths : currentImagePath ? [currentImagePath] : [];
+          if (targetPaths.length > 0) {
+            void setReviewStatusForPaths(targetPaths, reviewStatus);
+          }
+          return;
+        }
+      }
       if (e.key === 'Enter') {
         if (target?.closest('[role="gridcell"]')) {
           e.preventDefault();
@@ -732,6 +769,9 @@ export function ContactSheet({
     searchResults,
     lastSelectedIndex,
     setCurrentIndex,
+    selectedPaths,
+    setReviewStatusForPaths,
+    currentImagePath,
   ]);
 
   return (
@@ -744,6 +784,7 @@ export function ContactSheet({
               ? `${searchResults.length} of ${images.length} images`
               : `${images.length} ${getCurationFilterCountLabel(curationFilter)}`}
           </span>
+          <span className="image-count">{reviewProgressLabel}</span>
           {selectedPaths.length > 0 && (
             <span className="image-count">{selectedPaths.length} selected</span>
           )}
@@ -1032,6 +1073,31 @@ export function ContactSheet({
             ))}
           </div>
           <span className="contact-sheet-bulk-divider" aria-hidden="true" />
+          <button
+            className="top-bar-menu-item"
+            type="button"
+            onClick={() => void handleBulkReviewStatus('keep')}
+            disabled={bulkCurationPending}
+          >
+            Keep
+          </button>
+          <button
+            className="top-bar-menu-item"
+            type="button"
+            onClick={() => void handleBulkReviewStatus('reject')}
+            disabled={bulkCurationPending}
+          >
+            Reject
+          </button>
+          <button
+            className="top-bar-menu-item"
+            type="button"
+            onClick={() => void handleBulkReviewStatus('unreviewed')}
+            disabled={bulkCurationPending}
+          >
+            Unreviewed
+          </button>
+          <span className="contact-sheet-bulk-divider" aria-hidden="true" />
           {renderBulkQuickDestinationMenu('copy')}
           {renderBulkQuickDestinationMenu('move')}
           <button
@@ -1051,6 +1117,11 @@ export function ContactSheet({
       >
         {searchResults.length === 0 && normalizedQuery ? (
           <div className="contact-sheet-empty">No filenames match “{searchQuery.trim()}”.</div>
+        ) : isFilteredEmpty ? (
+          <FilteredCurationEmptyState
+            filter={curationFilter}
+            onShowAll={() => setCurationFilter('all')}
+          />
         ) : (
           <div
             className="contact-sheet-grid"
@@ -1077,6 +1148,7 @@ export function ContactSheet({
               const curation = curationByPath[image.path];
               const isFavorite = Boolean(curation?.favorite);
               const rating = curation?.rating ?? 0;
+              const reviewStatus = getReviewStatus(curation);
 
               return (
                 <button
@@ -1098,6 +1170,7 @@ export function ContactSheet({
                   data-image-path={image.path}
                   role="gridcell"
                   aria-label={image.file_name}
+                  aria-description={`Review decision: ${getReviewStatusLabel(reviewStatus)}`}
                   aria-selected={selectedPathSet.has(image.path)}
                   aria-current={isActive ? 'true' : undefined}
                   tabIndex={
@@ -1110,8 +1183,13 @@ export function ContactSheet({
                   title={image.file_name}
                 >
                   <div className="grid-thumbnail-wrapper">
-                    {(isFavorite || rating > 0) && (
+                    {(isFavorite || rating > 0 || reviewStatus !== 'unreviewed') && (
                       <div className="grid-curation-badges" aria-hidden="true">
+                        {reviewStatus !== 'unreviewed' && (
+                          <span className={`grid-curation-badge review-${reviewStatus}`}>
+                            {getReviewStatusLabel(reviewStatus)}
+                          </span>
+                        )}
                         {isFavorite && <span className="grid-curation-badge favorite">★</span>}
                         {rating > 0 && <span className="grid-curation-badge rating">{rating}</span>}
                       </div>

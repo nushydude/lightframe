@@ -4,6 +4,10 @@ import { ContactSheet } from './ContactSheet';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
+import {
+  dispatchApplicationShortcut,
+  type KeyboardHandlers,
+} from '../services/keyboardShortcutDispatcher';
 
 const {
   copyCurrentImageMock,
@@ -909,18 +913,197 @@ describe('ContactSheet', () => {
     fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Favorite' }));
     await waitFor(() => {
       expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
-        { filePath: 'C:/images/current.jpg', favorite: true, rating: 0 },
-        { filePath: 'C:/images/next.jpg', favorite: true, rating: 0 },
+        {
+          filePath: 'C:/images/current.jpg',
+          favorite: true,
+          rating: 0,
+          reviewStatus: 'unreviewed',
+        },
+        { filePath: 'C:/images/next.jpg', favorite: true, rating: 0, reviewStatus: 'unreviewed' },
       ]);
     });
 
     fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Rate selected 5' }));
     await waitFor(() => {
       expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
-        { filePath: 'C:/images/current.jpg', favorite: true, rating: 5 },
-        { filePath: 'C:/images/next.jpg', favorite: true, rating: 5 },
+        {
+          filePath: 'C:/images/current.jpg',
+          favorite: true,
+          rating: 5,
+          reviewStatus: 'unreviewed',
+        },
+        { filePath: 'C:/images/next.jpg', favorite: true, rating: 5, reviewStatus: 'unreviewed' },
       ]);
     });
+
+    fireEvent.click(within(bulkToolbar).getByRole('button', { name: 'Reject' }));
+    await waitFor(() => {
+      expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
+        { filePath: 'C:/images/current.jpg', favorite: true, rating: 5, reviewStatus: 'reject' },
+        { filePath: 'C:/images/next.jpg', favorite: true, rating: 5, reviewStatus: 'reject' },
+      ]);
+    });
+  });
+
+  it('lets the grid listener own review shortcuts when the global listener is also mounted', async () => {
+    const images = [
+      {
+        path: 'C:/images/current.jpg',
+        file_name: 'current.jpg',
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: '1',
+      },
+      {
+        path: 'C:/images/next.jpg',
+        file_name: 'next.jpg',
+        extension: 'jpg',
+        size_bytes: 1,
+        modified_at: '1',
+      },
+    ];
+    useViewerStore.setState({ images, allImages: images, currentImagePath: images[0].path });
+    const globalReviewHandler = vi.fn();
+    const globalListener = (event: KeyboardEvent) => {
+      dispatchApplicationShortcut(event, {
+        currentImagePath: useViewerStore.getState().currentImagePath,
+        viewMode: 'grid',
+        isFullscreen: false,
+        isSlideshowActive: false,
+        showSettings: false,
+        showCommandPalette: false,
+        isCompareMode: false,
+        loopSlideshow: false,
+        zoomMode: 'fit',
+        setFullscreen: vi.fn(),
+        setShowSettings: vi.fn(),
+        setZoomMode: vi.fn(),
+        handlers: {
+          openFilePicker: vi.fn(),
+          openCurrentImageInEditor: vi.fn(),
+          copyCurrentImagePath: vi.fn(),
+          goNext: vi.fn(() => true),
+          goPrev: vi.fn(() => true),
+          goFirst: vi.fn(),
+          goLast: vi.fn(),
+          refreshFolder: vi.fn(),
+          deleteCurrentImage: vi.fn(),
+          startSlideshow: vi.fn(),
+          stopSlideshow: vi.fn(),
+          toggleSlideshowPause: vi.fn(),
+          openCommandPalette: vi.fn(),
+          toggleGridView: vi.fn(),
+          togglePerformanceTelemetry: vi.fn(),
+          toggleFavoriteCurrent: vi.fn(),
+          toggleMarkedCurrent: vi.fn(),
+          setRatingCurrent: vi.fn(),
+          setReviewStatusCurrent: globalReviewHandler,
+        } satisfies KeyboardHandlers,
+        lastUnhandledEscapeAtRef: { current: null },
+      });
+    };
+    window.addEventListener('keydown', globalListener);
+
+    try {
+      render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+
+      fireEvent.click(screen.getByText('current.jpg'), { ctrlKey: true });
+      fireEvent.click(screen.getByText('next.jpg'), { ctrlKey: true });
+      writeImageCurationBatchMock.mockClear();
+
+      fireEvent.keyDown(window, { key: 'p' });
+
+      await waitFor(() => expect(writeImageCurationBatchMock).toHaveBeenCalledTimes(1));
+      expect(writeImageCurationBatchMock).toHaveBeenCalledWith([
+        { filePath: 'C:/images/current.jpg', favorite: false, rating: 0, reviewStatus: 'keep' },
+        { filePath: 'C:/images/next.jpg', favorite: false, rating: 0, reviewStatus: 'keep' },
+      ]);
+      expect(globalReviewHandler).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', globalListener);
+    }
+  });
+
+  it('shows folder-wide review progress alongside the filtered result count', () => {
+    const allImages = createContactSheetImages(3);
+    useViewerStore.setState({
+      images: [allImages[2]],
+      allImages,
+      currentIndex: 0,
+      currentImagePath: allImages[2].path,
+      curationFilter: 'unreviewed',
+    });
+    useCurationStore.setState({
+      curationByPath: {
+        [allImages[0].path]: {
+          path: allImages[0].path,
+          favorite: false,
+          rating: 0,
+          reviewStatus: 'keep',
+          updated_at: 1,
+        },
+        [allImages[1].path]: {
+          path: allImages[1].path,
+          favorite: false,
+          rating: 0,
+          reviewStatus: 'reject',
+          updated_at: 1,
+        },
+      },
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    expect(screen.getByText('1 unreviewed')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3 reviewed')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['unreviewed', 'No unreviewed found in the current folder.'],
+    ['keep', 'No kept found in the current folder.'],
+    ['reject', 'No rejected found in the current folder.'],
+  ] as const)('shows a recoverable empty state for an empty %s filter', (filter, message) => {
+    const allImages = createContactSheetImages(2);
+    useViewerStore.setState({
+      images: [],
+      allImages,
+      currentIndex: -1,
+      currentImagePath: null,
+      curationFilter: filter,
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent(message);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all images' }));
+    expect(useViewerStore.getState().curationFilter).toBe('all');
   });
 
   it('disables batch curation actions while a selected-image mutation is pending', async () => {

@@ -1,4 +1,4 @@
-use crate::curation::{self, ImageCuration, ImageCurationUpdate};
+use crate::curation::{self, ImageCuration, ImageCurationUpdate, ReviewStatus};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -55,6 +55,7 @@ pub async fn write_image_curation(
     file_path: String,
     favorite: bool,
     rating: i32,
+    review_status: ReviewStatus,
 ) -> Result<(), String> {
     let normalized_path = file_path.trim().to_string();
     if normalized_path.is_empty() {
@@ -65,7 +66,7 @@ pub async fn write_image_curation(
     let config_dir = curation_config_dir(&app)?;
     curation::write_curation_updates(
         &config_dir,
-        vec![ImageCurationUpdate { file_path: normalized_path, favorite, rating }],
+        vec![ImageCurationUpdate { file_path: normalized_path, favorite, rating, review_status }],
         unix_timestamp_seconds(),
     )
 }
@@ -91,7 +92,24 @@ pub async fn clear_image_curation(app: AppHandle, file_path: String) -> Result<(
     let config_dir = curation_config_dir(&app)?;
     curation::write_curation_updates(
         &config_dir,
-        vec![ImageCurationUpdate { file_path: normalized_path, favorite: false, rating: 0 }],
+        vec![ImageCurationUpdate {
+            file_path: normalized_path,
+            favorite: false,
+            rating: 0,
+            review_status: ReviewStatus::Unreviewed,
+        }],
         unix_timestamp_seconds(),
     )
+}
+
+#[tauri::command]
+pub async fn reset_image_review_decision(app: AppHandle, file_path: String) -> Result<(), String> {
+    let normalized_path = file_path.trim().to_string();
+    if normalized_path.is_empty() {
+        return Err("file_path must not be empty".to_string());
+    }
+
+    let _lock = lock_curation_metadata()?;
+    let config_dir = curation_config_dir(&app)?;
+    curation::reset_review_decision(&config_dir, &normalized_path, unix_timestamp_seconds())
 }

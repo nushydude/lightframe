@@ -159,6 +159,17 @@ describe('settingsToRust', () => {
     });
   });
 
+  it('maps review-decision auto-advance preference to rust payloads', () => {
+    const rust = settingsToRust({
+      ...DEFAULT_SETTINGS,
+      autoAdvanceAfterReviewDecision: true,
+    });
+
+    expect(rust).toMatchObject({
+      auto_advance_after_review_decision: true,
+    });
+  });
+
   it('maps update channel to rust payloads', () => {
     const rust = settingsToRust({
       ...DEFAULT_SETTINGS,
@@ -298,6 +309,13 @@ describe('settingsFromRust', () => {
     expect(settingsFromRust({}).autoRefreshFolder).toBe(true);
   });
 
+  it('parses review-decision auto-advance with a default disabled fallback', () => {
+    expect(
+      settingsFromRust({ auto_advance_after_review_decision: true }).autoAdvanceAfterReviewDecision
+    ).toBe(true);
+    expect(settingsFromRust({}).autoAdvanceAfterReviewDecision).toBe(false);
+  });
+
   it('parses image caption visibility with a default enabled fallback', () => {
     expect(settingsFromRust({ show_image_captions: false }).showImageCaptions).toBe(false);
     expect(settingsFromRust({}).showImageCaptions).toBe(true);
@@ -349,6 +367,7 @@ describe('settingsFromRust', () => {
         default_fit_mode: 'actual',
         sort_order: 'random',
         performance_mode: 'lowMemory',
+        auto_advance_after_review_decision: true,
         update_channel: 'preview',
         saved_view_presets: ['unreviewed'],
       })
@@ -360,6 +379,7 @@ describe('settingsFromRust', () => {
       defaultFitMode: 'actual',
       sortOrder: 'random',
       performanceMode: 'lowMemory',
+      autoAdvanceAfterReviewDecision: true,
       updateChannel: 'preview',
       savedViewPresets: ['unreviewed'],
     });

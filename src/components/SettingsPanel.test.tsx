@@ -52,6 +52,16 @@ describe('SettingsPanel', () => {
     });
   });
 
+  it('exposes the review auto-advance setting with an accessible label and persists it', async () => {
+    render(<SettingsPanel />);
+    const checkbox = screen.getByRole('checkbox', { name: 'Advance after review decision' });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.autoAdvanceAfterReviewDecision).toBe(true);
+    });
+  });
+
   it('renders the diagnostics section without entering a render loop', async () => {
     render(<SettingsPanel />);
 

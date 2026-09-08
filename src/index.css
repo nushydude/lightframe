@@ -1732,6 +1732,12 @@ body,
   font-size: 14px;
 }
 
+.review-decision-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .control-btn.has-tooltip::after {
   bottom: calc(100% + 12px);
 }

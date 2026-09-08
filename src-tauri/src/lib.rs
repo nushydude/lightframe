@@ -104,6 +104,7 @@ pub fn run() {
             commands::write_image_curation,
             commands::write_image_curation_batch,
             commands::clear_image_curation,
+            commands::reset_image_review_decision,
             commands::move_to_trash,
             commands::copy_image_to_folder,
             commands::move_image_to_folder,

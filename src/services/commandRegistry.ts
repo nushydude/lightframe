@@ -1,7 +1,9 @@
 import { useViewerStore } from '../state/viewerStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { useCurationStore } from '../state/curationStore';
 import { canSaveRotationForPath } from './viewerActions';
 import { CURATION_FILTER_OPTIONS } from './curationFilter';
+import { setReviewDecisionForCurrentImage } from './reviewDecisionActions';
 
 type ViewerState = ReturnType<typeof useViewerStore.getState>;
 
@@ -167,6 +169,40 @@ export function createViewerCommands(options: CreateViewerCommandsOptions): View
       isEnabled: (state: ViewerState) => state.allImages.length > 0 || state.images.length > 0,
       run: () => useViewerStore.getState().setCurationFilter(filter.value),
     })),
+    {
+      id: 'review-status-keep',
+      label: 'Mark Review Decision Keep',
+      keywords: ['keep', 'pick', 'select', 'review', 'decision'],
+      shortcut: 'P',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => setReviewDecisionForCurrentImage('keep'),
+    },
+    {
+      id: 'review-status-reject',
+      label: 'Mark Review Decision Reject',
+      keywords: ['reject', 'pass', 'review', 'decision'],
+      shortcut: 'X',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => setReviewDecisionForCurrentImage('reject'),
+    },
+    {
+      id: 'review-status-unreviewed',
+      label: 'Reset Review Decision',
+      keywords: ['unreviewed', 'reset', 'review', 'decision'],
+      shortcut: 'U',
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => setReviewDecisionForCurrentImage('unreviewed'),
+    },
+    {
+      id: 'clear-all-curation',
+      label: 'Clear All Curation (Decision, Stars, Favorite)',
+      keywords: ['clear', 'reset', 'curation', 'rating', 'favorite'],
+      isEnabled: (state) => Boolean(state.currentImagePath),
+      run: () => {
+        const path = useViewerStore.getState().currentImagePath;
+        if (path) return useCurationStore.getState().clearImageCuration(path);
+      },
+    },
     {
       id: 'toggle-compare',
       label: 'Toggle Compare View',

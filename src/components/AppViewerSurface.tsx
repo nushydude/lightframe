@@ -1,9 +1,11 @@
 import { EmptyState } from './EmptyState';
+import { FilteredCurationEmptyState } from './FilteredCurationEmptyState';
 import { ImageCanvas } from './ImageCanvas';
 import { LazySurface } from './LazySurface';
 import { ThumbnailStrip } from './ThumbnailStrip';
 import { ViewerChrome } from './ViewerChrome';
 import type { CurationFilter } from '../services/curationFilter';
+import { useViewerStore } from '../state/viewerStore';
 
 const loadContactSheet = () =>
   import('./ContactSheet').then(({ ContactSheet }) => ({ default: ContactSheet }));
@@ -33,6 +35,25 @@ interface AppViewerSurfaceProps {
 }
 
 export function AppViewerSurface(props: AppViewerSurfaceProps) {
+  const allImages = useViewerStore((state) => state.allImages);
+  const images = useViewerStore((state) => state.images);
+  const curationFilter = useViewerStore((state) => state.curationFilter);
+  const setCurationFilter = useViewerStore((state) => state.setCurationFilter);
+  const isFilteredEmpty =
+    allImages.length > 0 &&
+    curationFilter !== 'all' &&
+    images.length === 0 &&
+    !props.currentImagePath;
+
+  if (isFilteredEmpty) {
+    return (
+      <FilteredCurationEmptyState
+        filter={curationFilter}
+        onShowAll={() => setCurationFilter('all')}
+      />
+    );
+  }
+
   if (!props.currentImagePath) {
     return (
       <EmptyState
