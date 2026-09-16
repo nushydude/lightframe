@@ -1,9 +1,18 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContactSheet } from './ContactSheet';
 import { useViewerStore } from '../state/viewerStore';
 import { useCurationStore } from '../state/curationStore';
 import { useSettingsStore } from '../state/settingsStore';
+import { useAppKeyboardShortcuts } from '../hooks/useAppKeyboardShortcuts';
 
 const {
   copyCurrentImageMock,
@@ -200,6 +209,430 @@ describe('ContactSheet', () => {
     expect(screen.getByText('More')).toBeInTheDocument();
   });
 
+  it('toggles marks on ordinary clicks only while grid marking mode is enabled', () => {
+    const images = ['a.jpg', 'b.jpg', 'c.jpg'].map((file_name, index) => ({
+      path: `C:/images/${file_name}`,
+      file_name,
+      extension: 'jpg',
+      size_bytes: index + 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({ currentIndex: 0, viewMode: 'grid', images, markedPaths: [] });
+    useCurationStore.setState({
+      curationByPath: {
+        'C:/images/a.jpg': {
+          path: 'C:/images/a.jpg',
+          favorite: true,
+          rating: 0,
+          updated_at: 1,
+        },
+        'C:/images/b.jpg': {
+          path: 'C:/images/b.jpg',
+          favorite: true,
+          rating: 0,
+          updated_at: 1,
+        },
+      },
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    const mode = screen.getByRole('button', { name: 'Mark images' });
+    expect(mode).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(mode);
+    expect(mode).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByText('Click images to mark or unmark. Enter opens the image.')
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole('gridcell', { name: 'a.jpg' }));
+    fireEvent.click(screen.getByRole('gridcell', { name: 'b.jpg' }));
+    fireEvent.click(screen.getByRole('gridcell', { name: 'a.jpg' }));
+
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/images/b.jpg']);
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+    expect(useCurationStore.getState().curationByPath['C:/images/a.jpg']?.favorite).toBe(true);
+    expect(screen.getByRole('gridcell', { name: 'a.jpg' })).toHaveAttribute(
+      'aria-description',
+      'Not marked. Current image. Favourite'
+    );
+    expect(screen.getByRole('gridcell', { name: 'b.jpg' })).toHaveAttribute(
+      'aria-description',
+      'Marked. Favourite'
+    );
+    expect(screen.getByText('✓')).toBeInTheDocument();
+    expect(screen.getByText('1 marked')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('gridcell', { name: 'b.jpg' }), { ctrlKey: true });
+    expect(useViewerStore.getState().markedPaths).toEqual(['C:/images/b.jpg']);
+    expect(screen.getByRole('gridcell', { name: 'b.jpg' })).toHaveAttribute(
+      'aria-description',
+      'Marked. Selected. Current image. Favourite'
+    );
+  });
+
+  it('handles M once from a focused grid cell, keeps Space as selection, and Enter opens the viewer', () => {
+    const images = createContactSheetImages(3);
+    useViewerStore.setState({
+      currentIndex: 0,
+      currentImagePath: images[0]?.path ?? null,
+      viewMode: 'grid',
+      images,
+      markedPaths: [],
+    });
+    const toggleFavorite = vi.fn(async () => undefined);
+    const keyboard = renderHook(() =>
+      useAppKeyboardShortcuts({
+        openFilePicker: vi.fn(),
+        goNext: vi.fn(() => true),
+        goPrev: vi.fn(() => true),
+        goFirst: vi.fn(),
+        goLast: vi.fn(),
+        refreshFolder: vi.fn(),
+        startSlideshow: vi.fn(),
+        stopSlideshow: vi.fn(),
+        toggleSlideshowPause: vi.fn(),
+        openCommandPalette: vi.fn(),
+        togglePerformanceTelemetry: vi.fn(),
+        handleExitGridView: vi.fn(async () => true),
+        toggleFavorite,
+        setRating: vi.fn(),
+      })
+    );
+    const { unmount } = render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark images' }));
+    const firstCell = screen.getByRole('gridcell', { name: '0.jpg' });
+    fireEvent.click(firstCell, { ctrlKey: true });
+    expect(firstCell).toHaveAttribute('aria-selected', 'true');
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+
+    const secondCell = screen.getByRole('gridcell', { name: '1.jpg' });
+    fireEvent.keyDown(secondCell, { key: ' ' });
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+
+    fireEvent.keyDown(firstCell, { key: 'm' });
+    expect(useViewerStore.getState().markedPaths).toEqual([images[0]?.path]);
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search filenames' }), { key: 'm' });
+    expect(useViewerStore.getState().markedPaths).toEqual([images[0]?.path]);
+
+    fireEvent.keyDown(firstCell, { key: 'Enter' });
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+
+    unmount();
+    keyboard.unmount();
+  });
+
+  it('preserves no-anchor Shift-click selection behavior while marking mode is enabled', () => {
+    const images = createContactSheetImages(2);
+    useViewerStore.setState({
+      currentIndex: 0,
+      viewMode: 'grid',
+      images,
+      markedPaths: [],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark images' }));
+    fireEvent.click(screen.getByRole('gridcell', { name: '1.jpg' }), { shiftKey: true });
+
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+  });
+
+  it('marks and unmarks a selected snapshot without removing marks outside the search', () => {
+    const images = [
+      { path: 'C:/images/match-a.jpg', file_name: 'match-a.jpg' },
+      { path: 'C:/images/match-b.jpg', file_name: 'match-b.jpg' },
+      { path: 'C:/images/other.jpg', file_name: 'other.jpg' },
+    ].map((image, index) => ({
+      ...image,
+      extension: 'jpg',
+      size_bytes: index + 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({
+      currentIndex: 0,
+      viewMode: 'grid',
+      images,
+      markedPaths: ['C:/images/other.jpg', 'D:/outside-search.jpg'],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search filenames' }), {
+      target: { value: 'match' },
+    });
+    fireEvent.click(screen.getByRole('gridcell', { name: 'match-a.jpg' }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('gridcell', { name: 'match-b.jpg' }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark selected' }));
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/images/other.jpg',
+      'D:/outside-search.jpg',
+      'C:/images/match-a.jpg',
+      'C:/images/match-b.jpg',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Mark selected' }));
+    expect(useViewerStore.getState().markedPaths).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Unmark selected' }));
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/images/other.jpg',
+      'D:/outside-search.jpg',
+    ]);
+    expect(screen.getAllByText('2 selected')[0]).toBeInTheDocument();
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+  });
+
+  it('exposes bounded grid zoom controls and keeps zoom size for a remounted grid', () => {
+    const { unmount } = render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    const slider = screen.getByRole('slider', { name: 'Grid thumbnail size' });
+    expect(slider).toHaveValue('140');
+    expect(screen.getByRole('button', { name: 'Zoom grid out' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark images' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom grid in' }));
+    expect(useViewerStore.getState().gridThumbnailSize).toBe(160);
+    expect(slider).toHaveValue('160');
+    slider.focus();
+    fireEvent.change(slider, { target: { value: '300' } });
+    expect(document.activeElement).toBe(slider);
+    expect(screen.getByRole('button', { name: 'Zoom grid in' })).toBeDisabled();
+    unmount();
+
+    useViewerStore.getState().setGridThumbnailSize(100);
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+    expect(screen.getByRole('slider', { name: 'Grid thumbnail size' })).toHaveValue('100');
+    expect(screen.getByRole('button', { name: 'Zoom grid out' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark images' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+  });
+
+  it('keeps the first visible result and fractional row offset anchored when zoom changes', () => {
+    const images = createContactSheetImages(1_000);
+    useViewerStore.setState({ currentIndex: 0, images });
+    const animationFrames = mockAnimationFrames();
+    const originalResizeObserver = globalThis.ResizeObserver;
+    let triggerResize: (() => void) | null = null;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class ResizeObserverMock {
+        constructor(callback: ResizeObserverCallback) {
+          triggerResize = () => callback([], this);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+
+    try {
+      const { container } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      Object.defineProperty(content, 'clientWidth', { configurable: true, value: 1_200 });
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 500 });
+      act(() => triggerResize?.());
+      content.scrollTop = 24 + 10 * 188 + 94;
+      fireEvent.scroll(content);
+      act(() => animationFrames.flushNextFrame());
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom grid in' }));
+
+      expect(useViewerStore.getState().gridThumbnailSize).toBe(160);
+      expect(content.scrollTop).toBeCloseTo(24 + 11 * 208 + 104);
+      expect(screen.getByRole('gridcell', { name: '70.jpg' })).toBeInTheDocument();
+      expect(useViewerStore.getState().currentIndex).toBe(0);
+    } finally {
+      animationFrames.restore();
+      vi.stubGlobal('ResizeObserver', originalResizeObserver);
+    }
+  });
+
+  it('reveals a deep current image after the first grid measurement settles', async () => {
+    const images = createContactSheetImages(1_000);
+    useViewerStore.setState({ currentIndex: 900, images });
+    const originalResizeObserver = globalThis.ResizeObserver;
+    let triggerResize: (() => void) | null = null;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class ResizeObserverMock {
+        constructor(callback: ResizeObserverCallback) {
+          triggerResize = () => callback([], this);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+
+    try {
+      const { container } = render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+      const content = container.querySelector('.contact-sheet-content') as HTMLDivElement;
+      const scrollTo = vi.fn();
+      Object.defineProperties(content, {
+        clientWidth: { configurable: true, value: 1_200 },
+        clientHeight: { configurable: true, value: 500 },
+        scrollTo: { configurable: true, value: scrollTo },
+      });
+
+      expect(scrollTo).not.toHaveBeenCalled();
+      act(() => triggerResize?.());
+
+      await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+      const revealTop = scrollTo.mock.calls[scrollTo.mock.calls.length - 1]?.[0]?.top;
+      expect(revealTop).toBeGreaterThan(0);
+
+      const revealCount = scrollTo.mock.calls.length;
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom grid in' }));
+      expect(scrollTo).toHaveBeenCalledTimes(revealCount);
+    } finally {
+      vi.stubGlobal('ResizeObserver', originalResizeObserver);
+    }
+  });
+
+  it('uses measured columns when the initial grid measurement is available on mount', async () => {
+    const images = createContactSheetImages(1_000);
+    useViewerStore.setState({ currentIndex: 900, images });
+    const originalWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    const originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
+    const scrollTo = vi.fn();
+    Object.defineProperties(HTMLElement.prototype, {
+      clientWidth: { configurable: true, value: 1_200 },
+      clientHeight: { configurable: true, value: 500 },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+
+    try {
+      render(
+        <ContactSheet
+          onExitGridView={vi.fn(async () => true)}
+          onGoHome={() => undefined}
+          onOpenFile={() => undefined}
+          onOpenFolder={() => undefined}
+          onRefreshFolder={() => undefined}
+          onStartSlideshow={() => undefined}
+        />
+      );
+
+      await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+      const revealTop = scrollTo.mock.calls[scrollTo.mock.calls.length - 1]?.[0]?.top;
+      // 1,200px content width yields seven 140px columns. A one-column first pass would
+      // produce a target near 170,000px for index 900 instead of this measured-row target.
+      expect(revealTop).toBe(24 + 127 * 188);
+    } finally {
+      if (originalWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      if (originalHeight)
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalHeight);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+      if (originalScrollTo)
+        Object.defineProperty(HTMLElement.prototype, 'scrollTo', originalScrollTo);
+      else delete (HTMLElement.prototype as unknown as { scrollTo?: typeof scrollTo }).scrollTo;
+    }
+  });
+
+  it('marks offscreen selected results in a large virtualized folder', () => {
+    const images = createContactSheetImages(10_000);
+    useViewerStore.setState({ currentIndex: 0, images });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    expect(screen.getAllByRole('gridcell').length).toBeLessThan(100);
+    fireEvent.click(screen.getByRole('gridcell', { name: '0.jpg' }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark selected' }));
+    expect(useViewerStore.getState().markedPaths).toHaveLength(10_000);
+    expect(useViewerStore.getState().markedPaths).toContain('C:/images/9999.jpg');
+    expect(screen.getAllByRole('gridcell').length).toBeLessThan(100);
+  });
+
   it('searches filenames and opens a result using its source index', () => {
     useViewerStore.setState({
       currentIndex: 0,
@@ -245,6 +678,31 @@ describe('ContactSheet', () => {
     expect(screen.getByText('1 of 3 images')).toBeInTheDocument();
     fireEvent.click(screen.getByText('target.png'));
     expect(useViewerStore.getState().currentIndex).toBe(2);
+    expect(useViewerStore.getState().viewMode).toBe('viewer');
+  });
+
+  it('keeps an ordinary click in grid mode when the projector is open', () => {
+    projectorState.isProjectorOpen = true;
+    useViewerStore.setState({
+      currentIndex: 0,
+      viewMode: 'grid',
+      images: createContactSheetImages(2),
+    });
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('gridcell', { name: '1.jpg' }));
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
   });
 
   it('uses displayed result order for shift selection and removes hidden selections', () => {
@@ -578,7 +1036,7 @@ describe('ContactSheet', () => {
       expect(preloadThumbnailsMock).toHaveBeenCalledTimes(1);
       const requests = preloadThumbnailsMock.mock.calls[0]?.[0] as Array<{ path: string }>;
       expect(requests.length).toBeGreaterThan(0);
-      expect(requests[0]?.path).toBe('C:/images/7.jpg');
+      expect(requests[0]?.path).toBe('C:/images/6.jpg');
       expect(requests.some((request) => request.path === 'C:/images/0.jpg')).toBe(false);
       unmount();
     } finally {

@@ -59,6 +59,37 @@ describe('viewerStore', () => {
     expect(useViewerStore.getState().defaultZoomMode).toBe('fit');
   });
 
+  it('keeps bounded grid thumbnail size for the app session and resets it on full reset', () => {
+    expect(useViewerStore.getState().gridThumbnailSize).toBe(140);
+    useViewerStore.getState().setGridThumbnailSize(300);
+    expect(useViewerStore.getState().gridThumbnailSize).toBe(300);
+    useViewerStore.getState().setGridThumbnailSize(129);
+    expect(useViewerStore.getState().gridThumbnailSize).toBe(120);
+    useViewerStore.getState().setGridThumbnailSize(20);
+    expect(useViewerStore.getState().gridThumbnailSize).toBe(100);
+
+    useViewerStore.getState().setGridThumbnailSize(300);
+    useViewerStore.getState().reset();
+    expect(useViewerStore.getState().gridThumbnailSize).toBe(140);
+  });
+
+  it('adds and removes selected marks by normalized identity without pruning unrelated paths', () => {
+    useViewerStore.setState({ markedPaths: ['C:/images/outside-search.jpg', 'D:/other.jpg'] });
+    useViewerStore.getState().updateMarkedPaths(['c:\\images\\selected.jpg'], true);
+    useViewerStore.getState().updateMarkedPaths(['C:/IMAGES/SELECTED.JPG'], true);
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/images/outside-search.jpg',
+      'D:/other.jpg',
+      'c:\\images\\selected.jpg',
+    ]);
+
+    useViewerStore.getState().updateMarkedPaths(['C:/images/selected.jpg'], false);
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/images/outside-search.jpg',
+      'D:/other.jpg',
+    ]);
+  });
+
   it("setDefaultZoomMode('fill') affects setCurrentImage", () => {
     useViewerStore.getState().setDefaultZoomMode('fill');
     useViewerStore.getState().setCurrentImage('fill-test.jpg', 0);

@@ -6,6 +6,7 @@ import {
   deleteCurrentImage,
   openCurrentImageInEditor,
 } from '../services/viewerActions';
+import { toggleFavoriteFromUi, toggleMarkFromUi } from '../services/directCurationActions';
 
 export function useAppKeyboardShortcuts({
   openFilePicker,
@@ -69,11 +70,11 @@ export function useAppKeyboardShortcuts({
     togglePerformanceTelemetry,
     toggleFavoriteCurrent: () => {
       const path = useViewerStore.getState().currentImagePath;
-      if (path) void toggleFavorite(path);
+      if (path) void toggleFavoriteFromUi(path, undefined, toggleFavorite);
     },
     toggleMarkedCurrent: () => {
       const path = useViewerStore.getState().currentImagePath;
-      if (path) useViewerStore.getState().toggleMarkedPath(path);
+      if (path) toggleMarkFromUi(path);
     },
     setRatingCurrent: (rating) => {
       const path = useViewerStore.getState().currentImagePath;

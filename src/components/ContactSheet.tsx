@@ -45,12 +45,15 @@ import type { QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
 import { ToolbarIcon } from './ToolbarIcon';
 import { isInteractiveTargetOutsideGrid } from '../services/keyboardTarget';
+import {
+  calculateContactSheetLayout,
+  CONTACT_SHEET_OVERSCAN_ROWS,
+  CONTACT_SHEET_TOP_PADDING,
+  GRID_THUMBNAIL_MAX_SIZE,
+  GRID_THUMBNAIL_MIN_SIZE,
+  GRID_THUMBNAIL_STEP,
+} from '../services/contactSheetLayout';
 
-const GRID_ITEM_SIZE = 140;
-const GRID_GAP = 20;
-const GRID_LABEL_HEIGHT = 20;
-const GRID_ROW_HEIGHT = GRID_ITEM_SIZE + GRID_GAP + GRID_LABEL_HEIGHT;
-const GRID_OVERSCAN_ROWS = 3;
 const THUMBNAIL_PRELOAD_IDLE_DELAY_MS = 100;
 
 interface ContactSheetProps {
@@ -81,10 +84,13 @@ export function ContactSheet({
   const rotation = useViewerStore((state) => state.rotation);
   const pendingCropPreview = useViewerStore((state) => state.pendingCropPreview);
   const curationFilter = useViewerStore((state) => state.curationFilter);
+  const markedPaths = useViewerStore((state) => state.markedPaths);
+  const gridThumbnailSize = useViewerStore((state) => state.gridThumbnailSize);
   const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
   const setFullscreen = useViewerStore((state) => state.setFullscreen);
   const setViewMode = useViewerStore((state) => state.setViewMode);
   const setCurationFilter = useViewerStore((state) => state.setCurationFilter);
+  const setGridThumbnailSize = useViewerStore((state) => state.setGridThumbnailSize);
   const setShowSettings = useViewerStore((state) => state.setShowSettings);
   const enterCompareMode = useViewerStore((state) => state.enterCompareMode);
   const enterCropMode = useViewerStore((state) => state.enterCropMode);
@@ -100,11 +106,12 @@ export function ContactSheet({
   );
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
-  const [columns, setColumns] = useState(1);
+  const [contentWidth, setContentWidth] = useState(0);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [bulkCurationPending, setBulkCurationPending] = useState(false);
+  const [markingMode, setMarkingMode] = useState(false);
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
   const contactSheetRootRef = useRef<HTMLDivElement>(null);
@@ -116,6 +123,18 @@ export function ContactSheet({
   const pendingScrollTopRef = useRef(0);
   const visibleThumbnailPathsRef = useRef<ReadonlySet<string>>(new Set());
   const bulkCurationPendingRef = useRef(false);
+  const pendingGridAnchorRef = useRef<{ path: string; fractionalOffset: number } | null>(null);
+  const gridLayoutRef = useRef<ReturnType<typeof calculateContactSheetLayout> | null>(null);
+  const hasMeasuredGridRef = useRef(false);
+  const gridLayoutInputRef = useRef({
+    desiredItemSize: gridThumbnailSize,
+    contentWidth,
+    viewportHeight,
+    resultCount: 0,
+  });
+  const searchResultsRef = useRef<ContactSheetSearchResult[]>([]);
+  const lastRevealedCurrentPathRef = useRef<string | null>(null);
+  const initialRevealPendingRef = useRef(true);
   const { handleThumbnailLoaded, isThumbnailConsumerActive } = useThumbnailRefreshSignal();
 
   const normalizedQuery = useMemo(() => normalizeContactSheetQuery(searchQuery), [searchQuery]);
@@ -130,24 +149,51 @@ export function ContactSheet({
   const displayedImages = useMemo(() => searchResults.map(({ image }) => image), [searchResults]);
   const currentResultIndex =
     resultIndexByPath.get(normalizeContactSheetPath(images[currentIndex]?.path ?? '')) ?? -1;
-  const totalRows = Math.ceil(searchResults.length / columns);
+  const layout = useMemo(
+    () =>
+      calculateContactSheetLayout({
+        desiredItemSize: gridThumbnailSize,
+        contentWidth,
+        viewportHeight,
+        scrollTop,
+        resultCount: searchResults.length,
+      }),
+    [contentWidth, gridThumbnailSize, scrollTop, searchResults.length, viewportHeight]
+  );
+  const columns = layout.columns;
   const activeRow = currentResultIndex >= 0 ? Math.floor(currentResultIndex / columns) : 0;
-  const visibleRange = useMemo(() => {
-    const rowCount = Math.ceil(viewportHeight / GRID_ROW_HEIGHT) + GRID_OVERSCAN_ROWS * 2;
-    const maxFirstRow = Math.max(0, totalRows - rowCount);
-    const firstRow = Math.min(
-      maxFirstRow,
-      Math.max(0, Math.floor(scrollTop / GRID_ROW_HEIGHT) - GRID_OVERSCAN_ROWS)
-    );
-    const lastRow = Math.min(totalRows, firstRow + rowCount);
-
-    return {
-      startIndex: firstRow * columns,
-      endIndex: Math.min(searchResults.length, lastRow * columns),
-      topHeight: firstRow * GRID_ROW_HEIGHT,
-      bottomHeight: Math.max(0, (totalRows - lastRow) * GRID_ROW_HEIGHT),
-    };
-  }, [columns, searchResults.length, scrollTop, totalRows, viewportHeight]);
+  const visibleRange = {
+    startIndex: layout.startIndex,
+    endIndex: layout.endIndex,
+    topHeight: layout.topSpacerHeight,
+    bottomHeight: layout.bottomSpacerHeight,
+  };
+  gridLayoutRef.current = layout;
+  searchResultsRef.current = searchResults;
+  gridLayoutInputRef.current = {
+    desiredItemSize: gridThumbnailSize,
+    contentWidth,
+    viewportHeight,
+    resultCount: searchResults.length,
+  };
+  const rememberGridAnchor = useCallback(() => {
+    const currentLayout = gridLayoutRef.current;
+    if (!currentLayout || searchResultsRef.current.length === 0) return;
+    const scrollContainer = contentRef.current;
+    const layoutInput = gridLayoutInputRef.current;
+    const anchorLayout = calculateContactSheetLayout({
+      ...layoutInput,
+      scrollTop: scrollContainer?.scrollTop ?? pendingScrollTopRef.current,
+    });
+    const anchorResult =
+      searchResultsRef.current[anchorLayout.firstVisibleRow * anchorLayout.columns];
+    if (anchorResult) {
+      pendingGridAnchorRef.current = {
+        path: anchorResult.image.path,
+        fractionalOffset: anchorLayout.fractionalRowOffset,
+      };
+    }
+  }, []);
 
   const visibleResults = useMemo(
     () => searchResults.slice(visibleRange.startIndex, visibleRange.endIndex),
@@ -167,12 +213,17 @@ export function ContactSheet({
     [handleThumbnailLoaded]
   );
   const currentImagePath = currentIndex >= 0 ? (images[currentIndex]?.path ?? null) : null;
+  const initialCurrentPathRef = useRef(currentImagePath);
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const canEnterCompareMode = images.length > 1;
   const canStartSlideshow = images.length > 1;
   const cropDisabledByRotation = rotation !== 0;
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
+  const markedPathSet = useMemo(
+    () => new Set(markedPaths.map(normalizeContactSheetPath)),
+    [markedPaths]
+  );
   const hasSelection = selectedPaths.length > 0;
 
   useLayoutEffect(() => {
@@ -204,11 +255,16 @@ export function ContactSheet({
     if (!content) return;
 
     const updateMetrics = () => {
-      const availableWidth = Math.min(1400, content.clientWidth);
-      setColumns(
-        Math.max(1, Math.floor((availableWidth + GRID_GAP) / (GRID_ITEM_SIZE + GRID_GAP)))
-      );
-      setViewportHeight(content.clientHeight);
+      const nextWidth = content.clientWidth || contentWidth;
+      const nextHeight = content.clientHeight;
+      if (nextWidth > 0 && nextHeight > 0) {
+        hasMeasuredGridRef.current = true;
+      }
+      if (nextWidth !== contentWidth || nextHeight !== viewportHeight) {
+        rememberGridAnchor();
+        setContentWidth(nextWidth);
+      }
+      setViewportHeight(nextHeight);
       pendingScrollTopRef.current = content.scrollTop;
       setScrollTop(content.scrollTop);
     };
@@ -218,32 +274,82 @@ export function ContactSheet({
     observer.observe(content);
 
     return () => observer.disconnect();
-  }, []);
+  }, [contentWidth, rememberGridAnchor, viewportHeight]);
 
   useLayoutEffect(() => {
     const content = contentRef.current;
     if (!content) return;
 
-    const effectiveViewportHeight = content.clientHeight || viewportHeight;
-    const maxScrollTop = Math.max(0, totalRows * GRID_ROW_HEIGHT - effectiveViewportHeight);
-    const nextScrollTop = Math.min(pendingScrollTopRef.current, maxScrollTop);
-    if (nextScrollTop === pendingScrollTopRef.current) return;
+    const anchor = pendingGridAnchorRef.current;
+    let requestedScrollTop = pendingScrollTopRef.current;
+    if (anchor) {
+      const anchorIndex = resultIndexByPath.get(normalizeContactSheetPath(anchor.path));
+      if (anchorIndex !== undefined) {
+        const anchorRow = Math.floor(anchorIndex / columns);
+        requestedScrollTop =
+          CONTACT_SHEET_TOP_PADDING +
+          anchorRow * layout.rowPitch +
+          anchor.fractionalOffset * layout.rowPitch;
+      }
+      pendingGridAnchorRef.current = null;
+    }
+    const domMaxScrollTop = content.scrollHeight - content.clientHeight;
+    const maxScrollTop =
+      content.scrollHeight > 0
+        ? Math.max(0, domMaxScrollTop)
+        : calculateContactSheetLayout({
+            desiredItemSize: gridThumbnailSize,
+            contentWidth: content.clientWidth || contentWidth,
+            viewportHeight: content.clientHeight || viewportHeight,
+            scrollTop: requestedScrollTop,
+            resultCount: searchResults.length,
+          }).maxScrollTop;
+    const nextScrollTop = Math.min(requestedScrollTop, maxScrollTop);
+    if (nextScrollTop === content.scrollTop && nextScrollTop === pendingScrollTopRef.current)
+      return;
 
     content.scrollTop = nextScrollTop;
     pendingScrollTopRef.current = nextScrollTop;
     setScrollTop((current) => (current === nextScrollTop ? current : nextScrollTop));
-  }, [scrollTop, totalRows, viewportHeight]);
+  }, [
+    columns,
+    contentWidth,
+    gridThumbnailSize,
+    layout,
+    resultIndexByPath,
+    searchResults.length,
+    viewportHeight,
+  ]);
 
   useEffect(() => {
+    // Wait for the first real measurement before revealing the image that was current when the
+    // grid mounted. A later explicit navigation still reveals immediately, even in a test or
+    // hidden layout with zero dimensions. Zoom changes retain the same path guard, so they only
+    // restore the captured scroll anchor and do not reveal the current image again.
     if (!contentRef.current || currentIndex < 0) return;
+    if (
+      initialRevealPendingRef.current &&
+      currentImagePath === initialCurrentPathRef.current &&
+      (!hasMeasuredGridRef.current || contentWidth <= 0 || viewportHeight <= 0)
+    )
+      return;
+    if (
+      initialRevealPendingRef.current &&
+      currentImagePath === initialCurrentPathRef.current &&
+      (contentWidth <= 0 || viewportHeight <= 0)
+    )
+      return;
+    initialRevealPendingRef.current = false;
+    if (lastRevealedCurrentPathRef.current === currentImagePath) return;
+    lastRevealedCurrentPathRef.current = currentImagePath;
 
-    const targetTop = activeRow * GRID_ROW_HEIGHT;
-    const targetBottom = targetTop + GRID_ROW_HEIGHT;
+    const targetTop = CONTACT_SHEET_TOP_PADDING + activeRow * layout.rowPitch;
+    const targetBottom = targetTop + layout.itemHeight;
     const viewTop = contentRef.current.scrollTop;
     const viewBottom = viewTop + contentRef.current.clientHeight;
 
     if (targetTop < viewTop || targetBottom > viewBottom) {
-      const nextScrollTop = Math.max(0, targetTop - GRID_ROW_HEIGHT);
+      const nextScrollTop = Math.max(0, targetTop - layout.rowPitch);
       contentRef.current.scrollTo({
         top: nextScrollTop,
         behavior: 'auto',
@@ -251,13 +357,24 @@ export function ContactSheet({
       pendingScrollTopRef.current = nextScrollTop;
       setScrollTop(nextScrollTop);
     }
-  }, [activeRow, currentIndex]);
+  }, [
+    activeRow,
+    contentWidth,
+    currentImagePath,
+    currentIndex,
+    layout.itemHeight,
+    layout.rowPitch,
+    viewportHeight,
+  ]);
 
   useEffect(() => {
-    const keepStart = Math.max(0, visibleRange.startIndex - columns * GRID_OVERSCAN_ROWS * 4);
+    const keepStart = Math.max(
+      0,
+      visibleRange.startIndex - columns * CONTACT_SHEET_OVERSCAN_ROWS * 4
+    );
     const keepEnd = Math.min(
       searchResults.length,
-      visibleRange.endIndex + columns * GRID_OVERSCAN_ROWS * 4
+      visibleRange.endIndex + columns * CONTACT_SHEET_OVERSCAN_ROWS * 4
     );
     const keepPaths = new Set(
       searchResults.slice(keepStart, keepEnd).map(({ image }) => image.path)
@@ -338,30 +455,33 @@ export function ContactSheet({
     });
   };
 
-  const handlePageScroll = (event: KeyboardEvent) => {
-    if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
+  const handlePageScroll = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
 
-    const content = contentRef.current;
-    if (!content) return;
+      const content = contentRef.current;
+      if (!content) return;
 
-    event.preventDefault();
-    event.stopPropagation();
+      event.preventDefault();
+      event.stopPropagation();
 
-    const pageHeight = content.clientHeight || GRID_ROW_HEIGHT;
-    const direction = event.key === 'PageDown' ? 1 : -1;
-    const maxScrollTop = Math.max(0, content.scrollHeight - content.clientHeight);
-    const nextScrollTop = Math.max(
-      0,
-      Math.min(maxScrollTop, content.scrollTop + direction * pageHeight)
-    );
+      const pageHeight = content.clientHeight || layout.rowPitch;
+      const direction = event.key === 'PageDown' ? 1 : -1;
+      const maxScrollTop = Math.max(0, content.scrollHeight - content.clientHeight);
+      const nextScrollTop = Math.max(
+        0,
+        Math.min(maxScrollTop, content.scrollTop + direction * pageHeight)
+      );
 
-    content.scrollTo({
-      top: nextScrollTop,
-      behavior: 'auto',
-    });
-    pendingScrollTopRef.current = nextScrollTop;
-    setScrollTop(nextScrollTop);
-  };
+      content.scrollTo({
+        top: nextScrollTop,
+        behavior: 'auto',
+      });
+      pendingScrollTopRef.current = nextScrollTop;
+      setScrollTop(nextScrollTop);
+    },
+    [layout.rowPitch]
+  );
 
   const handleSelect = useCallback(
     (result: ContactSheetSearchResult) => {
@@ -380,7 +500,14 @@ export function ContactSheet({
     resultIndex: number,
     result: ContactSheetSearchResult
   ) => {
-    if (event.shiftKey && lastSelectedIndex !== null) {
+    if (event.shiftKey) {
+      if (lastSelectedIndex === null) {
+        setSelectedPaths([result.image.path]);
+        setLastSelectedIndex(resultIndex);
+        if (isProjectorOpen) handleSelectForProjector(result);
+        else handleSelect(result);
+        return;
+      }
       setSelectedPaths((current) =>
         selectRangePaths(displayedImages, lastSelectedIndex, resultIndex, current)
       );
@@ -393,6 +520,13 @@ export function ContactSheet({
       setSelectedPaths((current) => toggleSelectionPath(current, result.image.path));
       setLastSelectedIndex(resultIndex);
       setCurrentIndex(result.sourceIndex);
+      return;
+    }
+
+    if (markingMode) {
+      setLastSelectedIndex(resultIndex);
+      setCurrentIndex(result.sourceIndex);
+      useViewerStore.getState().toggleMarkedPath(result.image.path);
       return;
     }
 
@@ -470,6 +604,16 @@ export function ContactSheet({
 
   const handleBulkRating = async (rating: number) => {
     await runBulkCurationAction(() => setRatingForPaths([...selectedPaths], rating));
+  };
+
+  const handleBulkMark = (mark: boolean) => {
+    const selectedSnapshot = [...selectedPaths];
+    useViewerStore.getState().updateMarkedPaths(selectedSnapshot, mark);
+  };
+
+  const handleGridThumbnailSizeChange = (nextSize: number) => {
+    rememberGridAnchor();
+    setGridThumbnailSize(nextSize);
   };
 
   const handleCopyCurrent = async () => {
@@ -726,10 +870,12 @@ export function ContactSheet({
     currentIndex,
     displayedImages,
     handleDeleteCurrent,
+    handlePageScroll,
     handleSelect,
     normalizedQuery,
     onExitGridView,
     searchResults,
+    layout.rowPitch,
     lastSelectedIndex,
     setCurrentIndex,
   ]);
@@ -747,6 +893,9 @@ export function ContactSheet({
           {selectedPaths.length > 0 && (
             <span className="image-count">{selectedPaths.length} selected</span>
           )}
+          <span className="image-count" aria-live="polite">
+            {markedPaths.length} marked
+          </span>
         </div>
         <div className="contact-sheet-search">
           <label htmlFor="contact-sheet-search-input">Search filenames</label>
@@ -773,6 +922,54 @@ export function ContactSheet({
                 ×
               </button>
             )}
+          </div>
+        </div>
+        <div className="contact-sheet-grid-controls">
+          <div className="contact-sheet-mark-mode">
+            <button
+              className={`contact-sheet-mode-toggle ${markingMode ? 'active' : ''}`}
+              type="button"
+              aria-pressed={markingMode}
+              onClick={() => setMarkingMode((enabled) => !enabled)}
+            >
+              Mark images
+            </button>
+            {markingMode && (
+              <span className="contact-sheet-mark-help">
+                Click images to mark or unmark. Enter opens the image.
+              </span>
+            )}
+          </div>
+          <div className="contact-sheet-zoom" role="group" aria-label="Grid zoom">
+            <span className="contact-sheet-zoom-label">Grid zoom</span>
+            <button
+              className="contact-sheet-zoom-button"
+              type="button"
+              aria-label="Zoom grid out"
+              disabled={gridThumbnailSize <= GRID_THUMBNAIL_MIN_SIZE}
+              onClick={() => handleGridThumbnailSizeChange(gridThumbnailSize - GRID_THUMBNAIL_STEP)}
+            >
+              −
+            </button>
+            <input
+              type="range"
+              min={GRID_THUMBNAIL_MIN_SIZE}
+              max={GRID_THUMBNAIL_MAX_SIZE}
+              step={GRID_THUMBNAIL_STEP}
+              value={gridThumbnailSize}
+              aria-label="Grid thumbnail size"
+              onChange={(event) => handleGridThumbnailSizeChange(Number(event.target.value))}
+            />
+            <button
+              className="contact-sheet-zoom-button"
+              type="button"
+              aria-label="Zoom grid in"
+              disabled={gridThumbnailSize >= GRID_THUMBNAIL_MAX_SIZE}
+              onClick={() => handleGridThumbnailSizeChange(gridThumbnailSize + GRID_THUMBNAIL_STEP)}
+            >
+              +
+            </button>
+            <output className="contact-sheet-zoom-value">{gridThumbnailSize} px</output>
           </div>
         </div>
         <div className="top-bar-right header-actions">
@@ -1000,6 +1197,12 @@ export function ContactSheet({
           <button className="top-bar-menu-item" type="button" onClick={handleClearSelection}>
             Clear
           </button>
+          <button className="top-bar-menu-item" type="button" onClick={() => handleBulkMark(true)}>
+            Mark selected
+          </button>
+          <button className="top-bar-menu-item" type="button" onClick={() => handleBulkMark(false)}>
+            Unmark selected
+          </button>
           <span className="contact-sheet-bulk-divider" aria-hidden="true" />
           <button
             className="top-bar-menu-item"
@@ -1058,7 +1261,7 @@ export function ContactSheet({
             role="grid"
             aria-label="Folder contact sheet"
             style={{
-              gridTemplateColumns: `repeat(${columns}, ${GRID_ITEM_SIZE}px)`,
+              gridTemplateColumns: `repeat(${columns}, ${layout.itemSize}px)`,
             }}
           >
             {visibleRange.topHeight > 0 && (
@@ -1076,12 +1279,19 @@ export function ContactSheet({
               });
               const curation = curationByPath[image.path];
               const isFavorite = Boolean(curation?.favorite);
+              const isMarked = markedPathSet.has(normalizeContactSheetPath(image.path));
               const rating = curation?.rating ?? 0;
+              const accessibleStates = [
+                isMarked ? 'Marked' : 'Not marked',
+                selectedPathSet.has(image.path) ? 'Selected' : '',
+                isActive ? 'Current image' : '',
+                isFavorite ? 'Favourite' : '',
+              ].filter(Boolean);
 
               return (
                 <button
                   key={image.path}
-                  className={`grid-item ${isActive ? 'active' : ''} ${selectedPathSet.has(image.path) ? 'selected' : ''}`}
+                  className={`grid-item ${isActive ? 'active' : ''} ${selectedPathSet.has(image.path) ? 'selected' : ''} ${isMarked ? 'marked' : ''}`}
                   onClick={(event) => handleGridItemClick(event, resultIndex, result)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
@@ -1098,6 +1308,7 @@ export function ContactSheet({
                   data-image-path={image.path}
                   role="gridcell"
                   aria-label={image.file_name}
+                  aria-description={accessibleStates.join('. ')}
                   aria-selected={selectedPathSet.has(image.path)}
                   aria-current={isActive ? 'true' : undefined}
                   tabIndex={
@@ -1110,6 +1321,11 @@ export function ContactSheet({
                   title={image.file_name}
                 >
                   <div className="grid-thumbnail-wrapper">
+                    {isMarked && (
+                      <span className="grid-mark-badge" aria-hidden="true">
+                        ✓
+                      </span>
+                    )}
                     {(isFavorite || rating > 0) && (
                       <div className="grid-curation-badges" aria-hidden="true">
                         {isFavorite && <span className="grid-curation-badge favorite">★</span>}
