@@ -45,6 +45,7 @@ import type { QuickDestination } from '../types/settings';
 import { CurationFilterMenu } from './CurationFilterMenu';
 import { ToolbarIcon } from './ToolbarIcon';
 import { isInteractiveTargetOutsideGrid } from '../services/keyboardTarget';
+import { toggleMarkFromUi } from '../services/directCurationActions';
 import {
   calculateContactSheetLayout,
   CONTACT_SHEET_OVERSCAN_ROWS,
@@ -112,12 +113,16 @@ export function ContactSheet({
   const [searchQuery, setSearchQuery] = useState('');
   const [bulkCurationPending, setBulkCurationPending] = useState(false);
   const [markingMode, setMarkingMode] = useState(false);
+  const [markedTransferMenuMode, setMarkedTransferMenuMode] = useState<'copy' | 'move' | null>(
+    null
+  );
   const { isProjectorOpen, refreshProjectorState } = useProjectorState();
 
   const contactSheetRootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const markedActionsMenuRef = useRef<HTMLDetailsElement>(null);
   const scrollRafRef = useRef<number | null>(null);
   const thumbnailPreloadTimeoutRef = useRef<number | null>(null);
   const pendingScrollTopRef = useRef(0);
@@ -214,6 +219,7 @@ export function ContactSheet({
   );
   const currentImagePath = currentIndex >= 0 ? (images[currentIndex]?.path ?? null) : null;
   const initialCurrentPathRef = useRef(currentImagePath);
+  const currentImage = currentIndex >= 0 ? images[currentIndex] : undefined;
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const canEnterCompareMode = images.length > 1;
@@ -224,6 +230,9 @@ export function ContactSheet({
     () => new Set(markedPaths.map(normalizeContactSheetPath)),
     [markedPaths]
   );
+  const isCurrentMarked = currentImagePath
+    ? markedPathSet.has(normalizeContactSheetPath(currentImagePath))
+    : false;
   const hasSelection = selectedPaths.length > 0;
 
   useLayoutEffect(() => {
@@ -609,6 +618,120 @@ export function ContactSheet({
   const handleBulkMark = (mark: boolean) => {
     const selectedSnapshot = [...selectedPaths];
     useViewerStore.getState().updateMarkedPaths(selectedSnapshot, mark);
+  };
+
+  const closeMarkedActionsMenu = () => {
+    if (markedActionsMenuRef.current) markedActionsMenuRef.current.open = false;
+    setMarkedTransferMenuMode(null);
+  };
+
+  const handleMarkAllVisible = () => {
+    useViewerStore.getState().updateMarkedPaths(
+      displayedImages.map((image) => image.path),
+      true
+    );
+  };
+
+  const handleJumpToLastMarked = () => {
+    const currentMarkedPaths = useViewerStore.getState().markedPaths;
+    const lastMarkedPath = currentMarkedPaths[currentMarkedPaths.length - 1];
+    if (!lastMarkedPath) return;
+
+    setSearchQuery('');
+    const state = useViewerStore.getState();
+    if (state.curationFilter !== 'all') state.setCurationFilter('all');
+    const allImages = useViewerStore.getState().images;
+    const targetKey = normalizeContactSheetPath(lastMarkedPath);
+    const targetIndex = allImages.findIndex(
+      (image) => normalizeContactSheetPath(image.path) === targetKey
+    );
+    if (targetIndex < 0) return;
+
+    useViewerStore.getState().setCurrentIndex(targetIndex);
+    closeMarkedActionsMenu();
+  };
+
+  const handleDeleteMarked = async () => {
+    const markedSnapshot = [...useViewerStore.getState().markedPaths];
+    if (markedSnapshot.length === 0) return;
+
+    await deleteImages({
+      imagePaths: markedSnapshot,
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    closeMarkedActionsMenu();
+  };
+
+  const handleMarkedTransfer = async (destination: QuickDestination, mode: 'copy' | 'move') => {
+    const markedSnapshot = [...useViewerStore.getState().markedPaths];
+    if (markedSnapshot.length === 0) return;
+
+    const result = await transferImagesToDestination(markedSnapshot, destination, mode);
+    const successfulPaths = new Set(result.successes.map((success) => success.sourcePath));
+    const failedPaths = markedSnapshot.filter((path) => !successfulPaths.has(path));
+    if (mode === 'move' && successfulPaths.size > 0) {
+      useViewerStore.getState().removeImagesByPaths([...successfulPaths]);
+    }
+    useViewerStore.getState().setMarkedPaths(failedPaths);
+    showTransferResultMessage(result, destination, mode);
+    closeMarkedActionsMenu();
+  };
+
+  const handleChooseMarkedTransferFolder = async (mode: 'copy' | 'move') => {
+    const destination = await chooseQuickDestinationFolder();
+    if (!destination) return;
+    await handleMarkedTransfer(destination, mode);
+  };
+
+  const renderMarkedTransferSubmenu = (mode: 'copy' | 'move') => {
+    const isExpanded = markedTransferMenuMode === mode;
+    return (
+      <details className="top-bar-submenu marked-actions-transfer-submenu" open={isExpanded}>
+        <summary
+          className="top-bar-menu-item marked-actions-menu-item"
+          aria-expanded={isExpanded}
+          aria-label={
+            mode === 'copy'
+              ? 'Copy marked images to a destination'
+              : 'Move marked images to a destination'
+          }
+          onClick={(event) => {
+            event.preventDefault();
+            setMarkedTransferMenuMode((currentMode) => (currentMode === mode ? null : mode));
+          }}
+        >
+          <span>{mode === 'copy' ? 'Copy to Folder...' : 'Move to Folder...'}</span>
+          <span className="marked-actions-disclosure" aria-hidden="true">
+            ▾
+          </span>
+        </summary>
+        <div className="top-bar-submenu-panel">
+          {quickDestinations.length === 0 ? (
+            <span className="top-bar-menu-empty">
+              No destinations configured yet. Use Choose Folder or add saved folders in Settings.
+            </span>
+          ) : (
+            quickDestinations.map((destination) => (
+              <button
+                key={`${mode}:${destination.id}`}
+                className="top-bar-menu-item"
+                onClick={() => void handleMarkedTransfer(destination, mode)}
+                type="button"
+              >
+                {destination.label}
+              </button>
+            ))
+          )}
+          <button
+            className="top-bar-menu-item"
+            onClick={() => void handleChooseMarkedTransferFolder(mode)}
+            type="button"
+          >
+            Choose Folder...
+          </button>
+        </div>
+      </details>
+    );
   };
 
   const handleGridThumbnailSizeChange = (nextSize: number) => {
@@ -1022,6 +1145,92 @@ export function ContactSheet({
               </span>
               <span className="top-bar-btn-label">Favorite</span>
             </button>
+            <button
+              className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCurrentMarked ? 'active' : ''}`}
+              onClick={() => {
+                if (currentImagePath) toggleMarkFromUi(currentImagePath, currentImage?.file_name);
+              }}
+              data-tooltip={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
+              title={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
+              aria-label={isCurrentMarked ? 'Unmark current image' : 'Mark current image'}
+              disabled={!currentImagePath}
+            >
+              <span className="top-bar-btn-icon">+</span>
+              <span className="top-bar-btn-label">{isCurrentMarked ? 'Marked' : 'Mark'}</span>
+            </button>
+            <details
+              className="top-bar-menu marked-actions-trigger"
+              ref={markedActionsMenuRef}
+              onToggle={(event) => {
+                if (!event.currentTarget.open) setMarkedTransferMenuMode(null);
+              }}
+            >
+              <summary
+                className="image-counter marked-actions-summary"
+                aria-label="Marked image actions"
+                role="button"
+              >
+                More
+              </summary>
+              <div
+                className="top-bar-menu-panel marked-actions-panel"
+                role="toolbar"
+                aria-label="Marked image actions"
+              >
+                <div className="marked-actions-panel-status" aria-live="polite">
+                  <span className="marked-actions-panel-count">{markedPaths.length} marked</span>
+                  {isCurrentMarked && (
+                    <span className="marked-actions-panel-note">Current image marked</span>
+                  )}
+                </div>
+                <section className="top-bar-menu-section" aria-label="Marking actions">
+                  <div className="top-bar-menu-section-label">Marking</div>
+                  <button
+                    className="top-bar-menu-item marked-actions-menu-item"
+                    onClick={handleMarkAllVisible}
+                    type="button"
+                    disabled={displayedImages.length === 0}
+                  >
+                    Mark All Visible Images
+                  </button>
+                </section>
+                <section className="top-bar-menu-section" aria-label="Navigation actions">
+                  <div className="top-bar-menu-section-label">Navigate</div>
+                  <button
+                    className="top-bar-menu-item marked-actions-menu-item"
+                    onClick={handleJumpToLastMarked}
+                    type="button"
+                    disabled={markedPaths.length === 0}
+                  >
+                    Go to Last Marked
+                  </button>
+                  <button
+                    className="top-bar-menu-item marked-actions-menu-item"
+                    onClick={() => useViewerStore.getState().clearMarkedPaths()}
+                    type="button"
+                    disabled={markedPaths.length === 0}
+                  >
+                    Clear Marked
+                  </button>
+                </section>
+                <section className="top-bar-menu-section" aria-label="File operations">
+                  <div className="top-bar-menu-section-label">Files</div>
+                  {renderMarkedTransferSubmenu('copy')}
+                  {renderMarkedTransferSubmenu('move')}
+                </section>
+                <section className="top-bar-menu-section" aria-label="Destructive actions">
+                  <div className="top-bar-menu-section-label">Danger</div>
+                  <button
+                    className="top-bar-menu-item top-bar-menu-item--danger marked-actions-menu-item"
+                    onClick={() => void handleDeleteMarked()}
+                    type="button"
+                    disabled={markedPaths.length === 0}
+                  >
+                    Delete Marked
+                  </button>
+                </section>
+              </div>
+            </details>
             <CurationFilterMenu currentFilter={curationFilter} onSelect={setCurationFilter} />
             <button
               className="top-bar-btn top-bar-btn--labeled has-tooltip"

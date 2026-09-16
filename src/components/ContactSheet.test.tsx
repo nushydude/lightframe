@@ -206,7 +206,195 @@ describe('ContactSheet', () => {
     expect(screen.getByRole('button', { name: 'Toggle grid view' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Toggle compare view' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Toggle crop mode' })).toBeInTheDocument();
-    expect(screen.getByText('More')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Marked image actions' })).toHaveTextContent('More');
+  });
+
+  it('shows grid marked actions and marks the active image and filtered results independently of selection', () => {
+    const images = ['a.jpg', 'b.jpg', 'c.jpg'].map((file_name, index) => ({
+      path: `C:/images/${file_name}`,
+      file_name,
+      extension: 'jpg',
+      size_bytes: index + 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.setState({
+      currentIndex: 1,
+      images,
+      markedPaths: ['C:/images/outside-search.jpg'],
+      viewMode: 'grid',
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark current image' }));
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/images/outside-search.jpg',
+      'C:/images/b.jpg',
+    ]);
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search filenames' }), {
+      target: { value: 'a.jpg' },
+    });
+    fireEvent.click(screen.getByRole('gridcell', { name: 'a.jpg' }), { ctrlKey: true });
+    const markedActionsTrigger = screen.getByRole('button', { name: 'Marked image actions' });
+    fireEvent.click(markedActionsTrigger);
+    const markedActions = screen.getByRole('toolbar', { name: 'Marked image actions' });
+
+    expect(within(markedActions).getByText('2 marked')).toBeInTheDocument();
+    expect(
+      within(markedActions).getByRole('button', { name: 'Mark All Visible Images' })
+    ).toBeInTheDocument();
+    expect(
+      within(markedActions).getByRole('button', { name: 'Go to Last Marked' })
+    ).toBeInTheDocument();
+    expect(within(markedActions).getByRole('button', { name: 'Clear Marked' })).toBeInTheDocument();
+    expect(
+      within(markedActions).getByLabelText('Copy marked images to a destination')
+    ).toHaveTextContent('Copy to Folder...');
+    expect(
+      within(markedActions).getByLabelText('Move marked images to a destination')
+    ).toHaveTextContent('Move to Folder...');
+    expect(
+      within(markedActions).getByRole('button', { name: 'Delete Marked' })
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(markedActions).getByRole('button', { name: 'Mark All Visible Images' }));
+    expect(useViewerStore.getState().markedPaths).toEqual([
+      'C:/images/outside-search.jpg',
+      'C:/images/b.jpg',
+      'C:/images/a.jpg',
+    ]);
+    expect(screen.getAllByText('1 selected')[0]).toBeInTheDocument();
+    expect(useViewerStore.getState().viewMode).toBe('grid');
+    fireEvent.click(within(markedActions).getByRole('button', { name: 'Clear Marked' }));
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+    expect(screen.getAllByText('1 selected')[0]).toBeInTheDocument();
+  });
+
+  it('jumps to the last marked image after clearing a search and curation filter', () => {
+    const images = ['favorite.jpg', 'last-marked.jpg', 'other.jpg'].map((file_name, index) => ({
+      path: `C:/images/${file_name}`,
+      file_name,
+      extension: 'jpg',
+      size_bytes: index + 1,
+      modified_at: String(index),
+    }));
+    useViewerStore.getState().setImages(images);
+    useViewerStore.getState().syncFavoriteFilter({
+      'C:/images/favorite.jpg': { favorite: true, rating: 0, updated_at: 1 },
+    });
+    useViewerStore.getState().setCurationFilter('favorites');
+    useViewerStore.setState({ markedPaths: ['C:/images/last-marked.jpg'], currentIndex: 0 });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search filenames' }), {
+      target: { value: 'favorite' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Go to Last Marked' }));
+
+    expect(useViewerStore.getState().curationFilter).toBe('all');
+    expect(useViewerStore.getState().currentImagePath).toBe('C:/images/last-marked.jpg');
+    expect(screen.getByRole('searchbox', { name: 'Search filenames' })).toHaveValue('');
+  });
+
+  it('runs marked copy, move, and delete operations against marks rather than selection', async () => {
+    const images = createContactSheetImages(3);
+    useViewerStore.setState({
+      currentIndex: 2,
+      images,
+      markedPaths: [images[0].path, images[1].path],
+    });
+    transferImagesToDestinationMock.mockResolvedValueOnce({
+      successes: [
+        { sourcePath: images[0].path, targetPath: 'D:/Favorites/0.jpg' },
+        { sourcePath: images[1].path, targetPath: 'D:/Favorites/1.jpg' },
+      ],
+      failures: [],
+    });
+    transferImagesToDestinationMock.mockResolvedValueOnce({
+      successes: [{ sourcePath: images[1].path, targetPath: 'D:/Favorites/1.jpg' }],
+      failures: [{ sourcePath: images[0].path, error: 'locked' }],
+    });
+
+    render(
+      <ContactSheet
+        onExitGridView={vi.fn(async () => true)}
+        onGoHome={() => undefined}
+        onOpenFile={() => undefined}
+        onOpenFolder={() => undefined}
+        onRefreshFolder={() => undefined}
+        onStartSlideshow={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole('gridcell', { name: '2.jpg' }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    let markedActions = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    const copyMenu = within(markedActions).getByLabelText('Copy marked images to a destination');
+    fireEvent.click(copyMenu);
+    fireEvent.click(
+      within(copyMenu.closest('details')!).getByRole('button', { name: 'Favorites' })
+    );
+    await waitFor(() =>
+      expect(transferImagesToDestinationMock).toHaveBeenNthCalledWith(
+        1,
+        [images[0].path, images[1].path],
+        { id: 'fav', label: 'Favorites', path: 'D:/Favorites' },
+        'copy'
+      )
+    );
+    expect(useViewerStore.getState().markedPaths).toEqual([]);
+
+    act(() => useViewerStore.setState({ markedPaths: [images[0].path, images[1].path] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    markedActions = screen.getByRole('toolbar', { name: 'Marked image actions' });
+    const moveMenu = within(markedActions).getByLabelText('Move marked images to a destination');
+    fireEvent.click(moveMenu);
+    fireEvent.click(
+      within(moveMenu.closest('details')!).getByRole('button', { name: 'Favorites' })
+    );
+    await waitFor(() =>
+      expect(transferImagesToDestinationMock).toHaveBeenNthCalledWith(
+        2,
+        [images[0].path, images[1].path],
+        { id: 'fav', label: 'Favorites', path: 'D:/Favorites' },
+        'move'
+      )
+    );
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      images[0].path,
+      images[2].path,
+    ]);
+    expect(useViewerStore.getState().markedPaths).toEqual([images[0].path]);
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+    expect(useViewerStore.getState().markedPaths).not.toEqual(['C:/images/2.jpg']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Marked image actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Marked' }));
+    await waitFor(() =>
+      expect(deleteImagesMock).toHaveBeenCalledWith({
+        imagePaths: [images[0].path],
+        removeImagesByPaths: expect.any(Function),
+      })
+    );
   });
 
   it('toggles marks on ordinary clicks only while grid marking mode is enabled', () => {
@@ -271,7 +459,7 @@ describe('ContactSheet', () => {
       'Marked. Favourite'
     );
     expect(screen.getByText('✓')).toBeInTheDocument();
-    expect(screen.getByText('1 marked')).toBeInTheDocument();
+    expect(screen.getAllByText('1 marked')[0]).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('gridcell', { name: 'b.jpg' }), { ctrlKey: true });
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/images/b.jpg']);
