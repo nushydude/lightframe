@@ -54,6 +54,7 @@ import { ToolbarIcon } from './ToolbarIcon';
 import { FolderSortMenu } from './FolderSortMenu';
 import { QualityExportMenu } from './QualityExportMenu';
 import { MenuLabel, SlideshowOptions } from './ViewerChromeMenus';
+import { toggleFavoriteFromUi, toggleMarkFromUi } from '../services/directCurationActions';
 
 interface ViewerChromeProps {
   onOpenFile: () => void;
@@ -259,7 +260,6 @@ export function ViewerChrome({
   const clearCropPreview = useViewerStore((state) => state.clearCropPreview);
   const clearPendingEdits = useViewerStore((state) => state.clearPendingEdits);
   const commitPendingEdits = useViewerStore((state) => state.commitPendingEdits);
-  const toggleMarkedPath = useViewerStore((state) => state.toggleMarkedPath);
   const clearMarkedPaths = useViewerStore((state) => state.clearMarkedPaths);
   const markAllVisibleImages = useViewerStore((state) => state.markAllVisibleImages);
   const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
@@ -664,7 +664,7 @@ export function ViewerChrome({
     if (!currentImagePath) {
       return;
     }
-    await toggleFavorite(currentImagePath);
+    await toggleFavoriteFromUi(currentImagePath, fileName, toggleFavorite);
   };
 
   const handleSetRating = async (rating: number) => {
@@ -1620,7 +1620,7 @@ export function ViewerChrome({
             </button>
             <button
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCurrentMarked ? 'active' : ''}`}
-              onClick={() => currentImagePath && toggleMarkedPath(currentImagePath)}
+              onClick={() => currentImagePath && toggleMarkFromUi(currentImagePath, fileName)}
               data-tooltip={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
               title={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
               aria-label={isCurrentMarked ? 'Unmark current image' : 'Mark current image'}
@@ -1829,7 +1829,7 @@ export function ViewerChrome({
               className="top-bar-menu-item context-menu-item"
               onClick={() => {
                 if (currentImagePath) {
-                  toggleMarkedPath(contextMenuPath ?? currentImagePath);
+                  toggleMarkFromUi(contextMenuPath ?? currentImagePath);
                 }
                 closeContextMenu();
               }}

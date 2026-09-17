@@ -18,6 +18,7 @@ import {
   deleteCurrentImage,
   revealCurrentImage,
 } from '../services/viewerActions';
+import { toggleMarkFromUi } from '../services/directCurationActions';
 
 type AppViewerActionsOptions = {
   appWindow: Window;
@@ -109,7 +110,7 @@ function createCommandPaletteCommands(options: {
     },
     toggleMarkedCurrent: () => {
       const path = useViewerStore.getState().currentImagePath;
-      if (path) useViewerStore.getState().toggleMarkedPath(path);
+      if (path) toggleMarkFromUi(path);
     },
   });
 }

@@ -209,8 +209,10 @@ body,
 
 .contact-sheet-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 12px 18px;
   padding: 16px 24px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
@@ -223,14 +225,92 @@ body,
 
 .header-left {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 12px;
 }
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+}
+
+.contact-sheet-grid-controls {
+  display: flex;
+  flex: 1 1 360px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+  min-width: 220px;
+}
+
+.contact-sheet-mark-mode,
+.contact-sheet-zoom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.contact-sheet-mode-toggle,
+.contact-sheet-zoom-button {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.contact-sheet-mode-toggle {
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.contact-sheet-mode-toggle:hover,
+.contact-sheet-mode-toggle.active,
+.contact-sheet-zoom-button:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-control));
+  border-color: var(--accent);
+}
+
+.contact-sheet-mark-help {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.contact-sheet-zoom {
+  gap: 6px;
+}
+
+.contact-sheet-zoom-label,
+.contact-sheet-zoom-value {
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.contact-sheet-zoom-button {
+  width: 30px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.contact-sheet-zoom-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.contact-sheet-zoom input[type='range'] {
+  width: 92px;
+  accent-color: var(--accent);
 }
 
 .header-menu {
@@ -594,7 +674,8 @@ body,
 
 .contact-sheet-grid {
   display: grid;
-  gap: 20px;
+  column-gap: 20px;
+  row-gap: 20px;
   max-width: 1400px;
   margin: 0 auto;
   justify-content: center;
@@ -609,6 +690,7 @@ body,
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
   cursor: pointer;
   transition: all var(--transition-fast);
   position: relative;
@@ -665,6 +747,26 @@ body,
   background: rgba(74, 158, 255, 0.92);
 }
 
+.grid-mark-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #48c98b;
+  color: #071b11;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
 .grid-item:hover .grid-thumbnail-wrapper {
   transform: translateY(-4px);
   border-color: var(--border-hover);
@@ -681,6 +783,29 @@ body,
   box-shadow: 0 0 0 2px var(--accent-dim);
 }
 
+.grid-item.active.selected .grid-thumbnail-wrapper {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 3px var(--accent-dim),
+    0 0 0 6px var(--accent-hover);
+}
+
+.grid-item.marked:not(.active):not(.selected) .grid-thumbnail-wrapper {
+  border-color: color-mix(in srgb, #48c98b 75%, transparent);
+}
+
+.grid-item.active.marked:not(.selected) .grid-thumbnail-wrapper {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-dim);
+}
+
+.grid-item.selected.marked:not(.active) .grid-thumbnail-wrapper {
+  border-color: var(--accent-hover);
+  box-shadow:
+    0 0 0 2px var(--accent-dim),
+    0 0 0 5px rgba(72, 201, 139, 0.5);
+}
+
 .grid-item img {
   width: 100%;
   height: 100%;
@@ -694,7 +819,10 @@ body,
 }
 
 .grid-label {
+  height: 20px;
+  flex: 0 0 20px;
   font-size: 11px;
+  line-height: 20px;
   color: var(--text-secondary);
   text-align: center;
   white-space: nowrap;

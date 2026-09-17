@@ -3,6 +3,10 @@ import { confirm } from '@tauri-apps/plugin-dialog';
 import type { ImageFile } from '../types/image';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { invalidateThumbnail } from '../services/thumbnailCache';
+import {
+  clampGridThumbnailSize,
+  GRID_THUMBNAIL_DEFAULT_SIZE,
+} from '../services/contactSheetLayout';
 import { recordImageSelectedTelemetry } from '../services/performanceTelemetry';
 import { overwriteWithCrop, saveRotatedImage } from '../services/tauriCommands';
 import {
@@ -248,6 +252,7 @@ interface ViewerState {
   showPerformanceTelemetry: boolean;
   errorMessage: string | null;
   viewMode: ViewMode;
+  gridThumbnailSize: number;
   showOnlyFavorites: boolean;
   curationFilter: CurationFilter;
   favoritePaths: FavoritePathMap;
@@ -268,6 +273,7 @@ interface ViewerState {
   clearMarkedPaths: () => void;
   markAllVisibleImages: () => void;
   setMarkedPaths: (paths: string[]) => void;
+  updateMarkedPaths: (paths: string[], marked: boolean) => void;
   setCurationFilter: (filter: CurationFilter) => void;
   prepareCurationFilter: (filter: CurationFilter) => void;
   syncFavoriteFilter: (
@@ -320,6 +326,7 @@ interface ViewerState {
   setError: (msg: string | null) => void;
   saveRotation: () => Promise<void>;
   setViewMode: (mode: ViewMode) => void;
+  setGridThumbnailSize: (size: number) => void;
   enterCompareMode: () => boolean;
   exitCompareMode: () => void;
   switchCompareFocus: () => void;
@@ -361,6 +368,7 @@ const initialState = {
   cacheBuster: 0,
   loadGeneration: 0,
   viewMode: 'viewer' as ViewMode,
+  gridThumbnailSize: GRID_THUMBNAIL_DEFAULT_SIZE,
   showOnlyFavorites: false,
   curationFilter: 'all' as CurationFilter,
   favoritePaths: {},
@@ -685,6 +693,35 @@ export const useViewerStore = create<ViewerState>((set, get) => {
       set((state) => ({
         markedPaths: reconcileMarkedPaths(uniqueMarkedPaths(paths), state.images),
       })),
+
+    updateMarkedPaths: (paths, marked) =>
+      set((state) => {
+        const targetKeys = new Set(
+          paths.map((path) => normalizePathKey(path.trim())).filter(Boolean)
+        );
+        if (targetKeys.size === 0) return {};
+
+        if (marked) {
+          const existingKeys = new Set(
+            state.markedPaths.map((path) => normalizePathKey(path.trim()))
+          );
+          const additions = paths.filter((path) => {
+            const trimmedPath = path.trim();
+            const key = normalizePathKey(trimmedPath);
+            if (!key || existingKeys.has(key)) return false;
+            existingKeys.add(key);
+            return true;
+          });
+          return additions.length > 0 ? { markedPaths: [...state.markedPaths, ...additions] } : {};
+        }
+
+        const nextMarkedPaths = state.markedPaths.filter(
+          (path) => !targetKeys.has(normalizePathKey(path.trim()))
+        );
+        return nextMarkedPaths.length === state.markedPaths.length
+          ? {}
+          : { markedPaths: nextMarkedPaths };
+      }),
 
     prepareCurationFilter: (filter) =>
       set({
@@ -1198,6 +1235,8 @@ export const useViewerStore = create<ViewerState>((set, get) => {
           ...(state.viewMode === 'compare' ? compareZoomResetState() : {}),
         };
       }),
+
+    setGridThumbnailSize: (size) => set({ gridThumbnailSize: clampGridThumbnailSize(size) }),
 
     enterCompareMode: () => {
       const state = get();

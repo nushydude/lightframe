@@ -1099,7 +1099,7 @@ describe('ViewerChrome', () => {
     expect(screen.getByLabelText('Save pending edits')).toBeInTheDocument();
   });
 
-  it('toggles the marked state from the top bar', () => {
+  it('toggles the marked state from the top bar', async () => {
     useViewerStore.setState({
       currentImagePath: 'C:/Images/photo.jpg',
       images: [
@@ -1112,15 +1112,26 @@ describe('ViewerChrome', () => {
         },
       ],
       currentIndex: 0,
+      isSlideshowActive: true,
     });
 
     render(<ViewerChrome {...defaultProps} />);
 
-    fireEvent.click(screen.getByLabelText('Mark current image'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Mark current image'));
+    });
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
+    expect(useToastStore.getState().toasts).toMatchObject([
+      { title: 'Marked', message: 'photo.jpg · 1 marked' },
+    ]);
 
-    fireEvent.click(screen.getByLabelText('Unmark current image'));
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Unmark current image'));
+    });
     expect(useViewerStore.getState().markedPaths).toEqual([]);
+    expect(useToastStore.getState().toasts).toMatchObject([
+      { title: 'Unmarked', message: 'photo.jpg · 0 marked' },
+    ]);
   });
 
   it('preserves marked paths when bulk delete is canceled', async () => {
