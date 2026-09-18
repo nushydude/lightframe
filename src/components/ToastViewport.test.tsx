@@ -81,4 +81,18 @@ describe('ToastViewport', () => {
     expect(alert).toHaveAttribute('aria-live', 'assertive');
     expect(alert).toHaveTextContent('Export failed');
   });
+
+  it('omits the message element when a toast has no message', () => {
+    useToastStore.getState().pushToast({
+      title: 'Favourited',
+      kind: 'success',
+      message: '',
+      duration: 10_000,
+    });
+
+    render(<ToastViewport />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Favourited');
+    expect(document.querySelector('.toast__message')).not.toBeInTheDocument();
+  });
 });

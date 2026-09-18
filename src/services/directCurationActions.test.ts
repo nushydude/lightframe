@@ -67,7 +67,7 @@ describe('direct curation action feedback', () => {
     });
   });
 
-  it('reports the completed favourite and mark states with resulting mark counts', async () => {
+  it('reports the completed favourite and mark states', async () => {
     useViewerStore.setState({ isSlideshowActive: true });
     await toggleFavoriteFromUi(imageA.path);
     await toggleFavoriteFromUi(imageA.path);
@@ -79,13 +79,13 @@ describe('direct curation action feedback', () => {
     expect(toasts[0]).toMatchObject({
       kind: 'success',
       title: 'Removed from favourites',
-      message: 'a.jpg',
+      message: '',
       duration: 2000,
     });
     expect(toasts[1]).toMatchObject({
       kind: 'success',
       title: 'Unmarked',
-      message: 'a.jpg · 0 marked',
+      message: '',
       duration: 2000,
     });
   });
@@ -110,9 +110,7 @@ describe('direct curation action feedback', () => {
     resolveWrite();
     await action;
 
-    expect(useToastStore.getState().toasts).toMatchObject([
-      { title: 'Favourited', message: 'a.jpg' },
-    ]);
+    expect(useToastStore.getState().toasts).toMatchObject([{ title: 'Favourited', message: '' }]);
   });
 
   it('serializes rapid favourite actions and reports their actual final results', async () => {
@@ -125,9 +123,7 @@ describe('direct curation action feedback', () => {
 
     expect(Boolean(useCurationStore.getState().curationByPath[imageA.path]?.favorite)).toBe(false);
     expect(useCurationStore.getState().curationByPath[imageB.path]?.favorite).toBe(true);
-    expect(useToastStore.getState().toasts).toMatchObject([
-      { title: 'Favourited', message: 'b.jpg' },
-    ]);
+    expect(useToastStore.getState().toasts).toMatchObject([{ title: 'Favourited', message: '' }]);
   });
 
   it('starts F/F immediately and preserves the curation queue before rating 5', async () => {
@@ -168,7 +164,7 @@ describe('direct curation action feedback', () => {
       rating: 5,
     });
     expect(useToastStore.getState().toasts).toMatchObject([
-      { title: 'Removed from favourites', message: 'a.jpg' },
+      { title: 'Removed from favourites', message: '' },
     ]);
   });
 
@@ -193,6 +189,18 @@ describe('direct curation action feedback', () => {
       'Marked',
     ]);
     expect(useCurationStore.getState().mutationError).toBe('disk full');
+  });
+
+  it('omits image details from success feedback', async () => {
+    useViewerStore.setState({ isSlideshowActive: true });
+
+    await toggleFavoriteFromUi(imageA.path);
+    toggleMarkFromUi(imageA.path);
+
+    expect(useToastStore.getState().toasts).toMatchObject([
+      { title: 'Favourited', message: '' },
+      { title: 'Marked', message: '' },
+    ]);
   });
 
   it('does nothing for missing images and keeps normal-view success behavior unchanged', async () => {

@@ -219,7 +219,6 @@ export function ContactSheet({
   );
   const currentImagePath = currentIndex >= 0 ? (images[currentIndex]?.path ?? null) : null;
   const initialCurrentPathRef = useRef(currentImagePath);
-  const currentImage = currentIndex >= 0 ? images[currentIndex] : undefined;
   const currentCuration = currentImagePath ? curationByPath[currentImagePath] : undefined;
   const isFavorite = Boolean(currentCuration?.favorite);
   const canEnterCompareMode = images.length > 1;
@@ -1148,7 +1147,7 @@ export function ContactSheet({
             <button
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCurrentMarked ? 'active' : ''}`}
               onClick={() => {
-                if (currentImagePath) toggleMarkFromUi(currentImagePath, currentImage?.file_name);
+                if (currentImagePath) toggleMarkFromUi(currentImagePath);
               }}
               data-tooltip={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
               title={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}

@@ -66,9 +66,7 @@ describe('useAppKeyboardShortcuts curation wiring', () => {
     });
     expect(markEvent.defaultPrevented).toBe(true);
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/images/current.jpg']);
-    expect(useToastStore.getState().toasts).toMatchObject([
-      { title: 'Marked', message: 'current.jpg · 1 marked' },
-    ]);
+    expect(useToastStore.getState().toasts).toMatchObject([{ title: 'Marked', message: '' }]);
 
     const favoriteEvent = new KeyboardEvent('keydown', {
       key: 'f',
