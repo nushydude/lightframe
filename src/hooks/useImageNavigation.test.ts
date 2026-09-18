@@ -6,14 +6,17 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import {
   getParentFolder,
   listenToFolderWatcherChanges,
+  moveToTrash,
   readFolderIndex,
   refreshFolderIndex,
   scanFolder,
+  type FolderWatcherPayload,
 } from '../services/tauriCommands';
+import { deleteCurrentImage } from '../services/viewerActions';
 import { invalidateThumbnail } from '../services/thumbnailCache';
 import { invalidateImageAsset } from '../services/imageAssetCache';
 import { mainWindowTitle } from '../services/windowTitle';
-import { open } from '@tauri-apps/plugin-dialog';
+import { confirm, open } from '@tauri-apps/plugin-dialog';
 import { SUPPORTED_IMAGE_EXTENSIONS } from '../services/supportedImageExtensions';
 
 const mockSetTitle = vi.fn().mockResolvedValue(undefined);
@@ -28,11 +31,13 @@ vi.mock('../services/tauriCommands', () => ({
   watchFolder: vi.fn().mockResolvedValue(undefined),
   unwatchFolder: vi.fn().mockResolvedValue(undefined),
   listenToFolderWatcherChanges: vi.fn().mockResolvedValue(vi.fn()),
+  moveToTrash: vi.fn(),
   getParentFolder: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
+  confirm: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -83,6 +88,8 @@ describe('useImageNavigation', () => {
       },
     });
     vi.clearAllMocks();
+    vi.mocked(moveToTrash).mockResolvedValue(undefined);
+    vi.mocked(confirm).mockResolvedValue(true);
     mockSetTitle.mockResolvedValue(undefined);
     (listenToFolderWatcherChanges as any).mockResolvedValue(vi.fn());
   });
@@ -1078,5 +1085,84 @@ describe('useImageNavigation', () => {
         'c.jpg',
       ]);
     });
+  });
+
+  it('keeps the watcher-first single delete selection stable', async () => {
+    const images = ['a', 'b', 'c', 'd'].map((name) => ({
+      path: `c:/test/${name}.jpg`,
+      file_name: `${name}.jpg`,
+      extension: 'jpg',
+      size_bytes: 100,
+      modified_at: `${name.charCodeAt(0)}`,
+    }));
+    let watcherHandler: ((payload: FolderWatcherPayload) => void) | undefined;
+    let resolveTrash!: () => void;
+    const trash = new Promise<void>((resolve) => {
+      resolveTrash = resolve;
+    });
+    vi.mocked(moveToTrash).mockReturnValue(trash);
+
+    vi.mocked(listenToFolderWatcherChanges).mockImplementation(async (handler) => {
+      watcherHandler = handler;
+      return () => undefined;
+    });
+    vi.mocked(readFolderIndex).mockResolvedValue(images);
+    vi.mocked(refreshFolderIndex).mockResolvedValue(images);
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        autoRefreshFolder: true,
+        sortOrder: 'name',
+        sortDirection: 'ascending',
+      },
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+    await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
+    act(() => {
+      useViewerStore.getState().setCurrentIndex(1);
+    });
+
+    await waitFor(() => expect(watcherHandler).toBeDefined());
+
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/test/b.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await waitFor(() => expect(moveToTrash).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      watcherHandler?.({
+        folderPath: 'c:/test',
+        changes: [{ kind: 'removed', path: 'c:/test/b.jpg', image: null }],
+        requiresFullRefresh: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/test/c.jpg');
+    });
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+
+    act(() => {
+      resolveTrash();
+    });
+    await act(async () => {
+      await deletePromise;
+    });
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/test/a.jpg',
+      'c:/test/c.jpg',
+      'c:/test/d.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/c.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+    expect(moveToTrash).toHaveBeenCalledTimes(1);
+    expect(moveToTrash).toHaveBeenCalledWith('c:/test/b.jpg');
   });
 });

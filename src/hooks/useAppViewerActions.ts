@@ -95,8 +95,7 @@ function createCommandPaletteCommands(options: {
     deleteCurrentImage: () =>
       deleteCurrentImage({
         currentImagePath: useViewerStore.getState().currentImagePath,
-        currentIndex: useViewerStore.getState().currentIndex,
-        removeImage: useViewerStore.getState().removeImage,
+        removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
       }),
     enterCropMode: () => {
       const state = useViewerStore.getState();

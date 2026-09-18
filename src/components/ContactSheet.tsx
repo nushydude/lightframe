@@ -749,10 +749,9 @@ export function ContactSheet({
   const handleDeleteCurrent = useCallback(async () => {
     await deleteCurrentImage({
       currentImagePath,
-      currentIndex,
-      removeImage: useViewerStore.getState().removeImage,
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
     });
-  }, [currentImagePath, currentIndex]);
+  }, [currentImagePath]);
 
   const handleDeleteSelected = async () => {
     if (!hasSelection) {
