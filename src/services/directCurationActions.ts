@@ -20,12 +20,12 @@ function filenameForPath(path: string, fileName?: string): string {
   return image?.file_name || path.replace(/\\/g, '/').split('/').pop() || path;
 }
 
-function pushLatestSuccess(category: 'favorite' | 'mark', title: string, message: string): void {
+function pushLatestSuccess(category: 'favorite' | 'mark', title: string): void {
   const toastStore = useToastStore.getState();
   const previousId =
     category === 'favorite' ? latestFavoriteSuccessToastId : latestMarkSuccessToastId;
   if (previousId) toastStore.dismissToast(previousId);
-  const id = toastStore.pushToast({ kind: 'success', title, message, duration: 2000 });
+  const id = toastStore.pushToast({ kind: 'success', title, message: '', duration: 2000 });
   if (category === 'favorite') latestFavoriteSuccessToastId = id;
   else latestMarkSuccessToastId = id;
 }
@@ -59,11 +59,7 @@ export function toggleFavoriteFromUi(
       if (!captured.slideshow) return;
 
       const favorite = Boolean(useCurationStore.getState().curationByPath[captured.path]?.favorite);
-      pushLatestSuccess(
-        'favorite',
-        favorite ? 'Favourited' : 'Removed from favourites',
-        captured.fileName
-      );
+      pushLatestSuccess('favorite', favorite ? 'Favourited' : 'Removed from favourites');
     },
     () => {
       if (captured.slideshow) {
@@ -79,13 +75,12 @@ export function toggleFavoriteFromUi(
   );
 }
 
-/** A direct mark action is synchronous, so its count reflects the completed toggle immediately. */
-export function toggleMarkFromUi(path: string, fileName?: string): void {
+/** A direct mark action is synchronous, so its feedback reflects the completed toggle immediately. */
+export function toggleMarkFromUi(path: string): void {
   const image = getImageSnapshot(path);
   if (!image) return;
   const captured = {
     path: image.path,
-    fileName: filenameForPath(image.path, fileName),
     slideshow: useViewerStore.getState().isSlideshowActive,
   };
 
@@ -96,12 +91,7 @@ export function toggleMarkFromUi(path: string, fileName?: string): void {
   const marked = state.markedPaths.some(
     (markedPath) => normalizePath(markedPath) === normalizePath(captured.path)
   );
-  const count = state.markedPaths.length;
-  pushLatestSuccess(
-    'mark',
-    marked ? 'Marked' : 'Unmarked',
-    `${captured.fileName} · ${count} marked`
-  );
+  pushLatestSuccess('mark', marked ? 'Marked' : 'Unmarked');
 }
 
 export function resetDirectCurationActionStateForTests(): void {

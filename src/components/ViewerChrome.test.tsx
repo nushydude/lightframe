@@ -1121,17 +1121,13 @@ describe('ViewerChrome', () => {
       fireEvent.click(screen.getByLabelText('Mark current image'));
     });
     expect(useViewerStore.getState().markedPaths).toEqual(['C:/Images/photo.jpg']);
-    expect(useToastStore.getState().toasts).toMatchObject([
-      { title: 'Marked', message: 'photo.jpg · 1 marked' },
-    ]);
+    expect(useToastStore.getState().toasts).toMatchObject([{ title: 'Marked', message: '' }]);
 
     await act(async () => {
       fireEvent.click(screen.getByLabelText('Unmark current image'));
     });
     expect(useViewerStore.getState().markedPaths).toEqual([]);
-    expect(useToastStore.getState().toasts).toMatchObject([
-      { title: 'Unmarked', message: 'photo.jpg · 0 marked' },
-    ]);
+    expect(useToastStore.getState().toasts).toMatchObject([{ title: 'Unmarked', message: '' }]);
   });
 
   it('preserves marked paths when bulk delete is canceled', async () => {

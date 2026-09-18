@@ -82,7 +82,7 @@ export function ToastViewport() {
                   x
                 </button>
               </div>
-              <div className="toast__message">{toast.message}</div>
+              {toast.message ? <div className="toast__message">{toast.message}</div> : null}
               {toast.detail ? <div className="toast__detail">{toast.detail}</div> : null}
             </div>
           </div>

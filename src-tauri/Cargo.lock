@@ -2565,6 +2565,7 @@ dependencies = [
  "little_exif",
  "natord",
  "notify",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",

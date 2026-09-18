@@ -1620,7 +1620,7 @@ export function ViewerChrome({
             </button>
             <button
               className={`top-bar-btn top-bar-btn--labeled has-tooltip ${isCurrentMarked ? 'active' : ''}`}
-              onClick={() => currentImagePath && toggleMarkFromUi(currentImagePath, fileName)}
+              onClick={() => currentImagePath && toggleMarkFromUi(currentImagePath)}
               data-tooltip={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
               title={isCurrentMarked ? 'Unmark current image (M)' : 'Mark current image (M)'}
               aria-label={isCurrentMarked ? 'Unmark current image' : 'Mark current image'}
