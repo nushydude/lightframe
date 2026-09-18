@@ -13,8 +13,7 @@ import type { QuickDestination } from '../types/settings';
 
 interface DeleteCurrentImageOptions {
   currentImagePath: string | null;
-  currentIndex: number;
-  removeImage: (index: number) => void;
+  removeImagesByPaths: (paths: string[]) => void;
 }
 
 interface DeleteImagesOptions {
@@ -309,8 +308,7 @@ export async function openCurrentImageInEditor(
 
 export async function deleteCurrentImage({
   currentImagePath,
-  currentIndex,
-  removeImage,
+  removeImagesByPaths,
 }: DeleteCurrentImageOptions): Promise<void> {
   if (!currentImagePath) {
     return;
@@ -331,7 +329,7 @@ export async function deleteCurrentImage({
     }
 
     await moveToTrash(currentImagePath);
-    removeImage(currentIndex);
+    removeImagesByPaths([currentImagePath]);
   } catch (err) {
     console.error('Failed to move to trash:', err);
     useToastStore.getState().pushToast({

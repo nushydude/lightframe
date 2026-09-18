@@ -11,6 +11,8 @@ import {
 } from './viewerActions';
 import { useSettingsStore } from '../state/settingsStore';
 import { useToastStore } from '../state/toastStore';
+import { useViewerStore } from '../state/viewerStore';
+import type { ImageFile } from '../types/image';
 
 const {
   confirmMock,
@@ -27,6 +29,31 @@ const {
   revealInExplorerMock: vi.fn(),
   transferImagesToFolderMock: vi.fn(),
 }));
+
+function createImage(path: string): ImageFile {
+  const fileName = path.split('/').pop() ?? path;
+  return {
+    path,
+    file_name: fileName,
+    extension: fileName.split('.').pop() ?? '',
+    size_bytes: 100,
+    modified_at: '1000',
+  };
+}
+
+function setViewerImages(paths: string[], currentIndex: number): void {
+  const images = paths.map(createImage);
+  useViewerStore.getState().setImages(images);
+  useViewerStore.getState().setCurrentIndex(currentIndex);
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   confirm: confirmMock,
@@ -45,6 +72,7 @@ describe('viewerActions', () => {
     vi.clearAllMocks();
     confirmMock.mockResolvedValue(true);
     moveToTrashMock.mockResolvedValue(undefined);
+    useViewerStore.getState().reset();
     useToastStore.getState().clearToasts();
     useSettingsStore.getState().updateSettings = vi.fn().mockResolvedValue(undefined);
     useSettingsStore.setState((state) => ({
@@ -127,13 +155,12 @@ describe('viewerActions', () => {
 
   it('shows an error message when delete fails', async () => {
     moveToTrashMock.mockRejectedValue(new Error('delete failed'));
-    const removeImage = vi.fn();
+    const removeImagesByPaths = vi.fn();
 
     await expect(
       deleteCurrentImage({
         currentImagePath: 'c:/images/test.jpg',
-        currentIndex: 1,
-        removeImage,
+        removeImagesByPaths,
       })
     ).resolves.toBeUndefined();
 
@@ -144,7 +171,309 @@ describe('viewerActions', () => {
         message: expect.stringContaining('Failed to delete:'),
       })
     );
-    expect(removeImage).not.toHaveBeenCalled();
+    expect(removeImagesByPaths).not.toHaveBeenCalled();
+  });
+
+  it('deletes an ordinary middle image and selects the next image', async () => {
+    setViewerImages(
+      ['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg', 'c:/images/d.jpg'],
+      1
+    );
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+
+    expect(moveToTrashMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/a.jpg',
+      'c:/images/c.jpg',
+      'c:/images/d.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/c.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('keeps the watcher-first deletion idempotent and preserves the next image', async () => {
+    setViewerImages(
+      ['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg', 'c:/images/d.jpg'],
+      1
+    );
+    const trash = createDeferred<void>();
+    moveToTrashMock.mockReturnValue(trash.promise);
+
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await vi.waitFor(() => expect(moveToTrashMock).toHaveBeenCalledTimes(1));
+
+    useViewerStore
+      .getState()
+      .setImages([
+        createImage('c:/images/a.jpg'),
+        createImage('c:/images/c.jpg'),
+        createImage('c:/images/d.jpg'),
+      ]);
+    trash.resolve(undefined);
+    await deletePromise;
+
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/a.jpg',
+      'c:/images/c.jpg',
+      'c:/images/d.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/c.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('keeps the command-first deletion stable when the watcher follows', async () => {
+    setViewerImages(
+      ['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg', 'c:/images/d.jpg'],
+      1
+    );
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    useViewerStore
+      .getState()
+      .setImages([
+        createImage('c:/images/a.jpg'),
+        createImage('c:/images/c.jpg'),
+        createImage('c:/images/d.jpg'),
+      ]);
+
+    expect(moveToTrashMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/a.jpg',
+      'c:/images/c.jpg',
+      'c:/images/d.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/c.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('selects the next image when deleting the first image', async () => {
+    setViewerImages(['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg'], 0);
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/a.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/a.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/b.jpg',
+      'c:/images/c.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/b.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+  });
+
+  it('selects the previous image when deleting the last image', async () => {
+    setViewerImages(['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg'], 2);
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/c.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/c.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/a.jpg',
+      'c:/images/b.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/b.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('clears the viewer when deleting the only image', async () => {
+    setViewerImages(['c:/images/a.jpg'], 0);
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/a.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/a.jpg');
+    expect(useViewerStore.getState().images).toEqual([]);
+    expect(useViewerStore.getState().currentImagePath).toBeNull();
+    expect(useViewerStore.getState().currentIndex).toBe(-1);
+  });
+
+  it('removes the captured image while preserving navigation during a pending delete', async () => {
+    setViewerImages(
+      ['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg', 'c:/images/d.jpg'],
+      1
+    );
+    const trash = createDeferred<void>();
+    moveToTrashMock.mockReturnValue(trash.promise);
+
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await vi.waitFor(() => expect(moveToTrashMock).toHaveBeenCalledTimes(1));
+    useViewerStore.getState().setCurrentIndex(3);
+    trash.resolve(undefined);
+    await deletePromise;
+
+    expect(moveToTrashMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/a.jpg',
+      'c:/images/c.jpg',
+      'c:/images/d.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/d.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('removes the captured image after a reorder during a pending delete', async () => {
+    setViewerImages(
+      ['c:/images/a.jpg', 'c:/images/b.jpg', 'c:/images/c.jpg', 'c:/images/d.jpg'],
+      1
+    );
+    const trash = createDeferred<void>();
+    moveToTrashMock.mockReturnValue(trash.promise);
+
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await vi.waitFor(() => expect(moveToTrashMock).toHaveBeenCalledTimes(1));
+    useViewerStore
+      .getState()
+      .setImages([
+        createImage('c:/images/d.jpg'),
+        createImage('c:/images/c.jpg'),
+        createImage('c:/images/a.jpg'),
+        createImage('c:/images/b.jpg'),
+      ]);
+    useViewerStore.getState().setCurrentIndex(0);
+    trash.resolve(undefined);
+    await deletePromise;
+
+    expect(moveToTrashMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/d.jpg',
+      'c:/images/c.jpg',
+      'c:/images/a.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/d.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+  });
+
+  it('removes a deleted image from the visible favorites list without losing survivors', async () => {
+    const allPaths = [
+      'c:/images/a.jpg',
+      'c:/images/b.jpg',
+      'c:/images/c.jpg',
+      'c:/images/d.jpg',
+      'c:/images/e.jpg',
+    ];
+    useViewerStore.getState().setImages(allPaths.map(createImage));
+    useViewerStore.getState().syncFavoriteFilter({
+      'c:/images/b.jpg': { favorite: true },
+      'c:/images/c.jpg': { favorite: true },
+      'c:/images/e.jpg': { favorite: true },
+    });
+    useViewerStore.getState().setCurationFilter('favorites');
+    useViewerStore.getState().setCurrentIndex(1);
+    const trash = createDeferred<void>();
+    moveToTrashMock.mockReturnValue(trash.promise);
+
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/images/c.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await vi.waitFor(() => expect(moveToTrashMock).toHaveBeenCalledTimes(1));
+    useViewerStore
+      .getState()
+      .setImages(allPaths.filter((path) => path !== 'c:/images/c.jpg').map(createImage));
+    trash.resolve(undefined);
+    await deletePromise;
+
+    expect(moveToTrashMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/c.jpg');
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/images/b.jpg',
+      'c:/images/e.jpg',
+    ]);
+    expect(useViewerStore.getState().allImages.map((image) => image.path)).toEqual([
+      'c:/images/a.jpg',
+      'c:/images/b.jpg',
+      'c:/images/d.jpg',
+      'c:/images/e.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/images/e.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
+
+  it('does not remove an image when deletion is cancelled', async () => {
+    confirmMock.mockResolvedValue(false);
+    setViewerImages(['c:/images/a.jpg', 'c:/images/b.jpg'], 1);
+    const removeImagesByPaths = vi.fn();
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths,
+    });
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).not.toHaveBeenCalled();
+    expect(removeImagesByPaths).not.toHaveBeenCalled();
+  });
+
+  it('does not remove an image when deletion fails', async () => {
+    moveToTrashMock.mockRejectedValue(new Error('delete failed'));
+    const removeImagesByPaths = vi.fn();
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths,
+    });
+
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(removeImagesByPaths).not.toHaveBeenCalled();
+    expect(useToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({ title: 'Delete failed', kind: 'error' })
+    );
+  });
+
+  it('removes the captured path after a warning-bearing successful trash result', async () => {
+    const removeImagesByPaths = vi.fn();
+    moveToTrashMock.mockResolvedValue({ warning: 'recovery metadata unavailable' });
+
+    await deleteCurrentImage({
+      currentImagePath: 'c:/images/b.jpg',
+      removeImagesByPaths,
+    });
+
+    expect(moveToTrashMock).toHaveBeenCalledTimes(1);
+    expect(moveToTrashMock).toHaveBeenCalledWith('c:/images/b.jpg');
+    expect(removeImagesByPaths).toHaveBeenCalledTimes(1);
+    expect(removeImagesByPaths).toHaveBeenCalledWith(['c:/images/b.jpg']);
+  });
+
+  it('does nothing when there is no current image', async () => {
+    const removeImagesByPaths = vi.fn();
+
+    await deleteCurrentImage({
+      currentImagePath: null,
+      removeImagesByPaths,
+    });
+
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(moveToTrashMock).not.toHaveBeenCalled();
+    expect(removeImagesByPaths).not.toHaveBeenCalled();
   });
 
   it('deletes multiple images and removes successful paths in one pass', async () => {
