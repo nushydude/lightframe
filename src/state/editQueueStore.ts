@@ -4,11 +4,7 @@ import { saveCroppedCopy, saveScaledCopy, type CropRect } from '../services/taur
 type EditQueueJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
 type EditQueueJobKind = 'scaled-copy' | 'cropped-copy';
 type EditQueueSummaryCountKey =
-  | 'queuedCount'
-  | 'runningCount'
-  | 'completedCount'
-  | 'failedCount'
-  | 'canceledCount';
+  'queuedCount' | 'runningCount' | 'completedCount' | 'failedCount' | 'canceledCount';
 
 interface EditQueueJobBase {
   id: string;
