@@ -1165,4 +1165,263 @@ describe('useImageNavigation', () => {
     expect(moveToTrash).toHaveBeenCalledTimes(1);
     expect(moveToTrash).toHaveBeenCalledWith('c:/test/b.jpg');
   });
+
+  it.each(['watcher-first', 'command-first'] as const)(
+    'preserves the next visible favorite when deleting a middle image (%s)',
+    async (completionOrder) => {
+      const images = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((name) => ({
+        path: `c:/test/${name}.jpg`,
+        file_name: `${name}.jpg`,
+        extension: 'jpg',
+        size_bytes: 100,
+        modified_at: `${name.charCodeAt(0)}`,
+      }));
+      let watcherHandler: ((payload: FolderWatcherPayload) => void) | undefined;
+      let resolveTrash!: () => void;
+      const trash = new Promise<void>((resolve) => {
+        resolveTrash = resolve;
+      });
+      vi.mocked(moveToTrash).mockReturnValue(trash);
+
+      vi.mocked(listenToFolderWatcherChanges).mockImplementation(async (handler) => {
+        watcherHandler = handler;
+        return () => undefined;
+      });
+      vi.mocked(readFolderIndex).mockResolvedValue(images);
+      vi.mocked(refreshFolderIndex).mockResolvedValue(images);
+      useSettingsStore.setState({
+        settings: {
+          ...useSettingsStore.getState().settings,
+          autoRefreshFolder: true,
+          sortOrder: 'name',
+          sortDirection: 'ascending',
+        },
+      });
+
+      const { result } = renderHook(() => useImageNavigation());
+
+      await act(async () => {
+        await result.current.openFolder('c:/test');
+      });
+      await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
+      act(() => {
+        useViewerStore.getState().syncFavoriteFilter({
+          'c:/test/b.jpg': { favorite: true },
+          'c:/test/d.jpg': { favorite: true },
+          'c:/test/f.jpg': { favorite: true },
+          'c:/test/h.jpg': { favorite: true },
+        });
+        useViewerStore.getState().setCurationFilter('favorites');
+        useViewerStore.getState().setCurrentIndex(1);
+      });
+
+      await waitFor(() => expect(watcherHandler).toBeDefined());
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/test/d.jpg');
+
+      const deletePromise = deleteCurrentImage({
+        currentImagePath: 'c:/test/d.jpg',
+        removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+      });
+      await waitFor(() => expect(moveToTrash).toHaveBeenCalledTimes(1));
+
+      if (completionOrder === 'command-first') {
+        act(() => resolveTrash());
+        await act(async () => {
+          await deletePromise;
+        });
+      }
+      expect(useViewerStore.getState().currentImagePath).toBe(
+        completionOrder === 'command-first' ? 'c:/test/f.jpg' : 'c:/test/d.jpg'
+      );
+
+      act(() => {
+        watcherHandler?.({
+          folderPath: 'c:/test',
+          changes: [{ kind: 'removed', path: 'c:/test/d.jpg', image: null }],
+          requiresFullRefresh: false,
+        });
+      });
+
+      await waitFor(() => {
+        expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+          'c:/test/b.jpg',
+          'c:/test/f.jpg',
+          'c:/test/h.jpg',
+        ]);
+      });
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/test/f.jpg');
+
+      if (completionOrder === 'watcher-first') {
+        act(() => resolveTrash());
+        await act(async () => {
+          await deletePromise;
+        });
+      }
+
+      expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+        'c:/test/b.jpg',
+        'c:/test/f.jpg',
+        'c:/test/h.jpg',
+      ]);
+      expect(useViewerStore.getState().currentImagePath).toBe('c:/test/f.jpg');
+      expect(useViewerStore.getState().currentIndex).toBe(1);
+      expect(moveToTrash).toHaveBeenCalledTimes(1);
+      expect(moveToTrash).toHaveBeenCalledWith('c:/test/d.jpg');
+    }
+  );
+
+  it('preserves the previous visible favorite when deleting the last filtered image', async () => {
+    const images = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((name) => ({
+      path: `c:/test/${name}.jpg`,
+      file_name: `${name}.jpg`,
+      extension: 'jpg',
+      size_bytes: 100,
+      modified_at: `${name.charCodeAt(0)}`,
+    }));
+    let watcherHandler: ((payload: FolderWatcherPayload) => void) | undefined;
+    let resolveTrash!: () => void;
+    const trash = new Promise<void>((resolve) => {
+      resolveTrash = resolve;
+    });
+    vi.mocked(moveToTrash).mockReturnValue(trash);
+
+    vi.mocked(listenToFolderWatcherChanges).mockImplementation(async (handler) => {
+      watcherHandler = handler;
+      return () => undefined;
+    });
+    vi.mocked(readFolderIndex).mockResolvedValue(images);
+    vi.mocked(refreshFolderIndex).mockResolvedValue(images);
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        autoRefreshFolder: true,
+        sortOrder: 'name',
+        sortDirection: 'ascending',
+      },
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+    await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
+    act(() => {
+      useViewerStore.getState().syncFavoriteFilter({
+        'c:/test/b.jpg': { favorite: true },
+        'c:/test/d.jpg': { favorite: true },
+        'c:/test/f.jpg': { favorite: true },
+        'c:/test/h.jpg': { favorite: true },
+      });
+      useViewerStore.getState().setCurationFilter('favorites');
+      useViewerStore.getState().setCurrentIndex(3);
+    });
+
+    await waitFor(() => expect(watcherHandler).toBeDefined());
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/h.jpg');
+
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/test/h.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await waitFor(() => expect(moveToTrash).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      watcherHandler?.({
+        folderPath: 'c:/test',
+        changes: [{ kind: 'removed', path: 'c:/test/h.jpg', image: null }],
+        requiresFullRefresh: false,
+      });
+    });
+
+    await waitFor(() => expect(useViewerStore.getState().currentImagePath).toBe('c:/test/f.jpg'));
+    act(() => resolveTrash());
+    await act(async () => {
+      await deletePromise;
+    });
+
+    expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+      'c:/test/b.jpg',
+      'c:/test/d.jpg',
+      'c:/test/f.jpg',
+    ]);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/f.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(2);
+  });
+
+  it('keeps a surviving renamed favorite selected when the watcher supplies its new path', async () => {
+    const images = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((name) => ({
+      path: `c:/test/${name}.jpg`,
+      file_name: `${name}.jpg`,
+      extension: 'jpg',
+      size_bytes: 100,
+      modified_at: `${name.charCodeAt(0)}`,
+    }));
+    let watcherHandler: ((payload: FolderWatcherPayload) => void) | undefined;
+
+    vi.mocked(listenToFolderWatcherChanges).mockImplementation(async (handler) => {
+      watcherHandler = handler;
+      return () => undefined;
+    });
+    vi.mocked(readFolderIndex).mockResolvedValue(images);
+    vi.mocked(refreshFolderIndex).mockResolvedValue(images);
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        autoRefreshFolder: true,
+        sortOrder: 'name',
+        sortDirection: 'ascending',
+      },
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+    await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
+    act(() => {
+      useViewerStore.getState().syncFavoriteFilter({
+        'c:/test/b.jpg': { favorite: true },
+        'c:/test/d.jpg': { favorite: true },
+        'c:/test/d-renamed.jpg': { favorite: true },
+        'c:/test/f.jpg': { favorite: true },
+        'c:/test/h.jpg': { favorite: true },
+      });
+      useViewerStore.getState().setCurationFilter('favorites');
+      useViewerStore.getState().setCurrentIndex(1);
+    });
+    await waitFor(() => expect(watcherHandler).toBeDefined());
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/d.jpg');
+
+    act(() => {
+      watcherHandler?.({
+        folderPath: 'c:/test',
+        changes: [
+          {
+            kind: 'renamed',
+            path: 'c:/test/d-renamed.jpg',
+            oldPath: 'c:/test/d.jpg',
+            image: {
+              ...images[3],
+              path: 'c:/test/d-renamed.jpg',
+              file_name: 'd-renamed.jpg',
+            },
+          },
+        ],
+        requiresFullRefresh: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(useViewerStore.getState().images.map((image) => image.path)).toEqual([
+        'c:/test/b.jpg',
+        'c:/test/d-renamed.jpg',
+        'c:/test/f.jpg',
+        'c:/test/h.jpg',
+      ]);
+    });
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/d-renamed.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(1);
+  });
 });

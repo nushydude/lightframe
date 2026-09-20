@@ -19,6 +19,7 @@ type ApplyFolderImages = (
     preferredIndex: number;
     preferredPath: string | null;
     pathIndex: Map<string, bigint>;
+    preserveCurrentSelectionOnMissingPreferredPath?: boolean;
   }
 ) => void;
 
@@ -105,6 +106,7 @@ export function useFolderWatcherLifecycle({
         preferredIndex: reconciliation.preferredIndex,
         preferredPath: reconciliation.preferredPath,
         pathIndex: folderPathIndexRef.current,
+        preserveCurrentSelectionOnMissingPreferredPath: state.curationFilter !== 'all',
       });
     },
     [applyFolderImages, folderPathIndexRef, randomOrderRef, refreshFolderFromDisk]
