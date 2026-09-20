@@ -114,7 +114,11 @@ the platform bounded and verifiable (56, 55, 54, 58, 57), establish the product 
 
 ## Orchestration Setup
 
-Use these files when handing the task to a GPT 5.4 orchestrator:
+Use these files when handing a task to the orchestration workflow. The default routing policy is
+GPT 5.6 Luna with `high` reasoning for ordinary implementation and remediation, and GPT 5.6 Sol
+with `medium` reasoning for independent review. A task explicitly classified as architecture work
+or exceptionally complex may use GPT 6 Astra with `medium` reasoning for implementation or
+remediation; this is an exception to the Luna default, and review remains with GPT 5.6 Sol.
 
 - `.agent/orchestration/gpt-5.4-orchestrator-instructions.md`
 - `.agent/orchestration/state-machine.md`

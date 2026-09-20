@@ -78,7 +78,9 @@ Exit to:
 
 Entry criteria:
 
-- GPT 5.5 medium implementation agent has received the task plan and constraints.
+- The GPT 5.6 Luna implementation agent with `high` reasoning has received the task plan and
+  constraints. If the task is explicitly classified as architecture work or exceptionally complex,
+  the implementation agent may instead be GPT 6 Astra with `medium` reasoning.
 
 Actions:
 
@@ -136,7 +138,9 @@ Entry criteria:
 
 Actions:
 
-- Send exact failing command and relevant log excerpt to the GPT 5.5 medium implementation agent.
+- Send the exact failing command and relevant log excerpt to the selected implementation agent:
+  GPT 5.6 Luna with `high` reasoning by default, or GPT 6 Astra with `medium` reasoning for an
+  explicitly classified architecture or exceptionally complex task.
 - Implementation agent fixes only code-caused failures.
 - Rerun failed checks, then full gates if the fix touches shared behavior.
 
@@ -152,7 +156,8 @@ Entry criteria:
 
 Actions:
 
-- Send task plan, diff summary, and check results to GPT 5.5 reviewer.
+- Send the task plan, diff summary, and check results to the GPT 5.6 Sol reviewer with `medium`
+  reasoning.
 - Record the independent reviewer result with
   `node scripts/agent-task.mjs record-review --slug <task-slug> --status APPROVED|CHANGES_REQUESTED`.
 - Reviewer returns `APPROVED` or `CHANGES_REQUESTED`.
@@ -171,7 +176,9 @@ Entry criteria:
 
 Actions:
 
-- Send reviewer checklist to the GPT 5.5 medium implementation agent.
+- Send the reviewer checklist to the selected implementation agent: GPT 5.6 Luna with `high`
+  reasoning by default, or GPT 6 Astra with `medium` reasoning for an explicitly classified
+  architecture or exceptionally complex task.
 - Implementation agent fixes requested items only.
 - Run checks named by reviewer and local gates as needed.
 
@@ -240,9 +247,11 @@ Entry criteria:
 Actions:
 
 - Fetch failed job logs.
-- Send failure summary to the GPT 5.5 medium implementation agent.
+- Send the failure summary to the selected implementation agent: GPT 5.6 Luna with `high` reasoning
+  by default, or GPT 6 Astra with `medium` reasoning for an explicitly classified architecture or
+  exceptionally complex task.
 - Fix, run local gates, commit, push.
-- Send changed diff to GPT 5.5 if behavior changed.
+- Send the changed diff to the GPT 5.6 Sol reviewer if behavior changed.
 
 Exit to:
 
