@@ -287,8 +287,10 @@ export function useImageNavigation() {
         preferredIndex: number;
         preferredPath: string | null;
         pathIndex?: Map<string, bigint>;
+        preserveCurrentSelectionOnMissingPreferredPath?: boolean;
       }
     ) => {
+      const previousCurrentPath = useViewerStore.getState().currentImagePath;
       folderPathIndexRef.current =
         options.pathIndex ??
         new Map(
@@ -311,15 +313,23 @@ export function useImageNavigation() {
         return;
       }
 
+      const state = useViewerStore.getState();
       const matchedIndex = options.preferredPath
         ? visibleImages.findIndex((image) => image.path === options.preferredPath)
         : -1;
+      const currentPathWasRemoved =
+        options.preserveCurrentSelectionOnMissingPreferredPath &&
+        previousCurrentPath !== null &&
+        !folderImages.some(
+          (image) => normalizePathKey(image.path) === normalizePathKey(previousCurrentPath)
+        );
       const nextIndex =
         matchedIndex >= 0
           ? matchedIndex
-          : Math.min(Math.max(options.preferredIndex, 0), visibleImages.length - 1);
+          : currentPathWasRemoved
+            ? Math.min(Math.max(state.currentIndex, 0), visibleImages.length - 1)
+            : Math.min(Math.max(options.preferredIndex, 0), visibleImages.length - 1);
       const nextPath = visibleImages[nextIndex]?.path ?? null;
-      const state = useViewerStore.getState();
 
       if (state.currentIndex !== nextIndex || state.currentImagePath !== nextPath) {
         setCurrentIndex(nextIndex);

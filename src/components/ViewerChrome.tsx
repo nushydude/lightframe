@@ -240,7 +240,6 @@ export function ViewerChrome({
   const setCurationFilter = useViewerStore((state) => state.setCurationFilter);
   const zoomIn = useViewerStore((state) => state.zoomIn);
   const zoomOut = useViewerStore((state) => state.zoomOut);
-  const removeImage = useViewerStore((state) => state.removeImage);
   const rotation = useViewerStore((state) => state.rotation);
   const isCropMode = useViewerStore((state) => state.isCropMode);
   const cropRect = useViewerStore((state) => state.cropRect);
@@ -554,7 +553,7 @@ export function ViewerChrome({
   };
 
   const handleDelete = async () => {
-    await deleteCurrentImage({ currentImagePath, currentIndex, removeImage });
+    await deleteCurrentImage({ currentImagePath, removeImagesByPaths });
     closeOverflowMenus();
     closeContextMenu();
   };

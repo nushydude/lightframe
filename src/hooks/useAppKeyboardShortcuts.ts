@@ -52,8 +52,7 @@ export function useAppKeyboardShortcuts({
     deleteCurrentImage: () =>
       deleteCurrentImage({
         currentImagePath: useViewerStore.getState().currentImagePath,
-        currentIndex: useViewerStore.getState().currentIndex,
-        removeImage: useViewerStore.getState().removeImage,
+        removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
       }),
     startSlideshow,
     stopSlideshow,
