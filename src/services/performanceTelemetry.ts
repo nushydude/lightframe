@@ -5,12 +5,7 @@ const LATENCY_HISTORY_LIMIT = 64;
 type TelemetryListener = () => void;
 
 type ImageSelectionKind =
-  | 'open-image'
-  | 'startup-open'
-  | 'folder-open'
-  | 'keyboard-next'
-  | 'keyboard-prev'
-  | 'other';
+  'open-image' | 'startup-open' | 'folder-open' | 'keyboard-next' | 'keyboard-prev' | 'other';
 
 export type TelemetryLatencyMetricKey =
   | 'startupToFirstImageKnown'

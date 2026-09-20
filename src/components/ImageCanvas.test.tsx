@@ -496,8 +496,7 @@ describe('ImageCanvas', () => {
       Number.isFinite(maxEntries as number)
     );
     const navigationTrimOptions = navigationTrimCall?.[2] as
-      | { pruneMissingPaths?: Set<string>; cancelOutsidePaths?: Set<string> }
-      | undefined;
+      { pruneMissingPaths?: Set<string>; cancelOutsidePaths?: Set<string> } | undefined;
     expect(Array.from(navigationTrimOptions?.pruneMissingPaths ?? []).sort()).toEqual(
       expectedRetentionPaths
     );
@@ -1182,8 +1181,7 @@ describe('ImageCanvas', () => {
   it('does not use stale previous-image metadata to authorize full-resolution loads', async () => {
     zoomPanState.zoomLevel = 1.5;
     let resolveHugeMetadata:
-      | ((metadata: Awaited<ReturnType<typeof getImageMetadataMock>>) => void)
-      | null = null;
+      ((metadata: Awaited<ReturnType<typeof getImageMetadataMock>>) => void) | null = null;
     getImageMetadataMock
       .mockResolvedValueOnce({
         width: 1200,

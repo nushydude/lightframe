@@ -194,8 +194,7 @@ describe('thumbnail consumers', () => {
     render(<ThumbnailStrip />);
 
     const firstPreloadRequest = preloadThumbnailsMock.mock.calls[0]?.[0] as
-      | Array<{ path: string }>
-      | undefined;
+      Array<{ path: string }> | undefined;
     expect(firstPreloadRequest?.some((request) => request.path === images[80].path)).toBe(true);
     expect(firstPreloadRequest?.some((request) => request.path === images[0].path)).toBe(false);
   });
@@ -337,8 +336,7 @@ describe('thumbnail consumers', () => {
     });
 
     const firstPreloadRequest = preloadThumbnailsMock.mock.calls[0]?.[0] as
-      | Array<{ path: string }>
-      | undefined;
+      Array<{ path: string }> | undefined;
     expect(firstPreloadRequest?.some((request) => request.path === nextImages[5].path)).toBe(true);
     expect(firstPreloadRequest?.some((request) => request.path === nextImages[80].path)).toBe(
       false
