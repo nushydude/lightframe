@@ -1,4 +1,4 @@
-# GPT 5.4 Orchestrator Instructions
+# LightFrame Orchestrator Instructions
 
 ## Role
 
@@ -22,6 +22,17 @@ If the user supplies more than one roadmap task, do not combine them unless the 
 for a combined PR. For an arbitrary prompt, create a short task specification and acceptance
 criteria before implementation.
 
+## Model Routing Policy
+
+- Ordinary implementation and remediation use GPT 5.6 Luna with `high` reasoning.
+- Independent review uses GPT 5.6 Sol with `medium` reasoning.
+- A task explicitly classified as architecture work or exceptionally complex may use GPT 6 Astra
+  with `medium` reasoning for implementation and remediation. This is an exception to the Luna
+  default and does not replace the Sol reviewer.
+
+The orchestrator must record or communicate the exception when selecting GPT 6 Astra. Do not use
+GPT 6 Astra merely because a task is large, unfamiliar, or time-sensitive.
+
 ## Non-Negotiable Rules
 
 - Preserve user changes. Run `git status --short` before starting and before delivery.
@@ -29,10 +40,11 @@ criteria before implementation.
 - Use `node scripts/agent-task.mjs start --slug <task-slug> --title "<task title>" --spec-file <path>`
   to fetch `origin/main`, record the specification hash, and create the isolated worktree. Never
   stash, reset, or overwrite a dirty source checkout.
-- Implementation agent is GPT 5.5 with `medium` reasoning. Use it only for coding, tests, and local
-  fixes.
-- Reviewer agent is GPT 5.5 with `xhigh` reasoning. Use it only for review analysis and remediation
-  validation.
+- Implementation and remediation agents use GPT 5.6 Luna with `high` reasoning by default. Use GPT 6
+  Astra with `medium` reasoning only for an explicitly classified architecture or exceptionally
+  complex task.
+- Reviewer agent is GPT 5.6 Sol with `medium` reasoning. Use it only for review analysis and
+  remediation validation.
 - Do not let the implementation agent approve its own work.
 - Do not open a PR while reviewer status is `CHANGES_REQUESTED`.
 - Do not open a PR until local gates pass.
@@ -57,11 +69,14 @@ implementation agent to fix code-caused failures only. Do not hide skipped check
 
 ## Implementation Agent Prompt Template
 
-Send this to the GPT 5.5 implementation agent with `medium` reasoning, with the task file pasted or
-attached:
+Populate `<IMPLEMENTATION_MODEL>` and `<REASONING_LEVEL>` with exactly one selected routing pair
+before sending this prompt with the task file pasted or attached. Use GPT 5.6 Luna with `high`
+reasoning by default; for an explicitly classified architecture or exceptionally complex task, use
+GPT 6 Astra with `medium` reasoning and include the reason for the exception:
 
 ```text
-You are the implementation agent for LightFrame. You are running GPT 5.5 with medium reasoning.
+You are the implementation agent for LightFrame. You are running <IMPLEMENTATION_MODEL> with
+<REASONING_LEVEL> reasoning.
 
 Implement exactly this task and no unrelated work:
 
@@ -86,10 +101,10 @@ Output required:
 
 ## Reviewer Agent Prompt Template
 
-Send this to the GPT 5.5 reviewer with `xhigh` reasoning after implementation and local gates:
+Send this to the GPT 5.6 Sol reviewer with `medium` reasoning after implementation and local gates:
 
 ```text
-You are the reviewer for LightFrame. You are running GPT 5.5 with xhigh reasoning.
+You are the independent reviewer for LightFrame. You are running GPT 5.6 Sol with medium reasoning.
 
 Review the current branch against this task plan:
 
@@ -111,9 +126,10 @@ Do not implement fixes yourself.
 1. Start in `TASK_SELECTED` and persist the task with `scripts/agent-task.mjs`.
 2. Follow `.agent/orchestration/state-machine.md` exactly.
 3. If reviewer requests changes, pass only the remediation checklist and relevant task context to
-   the GPT 5.5 implementation agent.
+   the GPT 5.6 Luna implementation agent, or to GPT 6 Astra when the task has the documented
+   architecture/exceptional-complexity classification.
 4. After remediation, rerun affected checks. If code changed broadly, rerun all local gates.
-5. Send the updated diff back to GPT 5.5.
+5. Send the updated diff back to the GPT 5.6 Sol reviewer.
 6. Repeat until reviewer returns `APPROVED`.
 7. If reviewer approval and local gates pass but delivery is not authorized, transition to
    `AUTHORIZATION_REQUIRED` and report exactly what will be committed, pushed, and opened.
