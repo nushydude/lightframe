@@ -135,10 +135,12 @@ fn read_comfy_png_metadata(path: &Path) -> EmbeddedComfyMetadata {
                 parse_uncompressed_itxt(&payload)
             };
             if let Some((key, value)) = text {
-                match key {
-                    "Prompt" if prompt_json.is_none() => prompt_json = Some(value),
-                    "workflow" if workflow_json.is_none() => workflow_json = Some(value),
-                    _ => {}
+                if key.eq_ignore_ascii_case("Prompt") {
+                    if prompt_json.is_none() {
+                        prompt_json = Some(value);
+                    }
+                } else if key.eq_ignore_ascii_case("workflow") && workflow_json.is_none() {
+                    workflow_json = Some(value);
                 }
             }
             let _ = file.seek(SeekFrom::Current(4)); // CRC
@@ -2397,6 +2399,22 @@ mod tests {
         let metadata = read_comfy_png_metadata(&image_path);
         assert_eq!(metadata.prompt_json.as_deref(), Some("{\"nodes\":{}}"));
         assert_eq!(metadata.workflow_json.as_deref(), Some("{\"version\":1}"));
+        assert_eq!(metadata.source, "Embedded ComfyUI PNG metadata");
+    }
+
+    #[test]
+    fn test_reads_comfy_png_prompt_and_workflow_chunks_case_insensitively() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.png");
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(png_text_chunk(b"tEXt", b"prompt\0{\"1\":{\"class_type\":\"KSampler\"}}"));
+        png.extend(png_text_chunk(b"iTXt", b"WORKFLOW\0\0\0en\0\0{\"nodes\":[]}"));
+        png.extend(png_text_chunk(b"IEND", b""));
+        fs::write(&image_path, png).unwrap();
+
+        let metadata = read_comfy_png_metadata(&image_path);
+        assert_eq!(metadata.prompt_json.as_deref(), Some("{\"1\":{\"class_type\":\"KSampler\"}}"));
+        assert_eq!(metadata.workflow_json.as_deref(), Some("{\"nodes\":[]}"));
         assert_eq!(metadata.source, "Embedded ComfyUI PNG metadata");
     }
 
