@@ -34,7 +34,8 @@ uses cross-platform Tauri where possible.
 - Configurable quick destination folders, external-editor launch, reveal in file manager, copy to
   clipboard, and move to trash.
 - Projector mode that opens a synced fullscreen secondary window for second-display review.
-- EXIF/file info panel with XMP sidecar support for RAW workflows.
+- EXIF/file info panel with XMP sidecar support for RAW workflows, separate same-name captions,
+  and embedded ComfyUI PNG prompts and recorded render settings.
 - Settings for theme, default fit mode, slideshow behavior, folder auto-refresh, window bounds,
   projector behavior, performance mode, update channel, recent folders, quick destinations, and
   external editor.

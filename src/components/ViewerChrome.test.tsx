@@ -63,6 +63,11 @@ describe('ViewerChrome', () => {
       format: 'JPEG',
     });
     vi.spyOn(tauriCommands, 'getImageCaption').mockResolvedValue(null);
+    vi.spyOn(tauriCommands, 'getEmbeddedComfyMetadata').mockResolvedValue({
+      prompt_json: null,
+      workflow_json: null,
+      source: 'No supported embedded ComfyUI PNG metadata found',
+    });
     useToastStore.getState().clearToasts();
     document.body.innerHTML = '';
     window.localStorage.clear();
@@ -284,6 +289,63 @@ describe('ViewerChrome', () => {
     await waitFor(() => expect(container.querySelector('.exif-caption-text')).toBeInTheDocument());
     expect(container.querySelector('.image-caption-overlay')).not.toBeInTheDocument();
     expect(screen.getByText('photo.txt')).toBeInTheDocument();
+  });
+
+  it('shows the embedded positive prompt separately from the sidecar caption and copies both sources', async () => {
+    useViewerStore.setState({
+      currentImagePath: 'C:/Images/photo.png',
+      images: [
+        {
+          path: 'C:/Images/photo.png',
+          file_name: 'photo.png',
+          extension: 'png',
+          size_bytes: 100,
+          modified_at: '1',
+        },
+      ],
+      currentIndex: 0,
+    });
+    vi.mocked(tauriCommands.getImageCaption).mockResolvedValue({
+      text: 'Sidecar caption text',
+      sidecar_path: 'C:/Images/photo.txt',
+      extension: 'txt',
+    });
+    vi.mocked(tauriCommands.getEmbeddedComfyMetadata).mockResolvedValue({
+      prompt_json: JSON.stringify({
+        '4': { class_type: 'CLIPTextEncode', inputs: { text: 'Generation prompt text' } },
+        '7': {
+          class_type: 'KSampler',
+          inputs: {
+            positive: ['4', 0],
+            seed: 42,
+            steps: 6,
+            cfg: 1,
+            sampler_name: 'euler',
+            scheduler: 'simple',
+          },
+        },
+      }),
+      workflow_json: null,
+      source: 'Embedded ComfyUI PNG metadata',
+    });
+    vi.spyOn(tauriCommands, 'getExifMetadata').mockResolvedValue({ raw: {} });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<ViewerChrome {...defaultProps} />);
+    expect(await screen.findByText('Sidecar caption text')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Toggle image info panel'));
+    expect(await screen.findByText('Generation prompt text')).toBeInTheDocument();
+    expect(screen.getByText('Embedded ComfyUI PNG metadata')).toBeInTheDocument();
+    expect(screen.getByText('Sidecar caption text')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy positive prompt from sampler 7' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image caption' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Generation prompt text'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Sidecar caption text'));
   });
 
   it('hides the browsing overlay when captions are disabled but keeps Image Info available', async () => {

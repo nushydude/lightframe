@@ -4,7 +4,9 @@ import {
   getImageMetadata,
   type ExifData,
   type ImageCaption,
+  type EmbeddedComfyMetadata,
 } from '../services/tauriCommands';
+import type { ParsedComfyPrompt } from '../services/comfyPrompt';
 import type { ImageMetadata } from '../types/image';
 
 interface ExifPanelProps {
@@ -14,6 +16,11 @@ interface ExifPanelProps {
   refreshToken?: number;
   caption?: ImageCaption | null;
   onCopyCaption?: () => void;
+  comfyMetadata?: EmbeddedComfyMetadata | null;
+  comfyPrompt?: ParsedComfyPrompt | null;
+  comfyLoading?: boolean;
+  onCopyPrompt?: (prompt: string) => void;
+  onCopyWorkflow?: (workflow: string) => void;
 }
 
 interface ExifRow {
@@ -33,6 +40,11 @@ export function ExifPanel({
   refreshToken = 0,
   caption = null,
   onCopyCaption,
+  comfyMetadata = null,
+  comfyPrompt = null,
+  comfyLoading = false,
+  onCopyPrompt,
+  onCopyWorkflow,
 }: ExifPanelProps) {
   const [data, setData] = useState<ExifData | null>(null);
   const [imageMetadata, setImageMetadata] = useState<ImageMetadata | null>(null);
@@ -177,6 +189,102 @@ export function ExifPanel({
             </p>
           </section>
         )}
+
+        <section className="exif-section exif-generation-section" aria-label="Generation settings">
+          <h3 className="exif-section-title">Generation Prompt &amp; Settings</h3>
+          <p className="exif-caption-source">
+            {comfyMetadata?.source ?? 'Embedded ComfyUI PNG metadata'}
+          </p>
+          {comfyLoading && <p className="exif-empty">Reading embedded generation metadata…</p>}
+          {!comfyLoading && (!comfyPrompt || comfyPrompt.status !== 'supported') && (
+            <p className="exif-empty">
+              {comfyPrompt?.message ??
+                'No supported ComfyUI prompt or settings were found in this image.'}
+            </p>
+          )}
+          {comfyPrompt?.status === 'supported' && (
+            <>
+              {comfyPrompt.samplers.map((sampler) => (
+                <div className="exif-generation-sampler" key={sampler.nodeId}>
+                  <div className="exif-section-heading">
+                    <h4 className="exif-section-title">
+                      {sampler.nodeType} · node {sampler.nodeId}
+                    </h4>
+                    {sampler.prompt && onCopyPrompt && (
+                      <button
+                        className="exif-caption-copy"
+                        type="button"
+                        onClick={() => onCopyPrompt(sampler.prompt!)}
+                        aria-label={`Copy positive prompt from sampler ${sampler.nodeId}`}
+                      >
+                        Copy prompt
+                      </button>
+                    )}
+                  </div>
+                  {sampler.prompt ? (
+                    <p className="exif-caption-text">{sampler.prompt}</p>
+                  ) : (
+                    <p className="exif-empty">
+                      {sampler.promptStatus === 'ambiguous'
+                        ? 'Multiple positive text sources are connected; prompt is ambiguous.'
+                        : 'No supported positive text source was found for this sampler.'}
+                    </p>
+                  )}
+                  <p className="exif-caption-source">
+                    Only settings recorded in this workflow are shown; other values were
+                    unavailable.
+                  </p>
+                  <dl className="exif-grid exif-grid--compact">
+                    {[
+                      ['Seed', sampler.seed],
+                      ['Steps', sampler.steps],
+                      ['CFG', sampler.cfg],
+                      ['Sampler', sampler.sampler],
+                      ['Scheduler', sampler.scheduler],
+                      ['Denoise', sampler.denoise],
+                      [
+                        'Dimensions',
+                        sampler.width && sampler.height
+                          ? `${sampler.width} × ${sampler.height}`
+                          : undefined,
+                      ],
+                      ['Batch size', sampler.batchSize],
+                      ['Base model', sampler.model],
+                      ['Text encoder', sampler.textEncoder],
+                      ['VAE', sampler.vae],
+                    ]
+                      .filter((row): row is [string, string] => Boolean(row[1]))
+                      .map(([label, value]) => (
+                        <div className="exif-row" key={label}>
+                          <dt className="exif-label">{label}</dt>
+                          <dd className="exif-value">{value}</dd>
+                        </div>
+                      ))}
+                    {sampler.loras.map((lora, index) => (
+                      <div className="exif-row" key={`${lora.name}-${index}`}>
+                        <dt className="exif-label">{index === 0 ? 'LoRA' : 'LoRA'}</dt>
+                        <dd className="exif-value">
+                          {lora.name} · strength {lora.strength}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ))}
+            </>
+          )}
+          {(comfyPrompt?.rawWorkflow || comfyMetadata?.prompt_json) && onCopyWorkflow && (
+            <button
+              className="exif-caption-copy"
+              type="button"
+              onClick={() =>
+                onCopyWorkflow(comfyPrompt?.rawWorkflow ?? comfyMetadata?.prompt_json ?? '')
+              }
+            >
+              Copy raw workflow JSON
+            </button>
+          )}
+        </section>
 
         {data && (
           <>

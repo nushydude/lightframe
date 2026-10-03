@@ -90,6 +90,7 @@ pub fn run() {
             commands::refresh_folder_index,
             commands::get_image_metadata,
             commands::get_image_caption,
+            commands::get_embedded_comfy_metadata,
             commands::get_codec_health,
             commands::clear_generated_image_cache,
             commands::retry_native_codecs,
