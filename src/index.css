@@ -3702,6 +3702,15 @@ body,
   white-space: nowrap;
 }
 
+.exif-generation-sampler {
+  padding-top: 10px;
+}
+
+.exif-generation-sampler + .exif-generation-sampler {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .exif-section-title {
   font-size: 10px;
   font-weight: 700;

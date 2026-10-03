@@ -61,6 +61,127 @@ pub struct ImageCaption {
     pub extension: String,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct EmbeddedComfyMetadata {
+    pub prompt_json: Option<String>,
+    pub workflow_json: Option<String>,
+    pub source: String,
+}
+
+const MAX_COMFY_METADATA_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_COMFY_TEXT_CHUNK_BYTES: u32 = 2 * 1024 * 1024;
+
+/// Reads only bounded, uncompressed PNG text chunks used by ComfyUI. Image pixels are never decoded.
+fn read_comfy_png_metadata(path: &Path) -> EmbeddedComfyMetadata {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let unsupported = EmbeddedComfyMetadata {
+        prompt_json: None,
+        workflow_json: None,
+        source: "No supported embedded ComfyUI PNG metadata found".to_string(),
+    };
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+        != Some("png")
+    {
+        return unsupported;
+    }
+
+    let Ok(mut file) = fs::File::open(path) else { return unsupported };
+    let Ok(file_len) = file.metadata().map(|metadata| metadata.len()) else { return unsupported };
+    if !(8..=MAX_COMFY_METADATA_SCAN_BYTES).contains(&file_len) {
+        // A file may be larger than the scan bound; the metadata chunks still have to appear early.
+        if file_len < 8 {
+            return unsupported;
+        }
+    }
+    let mut signature = [0u8; 8];
+    if file.read_exact(&mut signature).is_err() || signature != *b"\x89PNG\r\n\x1a\n" {
+        return unsupported;
+    }
+
+    let mut prompt_json = None;
+    let mut workflow_json = None;
+    let scan_limit = file_len.min(MAX_COMFY_METADATA_SCAN_BYTES);
+    while file.stream_position().unwrap_or(scan_limit) + 12 <= scan_limit {
+        let mut chunk_header = [0u8; 8];
+        if file.read_exact(&mut chunk_header).is_err() {
+            break;
+        }
+        let length = u32::from_be_bytes(chunk_header[..4].try_into().unwrap());
+        let kind = &chunk_header[4..8];
+        let chunk_start = file.stream_position().unwrap_or(scan_limit);
+        if u64::from(length) + 4 > scan_limit.saturating_sub(chunk_start) {
+            break;
+        }
+
+        if length <= MAX_COMFY_TEXT_CHUNK_BYTES && (kind == b"tEXt" || kind == b"iTXt") {
+            let mut payload = vec![0u8; length as usize];
+            if file.read_exact(&mut payload).is_err() {
+                break;
+            }
+            let text = if kind == b"tEXt" {
+                payload.iter().position(|byte| *byte == 0).and_then(|split| {
+                    let key = std::str::from_utf8(&payload[..split]).ok()?;
+                    let value = std::str::from_utf8(&payload[split + 1..]).ok()?;
+                    Some((key, value.to_string()))
+                })
+            } else {
+                // iTXt layout: keyword NUL compression-flag method language NUL translated NUL text.
+                // Compressed text is intentionally unsupported so we never inflate untrusted data.
+                parse_uncompressed_itxt(&payload)
+            };
+            if let Some((key, value)) = text {
+                match key {
+                    "Prompt" if prompt_json.is_none() => prompt_json = Some(value),
+                    "workflow" if workflow_json.is_none() => workflow_json = Some(value),
+                    _ => {}
+                }
+            }
+            let _ = file.seek(SeekFrom::Current(4)); // CRC
+        } else {
+            let _ = file.seek(SeekFrom::Current(i64::from(length) + 4));
+        }
+        if kind == b"IEND" {
+            break;
+        }
+    }
+
+    let found = prompt_json.is_some() || workflow_json.is_some();
+    EmbeddedComfyMetadata {
+        prompt_json,
+        workflow_json,
+        source: if found {
+            "Embedded ComfyUI PNG metadata"
+        } else {
+            "No supported embedded ComfyUI PNG metadata found"
+        }
+        .to_string(),
+    }
+}
+
+fn parse_uncompressed_itxt(payload: &[u8]) -> Option<(&str, String)> {
+    let keyword_end = payload.iter().position(|byte| *byte == 0)?;
+    let key = std::str::from_utf8(&payload[..keyword_end]).ok()?;
+    let rest = &payload[keyword_end + 1..];
+    if rest.len() < 2 || rest[0] != 0 {
+        return None;
+    }
+    let language_end = rest[2..].iter().position(|byte| *byte == 0)? + 2;
+    let translated_start = language_end + 1;
+    let translated_end =
+        rest[translated_start..].iter().position(|byte| *byte == 0)? + translated_start;
+    let text = std::str::from_utf8(&rest[translated_end + 1..]).ok()?.to_string();
+    Some((key, text))
+}
+
+fn get_embedded_comfy_metadata_blocking(file_path: String) -> EmbeddedComfyMetadata {
+    read_comfy_png_metadata(Path::new(&file_path))
+}
+
 const MAX_IMAGE_CAPTION_BYTES: u64 = 1024 * 1024;
 
 fn decode_image_caption(bytes: &[u8]) -> String {
@@ -1040,6 +1161,18 @@ pub async fn get_image_caption(file_path: String) -> Result<Option<ImageCaption>
     tauri::async_runtime::spawn_blocking(move || get_image_caption_blocking(file_path))
         .await
         .map_err(|err| format!("Image caption worker failed: {}", err))?
+}
+
+/// Read bounded ComfyUI Prompt/workflow text from PNG chunks without decoding image pixels.
+#[tauri::command]
+pub async fn get_embedded_comfy_metadata(file_path: String) -> EmbeddedComfyMetadata {
+    tauri::async_runtime::spawn_blocking(move || get_embedded_comfy_metadata_blocking(file_path))
+        .await
+        .unwrap_or(EmbeddedComfyMetadata {
+            prompt_json: None,
+            workflow_json: None,
+            source: "Embedded metadata could not be read".to_string(),
+        })
 }
 
 fn get_preview_image_blocking(
@@ -2240,6 +2373,46 @@ mod tests {
         segment.extend_from_slice(&exif);
         image.splice(2..2, segment);
         fs::write(path, image).unwrap();
+    }
+
+    fn png_text_chunk(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(payload);
+        chunk.extend_from_slice(&[0, 0, 0, 0]); // CRC is not needed by the bounded metadata reader.
+        chunk
+    }
+
+    #[test]
+    fn test_reads_uncompressed_comfy_png_prompt_and_workflow_chunks() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.png");
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(png_text_chunk(b"tEXt", b"Prompt\0{\"nodes\":{}}"));
+        png.extend(png_text_chunk(b"iTXt", b"workflow\0\0\0en\0\0{\"version\":1}"));
+        png.extend(png_text_chunk(b"IEND", b""));
+        fs::write(&image_path, png).unwrap();
+
+        let metadata = read_comfy_png_metadata(&image_path);
+        assert_eq!(metadata.prompt_json.as_deref(), Some("{\"nodes\":{}}"));
+        assert_eq!(metadata.workflow_json.as_deref(), Some("{\"version\":1}"));
+        assert_eq!(metadata.source, "Embedded ComfyUI PNG metadata");
+    }
+
+    #[test]
+    fn test_ignores_compressed_or_malformed_png_metadata_without_failing() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("sample.png");
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(png_text_chunk(b"iTXt", b"Prompt\0\x01\0en\0\0compressed payload"));
+        png.extend_from_slice(&100_u32.to_be_bytes());
+        png.extend_from_slice(b"tEXt");
+        fs::write(&image_path, png).unwrap();
+
+        let metadata = read_comfy_png_metadata(&image_path);
+        assert_eq!(metadata.prompt_json, None);
+        assert_eq!(metadata.workflow_json, None);
     }
 
     #[test]

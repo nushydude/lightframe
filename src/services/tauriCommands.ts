@@ -33,6 +33,12 @@ export interface ImageCaption {
   extension: 'txt' | 'caption' | string;
 }
 
+export interface EmbeddedComfyMetadata {
+  prompt_json: string | null;
+  workflow_json: string | null;
+  source: string;
+}
+
 export interface CropRect {
   x: number;
   y: number;
@@ -216,6 +222,11 @@ export async function getImageMetadata(filePath: string): Promise<ImageMetadata>
 /** Read a same-basename LoRA caption sidecar (`.txt`, then `.caption`) when present. */
 export async function getImageCaption(filePath: string): Promise<ImageCaption | null> {
   return invoke<ImageCaption | null>('get_image_caption', { filePath });
+}
+
+/** Read bounded ComfyUI Prompt/workflow text from PNG metadata without decoding image pixels. */
+export async function getEmbeddedComfyMetadata(filePath: string): Promise<EmbeddedComfyMetadata> {
+  return invoke<EmbeddedComfyMetadata>('get_embedded_comfy_metadata', { filePath });
 }
 
 /** Read codec and generated-cache diagnostics */

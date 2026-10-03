@@ -12,11 +12,14 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { ExifPanel } from './ExifPanel';
 import { ImageCaptionOverlay } from './ImageCaptionOverlay';
+import { parseComfyPrompt } from '../services/comfyPrompt';
 import {
   closeSecondaryWindow,
   type CropRect,
   getFileName,
   getImageCaption,
+  getEmbeddedComfyMetadata,
+  type EmbeddedComfyMetadata,
   type ImageCaption,
   openSecondaryWindow,
   overwriteWithCrop,
@@ -303,6 +306,10 @@ export function ViewerChrome({
   const [exifRefreshToken, setExifRefreshToken] = useState(0);
   const [captionRefreshToken, setCaptionRefreshToken] = useState(0);
   const [imageCaption, setImageCaption] = useState<ImageCaption | null>(null);
+  const [embeddedComfyMetadata, setEmbeddedComfyMetadata] = useState<EmbeddedComfyMetadata | null>(
+    null
+  );
+  const [comfyMetadataLoading, setComfyMetadataLoading] = useState(false);
   const [captionsExpanded, setCaptionsExpanded] = useState(false);
   const [showProjectorGridPrompt, setShowProjectorGridPrompt] = useState(false);
   const [skipProjectorGridPrompt, setSkipProjectorGridPrompt] = useState(false);
@@ -365,6 +372,41 @@ export function ViewerChrome({
       isCurrent = false;
     };
   }, [captionRefreshToken, currentImagePath]);
+
+  const comfyPrompt = useMemo(
+    () =>
+      parseComfyPrompt(embeddedComfyMetadata?.prompt_json, embeddedComfyMetadata?.workflow_json),
+    [embeddedComfyMetadata]
+  );
+
+  useEffect(() => {
+    let isCurrent = true;
+    setEmbeddedComfyMetadata(null);
+    setComfyMetadataLoading(Boolean(currentImagePath && showExif));
+    if (!currentImagePath || !showExif) return;
+
+    void getEmbeddedComfyMetadata(currentImagePath)
+      .then((metadata) => {
+        if (isCurrent) setEmbeddedComfyMetadata(metadata);
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          console.error('Failed to read embedded ComfyUI metadata:', error);
+          setEmbeddedComfyMetadata({
+            prompt_json: null,
+            workflow_json: null,
+            source: 'Embedded metadata could not be read',
+          });
+        }
+      })
+      .finally(() => {
+        if (isCurrent) setComfyMetadataLoading(false);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [captionRefreshToken, currentImagePath, showExif]);
 
   const menuRefs = useMemo(
     () => [
@@ -626,6 +668,19 @@ export function ViewerChrome({
         title: 'Caption copy failed',
         kind: 'error',
         message: `Failed to copy image caption: ${error}`,
+      });
+    }
+  };
+
+  const handleCopyComfyText = async (text: string, title: string) => {
+    try {
+      await copyTextToClipboard(text);
+      pushToast({ title, kind: 'success', message: `${title} to clipboard.` });
+    } catch (error) {
+      pushToast({
+        title: 'Copy failed',
+        kind: 'error',
+        message: `Failed to copy ${title.toLowerCase()}: ${error}`,
       });
     }
   };
@@ -1973,6 +2028,13 @@ export function ViewerChrome({
           filePath={currentImagePath}
           caption={imageCaption}
           onCopyCaption={() => void handleCopyCaption()}
+          comfyMetadata={embeddedComfyMetadata}
+          comfyPrompt={comfyPrompt}
+          comfyLoading={comfyMetadataLoading}
+          onCopyPrompt={(prompt) => void handleCopyComfyText(prompt, 'Positive prompt copied')}
+          onCopyWorkflow={(workflow) =>
+            void handleCopyComfyText(workflow, 'Raw workflow JSON copied')
+          }
           hasThumbnails={showThumbnails && viewMode === 'viewer'}
           refreshToken={exifRefreshToken}
           onClose={() => setShowExif(false)}
