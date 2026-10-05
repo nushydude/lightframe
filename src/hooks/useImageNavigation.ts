@@ -288,6 +288,7 @@ export function useImageNavigation() {
         preferredPath: string | null;
         pathIndex?: Map<string, bigint>;
         preserveCurrentSelectionOnMissingPreferredPath?: boolean;
+        preserveLiveSelection?: boolean;
       }
     ) => {
       const previousCurrentPath = useViewerStore.getState().currentImagePath;
@@ -314,8 +315,20 @@ export function useImageNavigation() {
       }
 
       const state = useViewerStore.getState();
-      const matchedIndex = options.preferredPath
-        ? visibleImages.findIndex((image) => image.path === options.preferredPath)
+      // A refresh may finish after the user has navigated. Keep that live selection when
+      // it still belongs to the refreshed folder instead of restoring the refresh-start
+      // snapshot (which may now refer to a deleted image).
+      const liveCurrentPathIsVisible =
+        options.preserveLiveSelection &&
+        previousCurrentPath !== null &&
+        visibleImages.some(
+          (image) => normalizePathKey(image.path) === normalizePathKey(previousCurrentPath)
+        );
+      const preferredPath = liveCurrentPathIsVisible ? previousCurrentPath : options.preferredPath;
+      const matchedIndex = preferredPath
+        ? visibleImages.findIndex(
+            (image) => normalizePathKey(image.path) === normalizePathKey(preferredPath)
+          )
         : -1;
       const currentPathWasRemoved =
         options.preserveCurrentSelectionOnMissingPreferredPath &&
@@ -711,6 +724,7 @@ export function useImageNavigation() {
         emptyMessage: 'No supported images found in the current folder',
         preferredIndex: snapshot.previousIndex,
         preferredPath: snapshot.previousImagePath,
+        preserveLiveSelection: true,
       });
     } catch (err) {
       console.error('Failed to refresh folder:', err);

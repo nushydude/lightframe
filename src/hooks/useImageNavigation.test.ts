@@ -311,6 +311,28 @@ describe('useImageNavigation', () => {
     expect(refreshFolderIndex).toHaveBeenCalledWith('c:/test');
   });
 
+  it('starts a folder open at its first image instead of preserving the old selection', async () => {
+    const folderImages = ['a', 'b', 'c'].map((name) => ({
+      path: `c:/test/${name}.jpg`,
+      file_name: `${name}.jpg`,
+      extension: 'jpg',
+      size_bytes: 100,
+      modified_at: `${name.charCodeAt(0)}`,
+    }));
+    useViewerStore.getState().setImages(folderImages);
+    useViewerStore.getState().setCurrentIndex(2);
+    vi.mocked(readFolderIndex).mockResolvedValue([]);
+    vi.mocked(refreshFolderIndex).mockResolvedValue(folderImages);
+
+    const { result } = renderHook(() => useImageNavigation());
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/a.jpg');
+  });
+
   it('keeps a newly opened random folder order stable and selects its first image', async () => {
     const folderImages = [
       {
@@ -1164,6 +1186,64 @@ describe('useImageNavigation', () => {
     expect(useViewerStore.getState().currentIndex).toBe(1);
     expect(moveToTrash).toHaveBeenCalledTimes(1);
     expect(moveToTrash).toHaveBeenCalledWith('c:/test/b.jpg');
+  });
+
+  it('keeps the live selection when a full refresh finishes after delete and navigation', async () => {
+    const images = ['a', 'b', 'c', 'd'].map((name) => ({
+      path: `c:/test/${name}.jpg`,
+      file_name: `${name}.jpg`,
+      extension: 'jpg',
+      size_bytes: 100,
+      modified_at: `${name.charCodeAt(0)}`,
+    }));
+    const afterDelete = images.filter((image) => image.file_name !== 'c.jpg');
+    let watcherHandler: ((payload: FolderWatcherPayload) => void) | undefined;
+    let resolveRefresh!: (images: typeof afterDelete) => void;
+
+    vi.mocked(readFolderIndex).mockResolvedValue(images);
+    vi.mocked(refreshFolderIndex).mockResolvedValue(images);
+    vi.mocked(listenToFolderWatcherChanges).mockImplementation(async (handler) => {
+      watcherHandler = handler;
+      return () => undefined;
+    });
+
+    const { result } = renderHook(() => useImageNavigation());
+    await act(async () => {
+      await result.current.openFolder('c:/test');
+    });
+    await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
+    await waitFor(() => expect(watcherHandler).toBeDefined());
+
+    act(() => useViewerStore.getState().setCurrentIndex(2));
+    vi.mocked(refreshFolderIndex).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+    act(() => {
+      watcherHandler?.({
+        folderPath: 'c:/test',
+        changes: [],
+        requiresFullRefresh: true,
+      });
+    });
+    await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(true));
+
+    await act(async () => {
+      await deleteCurrentImage({
+        currentImagePath: 'c:/test/c.jpg',
+        removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+      });
+    });
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/d.jpg');
+
+    act(() => useViewerStore.getState().setCurrentIndex(0));
+    resolveRefresh(afterDelete);
+
+    await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/a.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
   });
 
   it.each(['watcher-first', 'command-first'] as const)(
