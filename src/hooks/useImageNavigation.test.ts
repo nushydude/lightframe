@@ -1188,7 +1188,7 @@ describe('useImageNavigation', () => {
     expect(moveToTrash).toHaveBeenCalledWith('c:/test/b.jpg');
   });
 
-  it('keeps the live selection when a full refresh finishes after delete and navigation', async () => {
+  it('keeps the reconciled selection when refresh resolves during a pending delete', async () => {
     const images = ['a', 'b', 'c', 'd'].map((name) => ({
       path: `c:/test/${name}.jpg`,
       file_name: `${name}.jpg`,
@@ -1196,9 +1196,10 @@ describe('useImageNavigation', () => {
       size_bytes: 100,
       modified_at: `${name.charCodeAt(0)}`,
     }));
-    const afterDelete = images.filter((image) => image.file_name !== 'c.jpg');
+    const afterDelete = images.filter((image) => image.file_name !== 'a.jpg');
     let watcherHandler: ((payload: FolderWatcherPayload) => void) | undefined;
     let resolveRefresh!: (images: typeof afterDelete) => void;
+    let resolveTrash!: () => void;
 
     vi.mocked(readFolderIndex).mockResolvedValue(images);
     vi.mocked(refreshFolderIndex).mockResolvedValue(images);
@@ -1214,7 +1215,7 @@ describe('useImageNavigation', () => {
     await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
     await waitFor(() => expect(watcherHandler).toBeDefined());
 
-    act(() => useViewerStore.getState().setCurrentIndex(2));
+    act(() => useViewerStore.getState().setCurrentIndex(3));
     vi.mocked(refreshFolderIndex).mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -1230,19 +1231,30 @@ describe('useImageNavigation', () => {
     });
     await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(true));
 
-    await act(async () => {
-      await deleteCurrentImage({
-        currentImagePath: 'c:/test/c.jpg',
-        removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
-      });
-    });
-    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/d.jpg');
-
     act(() => useViewerStore.getState().setCurrentIndex(0));
+    vi.mocked(moveToTrash).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTrash = resolve;
+        })
+    );
+    const deletePromise = deleteCurrentImage({
+      currentImagePath: 'c:/test/a.jpg',
+      removeImagesByPaths: useViewerStore.getState().removeImagesByPaths,
+    });
+    await waitFor(() => expect(moveToTrash).toHaveBeenCalledTimes(1));
+
     resolveRefresh(afterDelete);
 
     await waitFor(() => expect(useViewerStore.getState().isFolderScanning).toBe(false));
-    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/a.jpg');
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/b.jpg');
+    expect(useViewerStore.getState().currentIndex).toBe(0);
+
+    act(() => resolveTrash());
+    await act(async () => {
+      await deletePromise;
+    });
+    expect(useViewerStore.getState().currentImagePath).toBe('c:/test/b.jpg');
     expect(useViewerStore.getState().currentIndex).toBe(0);
   });
 

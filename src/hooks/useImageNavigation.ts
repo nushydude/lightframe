@@ -315,16 +315,12 @@ export function useImageNavigation() {
       }
 
       const state = useViewerStore.getState();
-      // A refresh may finish after the user has navigated. Keep that live selection when
-      // it still belongs to the refreshed folder instead of restoring the refresh-start
-      // snapshot (which may now refer to a deleted image).
-      const liveCurrentPathIsVisible =
-        options.preserveLiveSelection &&
-        previousCurrentPath !== null &&
-        visibleImages.some(
-          (image) => normalizePathKey(image.path) === normalizePathKey(previousCurrentPath)
-        );
-      const preferredPath = liveCurrentPathIsVisible ? previousCurrentPath : options.preferredPath;
+      // Full refreshes may finish after navigation or deletion. setImages reconciles the
+      // live selection against the new list, including a nearest-surviving fallback when
+      // the selected path disappeared; retain that result instead of the refresh-start snapshot.
+      const preferredPath = options.preserveLiveSelection
+        ? state.currentImagePath
+        : options.preferredPath;
       const matchedIndex = preferredPath
         ? visibleImages.findIndex(
             (image) => normalizePathKey(image.path) === normalizePathKey(preferredPath)
