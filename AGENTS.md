@@ -51,6 +51,16 @@ When the user asks to implement, fix, refactor, or build a task:
 - Preserve unrelated user changes and do not edit `CONTRIBUTING.md` or unrelated files merely to
   satisfy an implementation task.
 
+## Disposable checkout cleanup
+
+- After a completed test or validation task in a disposable worktree, inspect generated caches with
+  `pnpm run clean:preview` and remove them with `pnpm run clean:apply` once no build, test, or
+  development server uses that checkout. Keep cleanup scoped to that agent's completed disposable
+  checkout; use `-AllWorktrees` only when the user requests repository-wide cleanup and other
+  checkout jobs are stopped.
+- Do not delete whole worktrees, commits, `.codex` files, `.agent/runtime`, application data,
+  dependencies, photos, logs, or unrelated global temporary folders as part of cache cleanup.
+
 ## External actions and failure handling
 
 - GitHub authentication, repository permissions, branch protection, and required checks must be
