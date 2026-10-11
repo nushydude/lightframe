@@ -28,6 +28,26 @@ First off, thank you for considering contributing to LightFrame! It's people lik
   `pnpm run quality:health` intentionally report existing debt. Use them when planning cleanup work;
   they are not part of the merge-blocking local gate yet.
 
+## Generated cache cleanup
+
+Preview regenerable build caches in the current checkout:
+
+```powershell
+pnpm run clean:preview
+```
+
+Add `-AllWorktrees` to include every registered Git worktree of this repository. The cleanup
+allowlist is limited to `src-tauri/target`, `dist`, `dist-ssr`, and `node_modules/.vite`; it checks
+containment, Git ignore rules, tracked files, and junctions or symlinks before any removal.
+
+After reviewing the preview, stop development servers, builds, and tests in the selected checkouts,
+then run `pnpm run clean:apply` with the same options. Use `-WhatIf` with `clean:apply` for an
+additional preview. The next build regenerates these files and may take longer. The script leaves
+project sources, Git commits, installed dependencies, `.agent/runtime`, `.codex` files, logs,
+application databases, photos, and global temporary folders intact.
+
+Run `pnpm run test:cleanup` to check cleanup behavior in disposable Git fixtures.
+
 ## Submitting a Pull Request
 
 1. Create a new branch: `git checkout -b feature/your-feature-name`
