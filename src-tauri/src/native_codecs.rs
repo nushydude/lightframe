@@ -364,38 +364,6 @@ mod platform {
         }
     }
 
-    #[cfg(test)]
-    mod embedded_tests {
-        use super::*;
-        #[test]
-        fn embedded_wic_source_succeeds_without_full_frame_admission() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("embedded.png");
-            image::RgbImage::new(32, 24).save(&path).unwrap();
-            let _com = initialize_com().unwrap();
-            let factory = create_factory().unwrap();
-            let decoder = create_decoder(&factory, &path).unwrap();
-            let bounded = unsafe { decoder.GetFrame(0) }.unwrap();
-            let full = || -> Result<Vec<u8>, NativeError> {
-                let limits =
-                    image_resource_policy::PolicyLimits::for_operation(OperationClass::Thumbnail);
-                image_resource_policy::validate_dimensions(20000, 20000, &limits)
-                    .map_err(|error| policy_error(OperationClass::Thumbnail, error))?;
-                panic!("full-frame pixels must not be decoded");
-            };
-            let bytes = embedded_or_full(
-                || {
-                    encode_scaled_source_as_jpeg(&factory, &bounded, 160, OperationClass::Thumbnail)
-                        .map(Some)
-                },
-                full,
-            )
-            .unwrap();
-            assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 32);
-            assert!(matches!(embedded_or_full(|| Ok(None), full), Err(NativeError::Policy(_))));
-        }
-    }
-
     fn generate_scaled_jpeg(
         path: &Path,
         max_dimension: u32,
@@ -950,6 +918,39 @@ mod platform {
 
     fn windows_hresult_error(error: windows::core::HRESULT) -> NativeError {
         NativeError::Codec(windows::core::Error::from(error).message().to_string())
+    }
+
+    #[cfg(test)]
+    mod embedded_tests {
+        use super::*;
+
+        #[test]
+        fn embedded_wic_source_succeeds_without_full_frame_admission() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("embedded.png");
+            image::RgbImage::new(32, 24).save(&path).unwrap();
+            let _com = initialize_com().unwrap();
+            let factory = create_factory().unwrap();
+            let decoder = create_decoder(&factory, &path).unwrap();
+            let bounded = unsafe { decoder.GetFrame(0) }.unwrap();
+            let full = || -> Result<Vec<u8>, NativeError> {
+                let limits =
+                    image_resource_policy::PolicyLimits::for_operation(OperationClass::Thumbnail);
+                image_resource_policy::validate_dimensions(20000, 20000, &limits)
+                    .map_err(|error| policy_error(OperationClass::Thumbnail, error))?;
+                panic!("full-frame pixels must not be decoded");
+            };
+            let bytes = embedded_or_full(
+                || {
+                    encode_scaled_source_as_jpeg(&factory, &bounded, 160, OperationClass::Thumbnail)
+                        .map(Some)
+                },
+                full,
+            )
+            .unwrap();
+            assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 32);
+            assert!(matches!(embedded_or_full(|| Ok(None), full), Err(NativeError::Policy(_))));
+        }
     }
 }
 

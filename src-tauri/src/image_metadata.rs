@@ -651,7 +651,11 @@ fn scan_heif_exif(path: &Path) -> Result<Option<Vec<u8>>, TiffCompactError> {
             if body.len() >= 8
                 && (&body[..4] == b"mif1"
                     || &body[..4] == b"msf1"
-                    || body[8..].chunks_exact(4).any(|chunk| chunk == b"mif1" || chunk == b"msf1"))
+                    || body[8..]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|chunk| chunk == b"mif1" || chunk == b"msf1"))
             {
                 ftyp_ok = true;
             }

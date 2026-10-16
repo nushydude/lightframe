@@ -17,8 +17,10 @@ pub const ABSOLUTE_MAX_WORKING_BYTES: u64 = 1_500 * 1024 * 1024;
 static POLICY_REJECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
+type BeforeSourceOpenHook = Box<dyn FnOnce(&Path)>;
+#[cfg(test)]
 thread_local! {
-    static BEFORE_SOURCE_OPEN: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_SOURCE_OPEN: std::cell::RefCell<Option<BeforeSourceOpenHook>> = const { std::cell::RefCell::new(None) };
     pub static DECODER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub static SOURCE_RESERVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
