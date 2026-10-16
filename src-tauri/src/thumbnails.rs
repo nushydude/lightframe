@@ -514,8 +514,7 @@ pub fn get_or_create_preview(
         }
     }
 
-    let img = match decode_image_with_orientation_for_operation(file_path, OperationClass::Preview)
-    {
+    let img = match decode_image_with_orientation_for_preview(file_path, max_dimension) {
         Ok(img) => img,
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
@@ -545,6 +544,16 @@ pub fn get_or_create_preview(
     };
     let (width, height) = img.dimensions();
     let preview = if width > max_dimension || height > max_dimension {
+        let (output_width, output_height) =
+            image_resource_policy::preview_resize_dimensions(width, height, max_dimension);
+        image_resource_policy::validate_preview_resize_memory(
+            (width, height),
+            (output_width, output_height),
+            u64::from(img.color().bytes_per_pixel()),
+            0,
+            0,
+        )
+        .map_err(|error| policy_error(OperationClass::Preview, error))?;
         img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
     } else {
         img
@@ -826,10 +835,10 @@ pub fn calculate_tile_cache_limit_for_performance_mode(performance_mode: &str) -
 }
 
 pub fn oriented_image_dimensions(file_path: &Path) -> Result<(u32, u32), String> {
-    oriented_image_dimensions_for_operation(file_path, OperationClass::Preview)
+    oriented_image_dimensions_for_operation(file_path, OperationClass::MetadataOnly)
 }
 
-fn oriented_image_dimensions_for_operation(
+pub(crate) fn oriented_image_dimensions_for_operation(
     file_path: &Path,
     operation: OperationClass,
 ) -> Result<(u32, u32), String> {
@@ -850,6 +859,12 @@ fn oriented_decoder_resource_for_operation(
         .orientation()
         .map_err(|error| format!("Failed to read image orientation: {}", error))?;
     let decoder_bytes = decoder.total_bytes();
+    // This helper only inspects the codec header and orientation. Constructor/input admission
+    // already ran in `decoder_for_source`; apply dimension/pixel ceilings here, while leaving
+    // full-frame working-memory admission to paths that actually call `from_decoder`.
+    let limits = image_resource_policy::PolicyLimits::for_operation(operation);
+    image_resource_policy::validate_dimensions(width, height, &limits)
+        .map_err(|error| policy_error(operation, error))?;
     let (width, height) = oriented_dimensions(width, height, orientation);
     Ok((width, height, decoder_bytes))
 }
@@ -863,6 +878,25 @@ fn decode_image_with_orientation_for_operation(
     file_path: &Path,
     operation: OperationClass,
 ) -> Result<DynamicImage, image::ImageError> {
+    decode_image_with_orientation_with_preview_limit(file_path, operation, None)
+}
+
+fn decode_image_with_orientation_for_preview(
+    file_path: &Path,
+    max_dimension: u32,
+) -> Result<DynamicImage, image::ImageError> {
+    decode_image_with_orientation_with_preview_limit(
+        file_path,
+        OperationClass::Preview,
+        Some(max_dimension),
+    )
+}
+
+fn decode_image_with_orientation_with_preview_limit(
+    file_path: &Path,
+    operation: OperationClass,
+    preview_max_dimension: Option<u32>,
+) -> Result<DynamicImage, image::ImageError> {
     let source =
         image_resource_policy::ImageSource::open(file_path, operation).map_err(|error| {
             image_resource_policy::record_rejection(operation);
@@ -870,12 +904,40 @@ fn decode_image_with_orientation_for_operation(
         })?;
     let mut decoder = image_resource_policy::decoder_for_source(&source, operation)?;
     let (width, height) = decoder.dimensions();
-    image_resource_policy::validate_decoder_memory(width, height, decoder.total_bytes(), operation)
-        .map_err(|error| {
-            image_resource_policy::record_rejection(operation);
-            image::ImageError::IoError(std::io::Error::other(error))
-        })?;
+    let decoder_bytes = decoder.total_bytes();
+    image_resource_policy::validate_decoder_memory_with_source(
+        width,
+        height,
+        decoder_bytes,
+        source.encoded_len(),
+        operation,
+    )
+    .map_err(|error| {
+        image_resource_policy::record_rejection(operation);
+        image::ImageError::IoError(std::io::Error::other(error))
+    })?;
     let orientation = decoder.orientation()?;
+    if let Some(max_dimension) = preview_max_dimension {
+        let (oriented_width, oriented_height) = oriented_dimensions(width, height, orientation);
+        if oriented_width > max_dimension || oriented_height > max_dimension {
+            let output_dimensions = image_resource_policy::preview_resize_dimensions(
+                oriented_width,
+                oriented_height,
+                max_dimension,
+            );
+            image_resource_policy::validate_preview_resize_memory(
+                (oriented_width, oriented_height),
+                output_dimensions,
+                u64::from(decoder.color_type().bytes_per_pixel()),
+                source.encoded_len(),
+                decoder_bytes,
+            )
+            .map_err(|error| {
+                image_resource_policy::record_rejection(operation);
+                image::ImageError::IoError(std::io::Error::other(error))
+            })?;
+        }
+    }
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
     Ok(image)

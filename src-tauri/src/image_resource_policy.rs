@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::{BufReader, Read, Seek};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub const ABSOLUTE_MAX_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
@@ -246,6 +246,7 @@ pub struct ImageSource {
     file: fs::File,
     operation: OperationClass,
     metadata: fs::Metadata,
+    source_path: Option<PathBuf>,
 }
 
 impl ImageSource {
@@ -272,7 +273,9 @@ impl ImageSource {
         let file =
             options.open(path).map_err(|_| ResourcePolicyError::SourceUnavailableOrChanged)?;
         let metadata = file.metadata().map_err(|_| ResourcePolicyError::FileMetadataUnavailable)?;
-        Self::from_opened_snapshot(file, metadata, operation)
+        let mut source = Self::from_opened_snapshot(file, metadata, operation)?;
+        source.source_path = Some(path.to_path_buf());
+        Ok(source)
     }
 
     fn from_opened_snapshot(
@@ -282,7 +285,7 @@ impl ImageSource {
     ) -> Result<Self, ResourcePolicyError> {
         // Validate the very snapshot we retain; never fetch a second unvalidated length.
         validate_input_bytes(metadata.len(), &PolicyLimits::for_operation(operation))?;
-        Ok(Self { file, operation, metadata })
+        Ok(Self { file, operation, metadata, source_path: None })
     }
 
     pub fn reader(&self) -> Result<BufReader<BoundedSourceReader>, ResourcePolicyError> {
@@ -328,6 +331,13 @@ impl ImageSource {
             .share_mode(1)
             .open(temp)
             .map_err(|_| "Unable to open edited image for publication".to_string())?;
+        self.replace_opened(&edited, destination)
+    }
+
+    /// Publish a caller-owned DELETE-capable handle without releasing its lease
+    /// or reopening a temporary pathname that could have been replaced.
+    #[cfg(windows)]
+    pub fn replace_opened(self, edited: &fs::File, destination: &Path) -> Result<(), String> {
         let backup =
             crate::atomic_file::build_unique_sibling_path(destination, "lightframe-source-backup")?;
         self.rename_handle(&backup)?;
@@ -340,7 +350,7 @@ impl ImageSource {
         let published = if force_failure {
             Err("Injected publication failure".to_string())
         } else {
-            Self::rename_file_handle(&edited, destination)
+            Self::rename_file_handle(edited, destination)
         };
         if let Err(error) = published {
             #[cfg(all(test, windows))]
@@ -377,6 +387,11 @@ impl ImageSource {
 
     #[cfg(windows)]
     fn delete_original_on_close(&self) -> Result<(), windows::core::Error> {
+        Self::delete_file_on_close(&self.file)
+    }
+
+    #[cfg(windows)]
+    fn delete_file_on_close(file: &fs::File) -> Result<(), windows::core::Error> {
         use std::os::windows::io::AsRawHandle;
         use windows::Win32::{
             Foundation::HANDLE,
@@ -389,7 +404,7 @@ impl ImageSource {
         // still holds. Closing that handle removes only that object, never a concurrent name.
         unsafe {
             SetFileInformationByHandle(
-                HANDLE(self.file.as_raw_handle()),
+                HANDLE(file.as_raw_handle()),
                 FileDispositionInfo,
                 (&disposition as *const FILE_DISPOSITION_INFO).cast(),
                 std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
@@ -404,20 +419,34 @@ impl ImageSource {
             Foundation::HANDLE,
             Storage::FileSystem::{FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO},
         };
-        let name: Vec<u16> = std::path::absolute(path)
+        let mut name: Vec<u16> = std::path::absolute(path)
             .map_err(|_| "Unable to resolve edited image destination")?
             .as_os_str()
             .encode_wide()
             .collect();
+        let name_bytes = name
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| "Edited image destination path is too long".to_string())?;
+        let name_with_nul_bytes = name_bytes
+            .checked_add(2)
+            .ok_or_else(|| "Edited image destination path is too long".to_string())?;
         let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-        let size = offset + name.len() * 2;
+        let size = offset
+            .checked_add(name_with_nul_bytes)
+            .ok_or_else(|| "Edited image destination path is too long".to_string())?;
+        let size_u32 = u32::try_from(size)
+            .map_err(|_| "Edited image destination path is too long".to_string())?;
+        let name_bytes_u32 = u32::try_from(name_bytes)
+            .map_err(|_| "Edited image destination path is too long".to_string())?;
+        name.push(0);
         // Allocate aligned storage for the variable-length FILE_RENAME_INFO structure.
         let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
         let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
         unsafe {
             // Explicit for both publication and rollback: a destination collision must fail.
             (*info).Anonymous.ReplaceIfExists = false;
-            (*info).FileNameLength = (name.len() * 2) as u32;
+            (*info).FileNameLength = name_bytes_u32;
             std::ptr::copy_nonoverlapping(
                 name.as_ptr(),
                 storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
@@ -427,7 +456,7 @@ impl ImageSource {
                 HANDLE(file.as_raw_handle()),
                 FileRenameInfo,
                 info.cast(),
-                size as u32,
+                size_u32,
             )
         }
         .map_err(|_| "Unable to move the admitted original safely".to_string())
@@ -450,6 +479,59 @@ impl ImageSource {
         // atomic publication after identity verification; concurrent hostile directory mutation
         // in the final syscall interval remains a path-authority concern (Task 51).
         crate::atomic_file::replace_file_safely(temp, destination)
+    }
+
+    /// Discard an owned temporary source through its admitted handle/identity. Callers use this
+    /// after a bounded metadata or publication phase fails; it never follows a replacement path
+    /// that another process may have created after the source was opened.
+    pub fn discard_owned(self) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            self.delete_original_on_close()
+                .map_err(|_| "Unable to discard the owned temporary safely".to_string())
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let path = self
+                .source_path
+                .as_ref()
+                .ok_or_else(|| "Unable to identify the owned temporary safely".to_string())?;
+            let current = fs::metadata(path)
+                .map_err(|_| ResourcePolicyError::SourceUnavailableOrChanged.to_string())?;
+            if current.dev() != self.metadata.dev()
+                || current.ino() != self.metadata.ino()
+                || current.len() != self.metadata.len()
+                || current.modified().ok() != self.metadata.modified().ok()
+            {
+                record_rejection(self.operation);
+                return Err(ResourcePolicyError::SourceUnavailableOrChanged.to_string());
+            }
+            fs::remove_file(path)
+                .map_err(|_| "Unable to discard the owned temporary safely".to_string())
+        }
+    }
+
+    /// Remove only a created temporary object still owned by the caller.
+    pub fn discard_opened(file: &fs::File, path: &Path) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let _ = path;
+            Self::delete_file_on_close(file)
+                .map_err(|_| "Unable to discard the owned temporary safely".to_string())
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let owned = file.metadata().map_err(|_| "Unable to inspect owned temporary")?;
+            let current = fs::metadata(path).map_err(|_| "Unable to inspect temporary path")?;
+            if current.dev() != owned.dev() || current.ino() != owned.ino() {
+                return Err("Temporary path changed; refusing cleanup".to_string());
+            }
+            // As with publication, the portable POSIX check/unlink interval is
+            // the pre-existing Task 51 directory-authority limitation.
+            fs::remove_file(path).map_err(|_| "Unable to discard owned temporary".to_string())
+        }
     }
 }
 
@@ -489,6 +571,10 @@ pub fn decoder_for_source(
     source: &ImageSource,
     operation: OperationClass,
 ) -> Result<impl image::ImageDecoder, image::ImageError> {
+    validate_decoder_input_reservation(source.encoded_len(), operation).map_err(|error| {
+        record_rejection(operation);
+        image::ImageError::IoError(std::io::Error::other(error))
+    })?;
     #[cfg(test)]
     DECODER_STARTS.with(|count| count.set(count.get() + 1));
     let mut reader = image::ImageReader::new(
@@ -646,8 +732,19 @@ pub fn validate_decoder_memory(
     decoder_bytes: u64,
     operation: OperationClass,
 ) -> Result<u64, ResourcePolicyError> {
+    validate_decoder_memory_with_source(width, height, decoder_bytes, 0, operation)
+}
+
+pub fn validate_decoder_memory_with_source(
+    width: u32,
+    height: u32,
+    decoder_bytes: u64,
+    encoded_bytes: u64,
+    operation: OperationClass,
+) -> Result<u64, ResourcePolicyError> {
     let limits = PolicyLimits::for_operation(operation);
     validate_dimensions(width, height, &limits)?;
+    let retained_source_bytes = retained_source_bytes(encoded_bytes, operation)?;
     // Include retained samples, same-format rotation, decoder scratch, RGBA8 crop/conversion
     // and encoder scratch. DynamicImage's GenericImageView pixel is Rgba<u8>.
     let edit = matches!(
@@ -658,9 +755,15 @@ pub fn validate_decoder_memory(
             | OperationClass::Overwrite
     );
     let converted_bytes = checked_allocation_bytes(u64::from(width), u64::from(height), 8, 1)?;
-    let aggregate_bytes = decoder_bytes
-        .checked_mul(if edit { 3 } else { 2 })
+    let retained_metadata_bytes = retained_edit_metadata_bytes(operation);
+    let aggregate_bytes = retained_source_bytes
+        .checked_add(
+            decoder_bytes
+                .checked_mul(if edit { 3 } else { 2 })
+                .ok_or(ResourcePolicyError::AllocationOverflow)?,
+        )
         .and_then(|bytes| bytes.checked_add(converted_bytes))
+        .and_then(|bytes| bytes.checked_add(retained_metadata_bytes))
         .ok_or(ResourcePolicyError::AllocationOverflow)?;
     if aggregate_bytes > limits.max_working_bytes {
         return Err(ResourcePolicyError::WorkingBytesExceedLimit {
@@ -669,6 +772,58 @@ pub fn validate_decoder_memory(
         });
     }
     Ok(aggregate_bytes)
+}
+
+pub fn validate_decoder_input_reservation(
+    encoded_bytes: u64,
+    operation: OperationClass,
+) -> Result<u64, ResourcePolicyError> {
+    retained_source_bytes(encoded_bytes, operation).map(|_| encoded_bytes)
+}
+
+fn retained_source_bytes(
+    encoded_bytes: u64,
+    operation: OperationClass,
+) -> Result<u64, ResourcePolicyError> {
+    let limits = PolicyLimits::for_operation(operation);
+    validate_input_bytes(encoded_bytes, &limits)?;
+    // JPEG and several other decoders read the entire source into a growing Vec during
+    // `into_decoder`.  Reserve a second source-sized copy before constructing the decoder;
+    // this bounds Vec growth/capacity while dimensions and decoder-specific buffers are still
+    // unknown. The dimension-aware validators account for the exact retained source once those
+    // values are available.
+    let constructor_reservation =
+        encoded_bytes.checked_mul(2).ok_or(ResourcePolicyError::AllocationOverflow)?;
+    if constructor_reservation > limits.max_working_bytes {
+        return Err(ResourcePolicyError::WorkingBytesExceedLimit {
+            bytes: constructor_reservation,
+            max: limits.max_working_bytes,
+        });
+    }
+    Ok(constructor_reservation)
+}
+
+fn retained_edit_metadata_bytes(operation: OperationClass) -> u64 {
+    if matches!(operation, OperationClass::Rotate | OperationClass::Overwrite) {
+        PolicyLimits::for_operation(operation).max_metadata_bytes
+    } else {
+        0
+    }
+}
+
+/// Match `DynamicImage::resize`'s aspect-preserving target dimensions without allocating.
+pub fn preview_resize_dimensions(
+    source_width: u32,
+    source_height: u32,
+    max_dimension: u32,
+) -> (u32, u32) {
+    let width_ratio = f64::from(max_dimension) / f64::from(source_width);
+    let height_ratio = f64::from(max_dimension) / f64::from(source_height);
+    let ratio = width_ratio.min(height_ratio);
+    (
+        (f64::from(source_width) * ratio).round().max(1.0) as u32,
+        (f64::from(source_height) * ratio).round().max(1.0) as u32,
+    )
 }
 
 pub fn validate_export_memory(
@@ -680,9 +835,30 @@ pub fn validate_export_memory(
     height: u32,
     adjustments: (bool, bool),
 ) -> Result<u64, ResourcePolicyError> {
+    validate_export_memory_with_source(
+        (source_width, source_height),
+        decoder_bytes,
+        0,
+        sample_bytes,
+        (width, height),
+        adjustments,
+    )
+}
+
+pub fn validate_export_memory_with_source(
+    source_dimensions: (u32, u32),
+    decoder_bytes: u64,
+    encoded_bytes: u64,
+    sample_bytes: u64,
+    output_dimensions: (u32, u32),
+    adjustments: (bool, bool),
+) -> Result<u64, ResourcePolicyError> {
+    let (source_width, source_height) = source_dimensions;
+    let (width, height) = output_dimensions;
     let limits = PolicyLimits::for_operation(OperationClass::ScaledExport);
     validate_dimensions(source_width, source_height, &limits)?;
     validate_output_dimensions(width, height, &limits)?;
+    let retained_source_bytes = retained_source_bytes(encoded_bytes, OperationClass::ScaledExport)?;
     // Same-format retained source/output, decoder and encoder scratch; resize's vertical pass
     // allocates source_width * output_height RGBA32F. Blur/unsharpen additionally reserve two
     // floating-point filter buffers at the dimensions where each adjustment runs.
@@ -698,12 +874,57 @@ pub fn validate_export_memory(
     } else {
         0
     };
-    let bytes = decoder_bytes
-        .checked_mul(3)
+    let bytes = retained_source_bytes
+        .checked_add(decoder_bytes.checked_mul(3).ok_or(ResourcePolicyError::AllocationOverflow)?)
         .and_then(|n| n.checked_add(output))
         .and_then(|n| n.checked_add(intermediate))
         .and_then(|n| n.checked_add(blur))
         .and_then(|n| n.checked_add(sharpen))
+        .ok_or(ResourcePolicyError::AllocationOverflow)?;
+    if bytes > limits.max_working_bytes {
+        return Err(ResourcePolicyError::WorkingBytesExceedLimit {
+            bytes,
+            max: limits.max_working_bytes,
+        });
+    }
+    Ok(bytes)
+}
+
+/// Admit the Triangle preview resize before it allocates its RGBA32F vertical-pass buffer.
+pub fn validate_preview_resize_memory(
+    source_dimensions: (u32, u32),
+    output_dimensions: (u32, u32),
+    sample_bytes: u64,
+    encoded_bytes: u64,
+    decoder_bytes: u64,
+) -> Result<u64, ResourcePolicyError> {
+    let (source_width, source_height) = source_dimensions;
+    let (output_width, output_height) = output_dimensions;
+    let limits = PolicyLimits::for_operation(OperationClass::Preview);
+    validate_dimensions(source_width, source_height, &limits)?;
+    validate_output_dimensions(output_width, output_height, &limits)?;
+    let retained_source_bytes = retained_source_bytes(encoded_bytes, OperationClass::Preview)?;
+    // DynamicImage can retain 16-bit and float samples. Triangle's intermediate is RGBA32F,
+    // while source/output retain their actual sample width; account for at least RGBA8.
+    let retained_bytes_per_pixel = sample_bytes.max(8);
+    let source_pixels = checked_allocation_bytes(
+        source_width.into(),
+        source_height.into(),
+        retained_bytes_per_pixel,
+        1,
+    )?;
+    let intermediate = checked_allocation_bytes(source_width.into(), output_height.into(), 16, 1)?;
+    let output = checked_allocation_bytes(
+        output_width.into(),
+        output_height.into(),
+        retained_bytes_per_pixel,
+        1,
+    )?;
+    let bytes = retained_source_bytes
+        .checked_add(decoder_bytes)
+        .and_then(|value| value.checked_add(source_pixels))
+        .and_then(|value| value.checked_add(intermediate))
+        .and_then(|value| value.checked_add(output))
         .ok_or(ResourcePolicyError::AllocationOverflow)?;
     if bytes > limits.max_working_bytes {
         return Err(ResourcePolicyError::WorkingBytesExceedLimit {
@@ -720,9 +941,11 @@ pub fn validate_lossless_rotation_memory(
     encoded_bytes: u64,
 ) -> Result<(), ResourcePolicyError> {
     let scratch = checked_allocation_bytes(width.into(), height.into(), 24, 1)?;
+    let metadata_bytes = retained_edit_metadata_bytes(OperationClass::Rotate);
     let bytes = encoded_bytes
         .checked_mul(3)
         .and_then(|n| n.checked_add(scratch))
+        .and_then(|n| n.checked_add(metadata_bytes))
         .ok_or(ResourcePolicyError::AllocationOverflow)?;
     let max = PolicyLimits::for_operation(OperationClass::Rotate).max_working_bytes;
     if bytes > max {
@@ -823,6 +1046,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn encoded_source_is_admitted_before_decoder_construction() {
+        let operation = OperationClass::ScaledExport;
+        let limits = PolicyLimits::for_operation(operation);
+        let encoded = limits.max_working_bytes / 2 + 1;
+        assert!(encoded + 8 < limits.max_working_bytes);
+        assert!(matches!(
+            validate_decoder_input_reservation(encoded, operation),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+        assert!(matches!(
+            validate_decoder_memory_with_source(32, 24, 0, encoded, operation),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn decoder_constructor_is_not_started_when_source_reservation_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large-source.bin");
+        let file = fs::File::create(&path).unwrap();
+        let operation = OperationClass::ScaledExport;
+        let encoded_len = PolicyLimits::for_operation(operation).max_working_bytes / 2 + 1;
+        file.set_len(encoded_len).unwrap();
+        drop(file);
+        let source = ImageSource::open(&path, operation).unwrap();
+        let starts = DECODER_STARTS.with(|count| count.get());
+        assert!(decoder_for_source(&source, operation).is_err());
+        assert_eq!(DECODER_STARTS.with(|count| count.get()), starts);
+    }
+
+    #[test]
+    fn preview_resize_scratch_is_checked_before_triangle_allocation() {
+        assert_eq!(preview_resize_dimensions(8_200, 7_800, 8_192), (8_192, 7_792));
+        assert_eq!(preview_resize_dimensions(7_800, 8_200, 8_192), (7_792, 8_192));
+        assert!(matches!(
+            validate_preview_resize_memory((12_000, 10_000), (8_000, 8_000), 8, 0, 0),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+        // This is below the 8192 dimension limit but the RGBA32F vertical pass, retained
+        // source and output together exceed the preview working-memory budget.
+        assert!(matches!(
+            validate_preview_resize_memory((8_200, 7_800), (8_192, 7_792), 8, 0, 0),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+        // Oriented portrait dimensions use the same guarded allocation after the image has
+        // been rotated, so swapping the source axes cannot bypass the aggregate check.
+        assert!(matches!(
+            validate_preview_resize_memory((7_800, 8_200), (7_792, 8_192), 8, 0, 0),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+        let (width, height) = preview_resize_dimensions(9_000, 1_000, 8_192);
+        assert!(validate_preview_resize_memory((9_000, 1_000), (width, height), 8, 0, 0).is_ok());
+        assert!(validate_preview_resize_memory((800, 600), (400, 400), 8, 0, 0).is_ok());
+        assert!(validate_preview_resize_memory((800, 600), (400, 400), 16, 0, 0).is_ok());
+        assert!(matches!(
+            validate_preview_resize_memory((6_000, 6_000), (6_000, 6_000), 16, 0, 0),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+    }
+
     #[cfg(windows)]
     #[test]
     fn source_lease_denies_growth_and_replacement_until_decode_finishes() {
@@ -836,6 +1120,31 @@ mod tests {
         assert_eq!(image::DynamicImage::from_decoder(decoder).unwrap().width(), 2);
         drop(source);
         assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handle_rename_preserves_exact_unicode_destination_without_suffix_garbage() {
+        for suffix in ["a", "ab", "abc", "abcd", "alignment-七"] {
+            let dir = tempfile::tempdir().unwrap();
+            let source_path = dir.path().join(format!("source-{suffix}.webp"));
+            let temp_path = dir.path().join(format!("edited-{suffix}.webp"));
+            let destination_path = dir.path().join(format!("destination-{suffix}.webp"));
+            fs::write(&source_path, b"original").unwrap();
+            fs::write(&temp_path, b"edited").unwrap();
+
+            let source = ImageSource::open(&source_path, OperationClass::Overwrite).unwrap();
+            source.replace(&temp_path, &destination_path).unwrap();
+
+            assert_eq!(fs::read(&destination_path).unwrap(), b"edited");
+            assert!(!source_path.exists());
+            let names = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(names.len(), 1);
+            assert!(names.contains(&destination_path.file_name().unwrap().to_os_string()));
+        }
     }
 
     #[test]
@@ -907,5 +1216,31 @@ mod tests {
         let float_rgba =
             validate_decoder_memory(6_000, 4_000, 6_000 * 4_000 * 16, OperationClass::Thumbnail);
         assert!(matches!(float_rgba, Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })));
+    }
+
+    #[test]
+    fn destructive_edit_budget_reserves_retained_metadata() {
+        let limits = PolicyLimits::for_operation(OperationClass::Rotate);
+        let decoder_bytes = (limits.max_working_bytes - 8) / 3;
+        assert!(matches!(
+            validate_decoder_memory(1, 1, decoder_bytes, OperationClass::Rotate),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+        assert!(validate_decoder_memory(1, 1, 1, OperationClass::Rotate).is_ok());
+        assert!(matches!(
+            validate_decoder_memory(1, 1, decoder_bytes, OperationClass::Overwrite),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn lossless_rotation_budget_reserves_retained_metadata() {
+        let limits = PolicyLimits::for_operation(OperationClass::Rotate);
+        let encoded_bytes = (limits.max_working_bytes - 24) / 3;
+        assert!(matches!(
+            validate_lossless_rotation_memory(1, 1, encoded_bytes),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+        assert!(validate_lossless_rotation_memory(1, 1, 1).is_ok());
     }
 }

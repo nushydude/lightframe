@@ -2,7 +2,7 @@ use crate::image_resource_policy::{self, OperationClass};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize)]
@@ -102,10 +102,11 @@ impl std::fmt::Display for TiffCompactError {
     }
 }
 
-struct BoundedTiffSource {
-    file: fs::File,
+struct BoundedTiffSource<R = fs::File> {
+    file: R,
     file_len: u64,
     bytes_read: u64,
+    limit: u64,
 }
 
 impl BoundedTiffSource {
@@ -117,9 +118,11 @@ impl BoundedTiffSource {
             &image_resource_policy::PolicyLimits::for_operation(OperationClass::MetadataOnly),
         )
         .map_err(|_| TiffCompactError::Budget)?;
-        Ok(Self { file, file_len, bytes_read: 0 })
+        Ok(Self { file, file_len, bytes_read: 0, limit: MAX_EMBEDDED_METADATA_READ_BYTES })
     }
+}
 
+impl<R: Read + Seek> BoundedTiffSource<R> {
     fn read_at(&mut self, offset: u64, length: usize) -> Result<Vec<u8>, TiffCompactError> {
         let length_u64 = u64::try_from(length).map_err(|_| TiffCompactError::Offset)?;
         let end = offset.checked_add(length_u64).ok_or(TiffCompactError::Offset)?;
@@ -128,7 +131,7 @@ impl BoundedTiffSource {
         }
         let next_budget =
             self.bytes_read.checked_add(length_u64).ok_or(TiffCompactError::Budget)?;
-        if next_budget > MAX_EMBEDDED_METADATA_READ_BYTES {
+        if next_budget > self.limit {
             return Err(TiffCompactError::Budget);
         }
         self.file.seek(SeekFrom::Start(offset)).map_err(TiffCompactError::Io)?;
@@ -299,6 +302,127 @@ fn tiff_type_size(typ: u16) -> Option<u64> {
 
 fn is_tiff_ifd_pointer(tag: u16, typ: u16, count: u32) -> bool {
     typ == 4 && count == 1 && matches!(tag, 0x8769 | 0x8825 | 0xa005)
+}
+
+// The EXIF parser revisits shared child IFDs for every incoming pointer. Bound
+// that expanded traversal, not just the number of unique source IFDs. Apply this
+// equally to compact TIFFs and TIFF payloads extracted from image containers.
+fn with_admitted_tiff<T>(
+    bytes: Vec<u8>,
+    parse: impl FnOnce(Vec<u8>) -> Result<T, String>,
+) -> Result<T, String> {
+    fn admit(bytes: &[u8]) -> Result<(), TiffCompactError> {
+        struct Walk<'a> {
+            bytes: &'a [u8],
+            endian: TiffEndian,
+            entries: usize,
+            expanded_bytes: u64,
+        }
+        impl Walk<'_> {
+            fn range(&self, offset: usize, length: usize) -> Result<&[u8], TiffCompactError> {
+                self.bytes
+                    .get(offset..offset.checked_add(length).ok_or(TiffCompactError::Offset)?)
+                    .ok_or(TiffCompactError::Offset)
+            }
+
+            fn ifd(&mut self, offset: usize, context: u8) -> Result<u32, TiffCompactError> {
+                let count = usize::from(self.endian.u16(self.range(offset, 2)?));
+                self.entries = self.entries.checked_add(count).ok_or(TiffCompactError::Budget)?;
+                if self.entries > MAX_TIFF_IFD_ENTRIES {
+                    return Err(TiffCompactError::Budget);
+                }
+                // At most three context levels: TIFF -> Exif -> Interop;
+                // GPS is a leaf. Match kamadak-exif's context-sensitive tags.
+                for index in 0..count {
+                    let entry = self.range(offset + 2 + index * 12, 12)?;
+                    let tag = self.endian.u16(entry);
+                    let typ = self.endian.u16(&entry[2..]);
+                    let units = self.endian.u32(&entry[4..]);
+                    let value_offset = self.endian.u32(&entry[8..]);
+                    let length = tiff_type_size(typ).unwrap_or(0) * u64::from(units);
+                    if length > 4 {
+                        self.range(
+                            value_offset as usize,
+                            usize::try_from(length).map_err(|_| TiffCompactError::Budget)?,
+                        )?;
+                    }
+                    // Include field/index bookkeeping and vector capacity growth.
+                    // Only ASCII has a nested Vec per unit (one string per NUL);
+                    // byte/MakerNote and numeric values use flat typed vectors.
+                    // Charge aliases again: the parser allocates them again.
+                    let value_allocation =
+                        if typ == 2 { 64 * (u64::from(units) + 1) + length } else { 2 * length };
+                    self.expanded_bytes = self
+                        .expanded_bytes
+                        .checked_add(256 + value_allocation)
+                        .ok_or(TiffCompactError::Budget)?;
+                    // Reserve half the working budget for retained raw bytes,
+                    // display strings and the final metadata map. The separate
+                    // input/output metadata ceiling remains 8 MiB.
+                    if self.expanded_bytes
+                        > image_resource_policy::PolicyLimits::for_operation(
+                            OperationClass::MetadataOnly,
+                        )
+                        .max_working_bytes
+                            / 2
+                    {
+                        return Err(TiffCompactError::Budget);
+                    }
+                    let child_context = match (context, tag) {
+                        (0, 0x8769) => Some(1),
+                        (0, 0x8825) => Some(2),
+                        (1, 0xa005) => Some(3),
+                        _ => None,
+                    };
+                    if let Some(child_context) = child_context {
+                        if typ != 4 || units != 1 {
+                            return Err(TiffCompactError::Invalid(
+                                "invalid TIFF structural pointer",
+                            ));
+                        }
+                        if self.ifd(value_offset as usize, child_context)? != 0 {
+                            return Err(TiffCompactError::Invalid("unexpected child TIFF chain"));
+                        }
+                    }
+                }
+                Ok(self.endian.u32(self.range(offset + 2 + count * 12, 4)?))
+            }
+        }
+        if bytes.len() as u64 > MAX_EMBEDDED_METADATA_READ_BYTES {
+            return Err(TiffCompactError::Budget);
+        }
+        if bytes.len() < 8 {
+            return Err(TiffCompactError::Offset);
+        }
+        let endian = match &bytes[..2] {
+            b"II" => TiffEndian::Little,
+            b"MM" => TiffEndian::Big,
+            _ => return Err(TiffCompactError::Invalid("invalid TIFF byte order")),
+        };
+        if endian.u16(&bytes[2..]) != 42 {
+            return Err(TiffCompactError::Invalid("unsupported TIFF header"));
+        }
+        let mut walk = Walk { bytes, endian, entries: 0, expanded_bytes: 0 };
+        let mut offset = endian.u32(&bytes[4..]);
+        for _ in 0..MAX_TIFF_IFDS {
+            if offset == 0 {
+                return Ok(());
+            }
+            offset = walk.ifd(offset as usize, 0)?;
+        }
+        if offset == 0 {
+            Ok(())
+        } else {
+            Err(TiffCompactError::Budget)
+        }
+    }
+    admit(&bytes).map_err(|error| {
+        if matches!(error, TiffCompactError::Budget) {
+            image_resource_policy::record_rejection(OperationClass::MetadataOnly);
+        }
+        format!("Bounded EXIF expansion failed: {error}")
+    })?;
+    parse(bytes)
 }
 
 fn compact_tiff(path: &Path) -> Result<Vec<u8>, String> {
@@ -769,6 +893,544 @@ fn empty_exif_data() -> ExifData {
     }
 }
 
+fn edit_metadata_error(error: TiffCompactError) -> String {
+    if matches!(error, TiffCompactError::Budget) {
+        image_resource_policy::record_rejection(OperationClass::MetadataOnly);
+    }
+    format!("Unable to preserve image metadata safely: {error}")
+}
+
+fn split_nul(bytes: &[u8]) -> Result<(&[u8], &[u8]), TiffCompactError> {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or(TiffCompactError::Invalid("malformed PNG text"))?;
+    Ok((&bytes[..end], &bytes[end + 1..]))
+}
+
+fn png_text<'a>(
+    bytes: &'a [u8],
+    kind: &[u8],
+    remaining: u64,
+) -> Result<(&'a [u8], Vec<u8>), TiffCompactError> {
+    let (keyword, mut data) = split_nul(bytes)?;
+    if keyword.is_empty() || keyword.len() > 79 {
+        return Err(TiffCompactError::Invalid("invalid PNG text keyword"));
+    }
+    let compressed = if kind == b"zTXt" {
+        if data.first() != Some(&0) {
+            return Err(TiffCompactError::Invalid("invalid PNG compression"));
+        }
+        data = &data[1..];
+        true
+    } else if kind == b"iTXt" {
+        if data.len() < 2 || data[0] > 1 || data[1] != 0 {
+            return Err(TiffCompactError::Invalid("invalid PNG text compression"));
+        }
+        let compressed = data[0] == 1;
+        data = split_nul(&data[2..])?.1;
+        data = split_nul(data)?.1;
+        compressed
+    } else {
+        false
+    };
+    let mut output = Vec::new();
+    if compressed {
+        // A fixed scratch chunk and a checked append bound allocation before
+        // every growth, unlike decompress_to_vec_zlib's unbounded output.
+        let mut decoder = flate2::read::ZlibDecoder::new(data);
+        let mut chunk = [0; 4_096];
+        loop {
+            let read = decoder.read(&mut chunk).map_err(TiffCompactError::Io)?;
+            if read == 0 {
+                break;
+            }
+            if (output.len() as u64).saturating_add(read as u64) > remaining {
+                return Err(TiffCompactError::Budget);
+            }
+            output.extend_from_slice(&chunk[..read]);
+        }
+    } else {
+        if data.len() as u64 > remaining {
+            return Err(TiffCompactError::Budget);
+        }
+        output.extend_from_slice(data);
+    }
+    Ok((keyword, output))
+}
+
+fn decode_png_raw_profile(text: &[u8]) -> Result<Vec<u8>, TiffCompactError> {
+    let text = std::str::from_utf8(text)
+        .map_err(|_| TiffCompactError::Invalid("invalid EXIF profile text"))?;
+    let mut lines = text.trim_start().lines();
+    if lines.next() != Some("exif") {
+        return Err(TiffCompactError::Invalid("invalid EXIF profile name"));
+    }
+    let declared: usize = lines
+        .next()
+        .ok_or(TiffCompactError::Invalid("missing EXIF profile length"))?
+        .trim()
+        .parse()
+        .map_err(|_| TiffCompactError::Invalid("invalid EXIF profile length"))?;
+    if declared as u64 > MAX_EMBEDDED_METADATA_READ_BYTES {
+        return Err(TiffCompactError::Budget);
+    }
+    let mut output = Vec::new();
+    let mut high = None;
+    for byte in lines.flat_map(str::bytes).filter(|byte| !byte.is_ascii_whitespace()) {
+        let digit = (byte as char)
+            .to_digit(16)
+            .ok_or(TiffCompactError::Invalid("invalid EXIF profile hex"))?
+            as u8;
+        if let Some(first) = high.take() {
+            if output.len() >= declared {
+                return Err(TiffCompactError::Invalid("EXIF profile length mismatch"));
+            }
+            output.push(first * 16 + digit);
+        } else {
+            high = Some(digit);
+        }
+    }
+    if high.is_some() || output.len() != declared {
+        return Err(TiffCompactError::Invalid("EXIF profile length mismatch"));
+    }
+    if output.starts_with(b"Exif\0\0") {
+        output.drain(..6);
+    }
+    Ok(output)
+}
+
+pub(crate) fn read_edit_exif(
+    source: &image_resource_policy::ImageSource,
+) -> Result<Option<Vec<u8>>, String> {
+    #[cfg(test)]
+    let limit = EDIT_METADATA_TEST_LIMIT.with(|limit| limit.get());
+    #[cfg(not(test))]
+    let limit = MAX_EMBEDDED_METADATA_READ_BYTES;
+    read_edit_exif_with_limit(source, limit)
+}
+
+#[cfg(test)]
+thread_local! {
+    static EDIT_METADATA_TEST_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_EMBEDDED_METADATA_READ_BYTES) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_edit_metadata_test_limit<T>(limit: u64, run: impl FnOnce() -> T) -> T {
+    struct Restore(u64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            EDIT_METADATA_TEST_LIMIT.with(|limit| limit.set(self.0));
+        }
+    }
+    let _restore = Restore(EDIT_METADATA_TEST_LIMIT.with(|current| current.replace(limit)));
+    run()
+}
+
+fn read_edit_exif_with_limit(
+    source: &image_resource_policy::ImageSource,
+    limit: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    let mut input = BoundedTiffSource {
+        file: source.reader().map_err(policy_error)?,
+        file_len: source.encoded_len(),
+        bytes_read: 0,
+        limit,
+    };
+    let payload = (|| -> Result<Option<Vec<u8>>, TiffCompactError> {
+        let header = input.read_at(0, usize::try_from(input.file_len.min(12)).unwrap())?;
+        let mut selected = None;
+        if header.starts_with(b"\xff\xd8") {
+            let mut pos = 2;
+            while pos < input.file_len {
+                let mut marker = input.read_at(pos, 2)?;
+                if marker[0] != 0xff {
+                    return Err(TiffCompactError::Invalid("invalid JPEG marker"));
+                }
+                while marker[1] == 0xff {
+                    pos += 1;
+                    marker = input.read_at(pos, 2)?;
+                }
+                pos += 2;
+                if matches!(marker[1], 0xda | 0xd9) {
+                    break;
+                }
+                if marker[1] == 1 || (0xd0..=0xd7).contains(&marker[1]) {
+                    continue;
+                }
+                let length = u64::from(be_u16(&input.read_at(pos, 2)?));
+                if length < 2 {
+                    return Err(TiffCompactError::Offset);
+                }
+                input.check_range(pos, length)?;
+                if marker[1] == 0xe1 && length >= 8 && input.read_at(pos + 2, 6)? == b"Exif\0\0" {
+                    let value = input.read_at(pos + 8, (length - 8) as usize)?;
+                    if selected.replace(value).is_some() {
+                        return Err(TiffCompactError::Invalid("duplicate EXIF metadata"));
+                    }
+                }
+                pos += length;
+            }
+        } else if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+            let mut pos = 8;
+            while pos < input.file_len {
+                let chunk = input.read_at(pos, 8)?;
+                let length = u64::from(be_u32(&chunk));
+                let kind = &chunk[4..];
+                input.check_range(pos + 8, length + 4)?;
+                if matches!(kind, b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt") {
+                    let data = input.read_at(pos + 8, length as usize)?;
+                    let checksum = be_u32(&input.read_at(pos + 8 + length, 4)?);
+                    if png_crc(kind, &data) != checksum {
+                        return Err(TiffCompactError::Invalid("invalid PNG metadata checksum"));
+                    }
+                    let value = if kind == b"eXIf" {
+                        Some(data)
+                    } else {
+                        let (keyword, text) =
+                            png_text(&data, kind, limit.saturating_sub(input.bytes_read))?;
+                        input.bytes_read += text.len() as u64;
+                        if keyword == b"Raw profile type exif" {
+                            Some(decode_png_raw_profile(&text)?)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(value) = value {
+                        if selected.replace(value).is_some() {
+                            return Err(TiffCompactError::Invalid("duplicate EXIF metadata"));
+                        }
+                    }
+                }
+                pos += length + 12;
+                if kind == b"IEND" {
+                    break;
+                }
+            }
+        } else if header.len() == 12 && &header[..4] == b"RIFF" && &header[8..] == b"WEBP" {
+            let end = 8 + u64::from(le_u32(&header[4..]));
+            input.check_range(0, end)?;
+            let mut pos = 12;
+            while pos < end {
+                let chunk = input.read_at(pos, 8)?;
+                let length = u64::from(le_u32(&chunk[4..]));
+                if pos + 8 + length + (length & 1) > end {
+                    return Err(TiffCompactError::Offset);
+                }
+                if &chunk[..4] == b"EXIF" {
+                    let mut value = input.read_at(pos + 8, length as usize)?;
+                    if value.starts_with(b"Exif\0\0") {
+                        value.drain(..6);
+                    }
+                    if selected.replace(value).is_some() {
+                        return Err(TiffCompactError::Invalid("duplicate EXIF metadata"));
+                    }
+                }
+                pos += 8 + length + (length & 1);
+            }
+        }
+        Ok(selected)
+    })()
+    .map_err(edit_metadata_error)?;
+    payload
+        .map(|bytes| {
+            with_admitted_tiff(bytes, |mut bytes| {
+                // Only root TIFF Orientation tags control pixel orientation. Child
+                // contexts have different tag meanings; preserve their bytes verbatim.
+                let endian =
+                    if bytes.starts_with(b"II") { TiffEndian::Little } else { TiffEndian::Big };
+                let mut offset = endian.u32(&bytes[4..]) as usize;
+                while offset != 0 {
+                    let count = usize::from(endian.u16(&bytes[offset..]));
+                    for index in 0..count {
+                        let entry = offset + 2 + 12 * index;
+                        if endian.u16(&bytes[entry..]) == 0x112 {
+                            if endian.u16(&bytes[entry + 2..]) != 3
+                                || endian.u32(&bytes[entry + 4..]) != 1
+                            {
+                                return Err(
+                                    "Unable to preserve malformed Orientation metadata".to_string()
+                                );
+                            }
+                            bytes[entry + 8..entry + 10].copy_from_slice(&match endian {
+                                TiffEndian::Little => 1u16.to_le_bytes(),
+                                TiffEndian::Big => 1u16.to_be_bytes(),
+                            });
+                        }
+                    }
+                    offset = endian.u32(&bytes[offset + 2 + 12 * count..]) as usize;
+                }
+                Ok(bytes)
+            })
+        })
+        .transpose()
+}
+
+fn png_crc(kind: &[u8], bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for byte in kind.iter().chain(bytes) {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb88320 & (0u32.wrapping_sub(crc & 1)));
+        }
+    }
+    !crc
+}
+
+// The destination is an owned, unpublished edit output. PNG/WebP pixels were
+// freshly encoded; JPEG may retain markers after a lossless transform. Rewrite
+// chunks as opaque bytes, never asking a metadata writer to decompress text.
+pub(crate) fn write_edit_exif(output_path: &Path, exif: &[u8]) -> Result<(), String> {
+    let owned_output =
+        image_resource_policy::ImageSource::open(output_path, OperationClass::Overwrite)
+            .map_err(policy_error)?;
+    let rewrite =
+        match crate::atomic_file::build_unique_sibling_path(output_path, "lightframe-metadata") {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = owned_output.discard_owned();
+                return Err(error);
+            }
+        };
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(0xc001_0000).share_mode(1); // READ | WRITE | DELETE, share READ only
+    }
+    let mut output = match options.open(&rewrite) {
+        Ok(file) => file,
+        Err(_) => {
+            let _ = owned_output.discard_owned();
+            return Err("Unable to create owned metadata output".to_string());
+        }
+    };
+    let result = (|| -> Result<(), String> {
+        let length = owned_output.encoded_len();
+        let mut input = owned_output.reader().map_err(policy_error)?;
+        rewrite_edit_container(&mut input, length, &mut output, exif)
+            .map_err(|error| format!("Unable to preserve image metadata: {error}"))?;
+        output.sync_all().map_err(|_| "Unable to flush metadata output")?;
+        drop(input);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = image_resource_policy::ImageSource::discard_opened(&output, &rewrite);
+        let _ = owned_output.discard_owned();
+        return Err(error);
+    }
+    // Retain the output's lease through guarded replacement as well: an owned
+    // temporary pathname alone is not authority to overwrite a later collision.
+    #[cfg(windows)]
+    let published = owned_output.replace_opened(&output, output_path);
+    #[cfg(not(windows))]
+    let published = owned_output.replace(&rewrite, output_path);
+    if let Err(error) = published {
+        let _ = image_resource_policy::ImageSource::discard_opened(&output, &rewrite);
+        return Err(format!("Unable to finalize owned metadata output: {error}"));
+    }
+    Ok(())
+}
+
+fn rewrite_edit_container(
+    input: &mut (impl Read + Seek),
+    length: u64,
+    output: &mut (impl Write + Seek),
+    exif: &[u8],
+) -> std::io::Result<()> {
+    fn invalid() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid edit container")
+    }
+    fn at<const N: usize>(input: &mut (impl Read + Seek), offset: u64) -> std::io::Result<[u8; N]> {
+        input.seek(SeekFrom::Start(offset))?;
+        let mut bytes = [0; N];
+        input.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+    fn copy(
+        input: &mut (impl Read + Seek),
+        output: &mut impl Write,
+        offset: u64,
+        count: u64,
+        length: u64,
+    ) -> std::io::Result<()> {
+        if offset.checked_add(count).is_none_or(|end| end > length) {
+            return Err(invalid());
+        }
+        input.seek(SeekFrom::Start(offset))?;
+        if std::io::copy(&mut input.take(count), output)? != count {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    let header = at::<2>(input, 0)?;
+    if header == [0xff, 0xd8] {
+        let segment_len =
+            u16::try_from(exif.len().checked_add(8).ok_or_else(invalid)?).map_err(|_| invalid())?;
+        output.write_all(&[0xff, 0xd8, 0xff, 0xe1])?;
+        output.write_all(&segment_len.to_be_bytes())?;
+        output.write_all(b"Exif\0\0")?;
+        output.write_all(exif)?;
+        let mut pos = 2;
+        while pos < length {
+            let start = pos;
+            let mut marker = at::<2>(input, pos)?;
+            if marker[0] != 0xff {
+                return Err(invalid());
+            }
+            while marker[1] == 0xff {
+                pos += 1;
+                marker = at::<2>(input, pos)?;
+            }
+            pos += 2;
+            if matches!(marker[1], 0xda | 0xd9) {
+                return copy(input, output, start, length - start, length);
+            }
+            if marker[1] == 1 || (0xd0..=0xd7).contains(&marker[1]) {
+                copy(input, output, start, pos - start, length)?;
+                continue;
+            }
+            let size = u64::from(u16::from_be_bytes(at::<2>(input, pos)?));
+            if size < 2 || pos + size > length {
+                return Err(invalid());
+            }
+            let old_exif =
+                marker[1] == 0xe1 && size >= 8 && at::<6>(input, pos + 2)? == *b"Exif\0\0";
+            if !old_exif {
+                copy(input, output, start, pos + size - start, length)?;
+            }
+            pos += size;
+        }
+        return Err(invalid());
+    }
+    if at::<8>(input, 0)? == *b"\x89PNG\r\n\x1a\n" {
+        output.write_all(b"\x89PNG\r\n\x1a\n")?;
+        let mut pos = 8;
+        let mut inserted = false;
+        while pos < length {
+            let chunk = at::<8>(input, pos)?;
+            let size = u64::from(be_u32(&chunk));
+            if pos + size + 12 > length {
+                return Err(invalid());
+            }
+            if &chunk[4..] != b"eXIf" {
+                copy(input, output, pos, size + 12, length)?;
+            }
+            if &chunk[4..] == b"IHDR" && !inserted {
+                output.write_all(&(exif.len() as u32).to_be_bytes())?;
+                output.write_all(b"eXIf")?;
+                output.write_all(exif)?;
+                output.write_all(&png_crc(b"eXIf", exif).to_be_bytes())?;
+                inserted = true;
+            }
+            pos += size + 12;
+            if &chunk[4..] == b"IEND" {
+                return if inserted { Ok(()) } else { Err(invalid()) };
+            }
+        }
+        return Err(invalid());
+    }
+    let header = at::<12>(input, 0)?;
+    if &header[..4] != b"RIFF" || &header[8..] != b"WEBP" {
+        return Err(invalid());
+    }
+    let end = 8 + u64::from(le_u32(&header[4..]));
+    if end > length {
+        return Err(invalid());
+    }
+    let first = at::<8>(input, 12)?;
+    output.write_all(b"RIFF\0\0\0\0WEBP")?;
+    if &first[..4] != b"VP8X" {
+        // Fresh image::WebPEncoder output is VP8L. Also support simple lossy
+        // VP8, without loading either encoded pixel payload into memory.
+        let (width, height, alpha) = if &first[..4] == b"VP8L" {
+            let data = at::<5>(input, 20)?;
+            if data[0] != 0x2f {
+                return Err(invalid());
+            }
+            let bits = le_u32(&data[1..]);
+            ((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1, (bits >> 28) & 1 != 0)
+        } else if &first[..4] == b"VP8 " {
+            let data = at::<10>(input, 20)?;
+            if data[3..6] != [0x9d, 0x01, 0x2a] {
+                return Err(invalid());
+            }
+            (
+                u32::from(u16::from_le_bytes([data[6], data[7]]) & 0x3fff),
+                u32::from(u16::from_le_bytes([data[8], data[9]]) & 0x3fff),
+                false,
+            )
+        } else {
+            return Err(invalid());
+        };
+        if width == 0 || height == 0 {
+            return Err(invalid());
+        }
+        output.write_all(b"VP8X\x0a\0\0\0")?;
+        output.write_all(&[0x08 | if alpha { 0x10 } else { 0 }, 0, 0, 0])?;
+        output.write_all(&(width - 1).to_le_bytes()[..3])?;
+        output.write_all(&(height - 1).to_le_bytes()[..3])?;
+    }
+    let mut pos = 12;
+    while pos < end {
+        let chunk = at::<8>(input, pos)?;
+        let size = u64::from(le_u32(&chunk[4..]));
+        let total = 8 + size + (size & 1);
+        if pos + total > end {
+            return Err(invalid());
+        }
+        if &chunk[..4] == b"VP8X" {
+            if size != 10 {
+                return Err(invalid());
+            }
+            let mut data = at::<10>(input, pos + 8)?;
+            data[0] |= 0x08;
+            output.write_all(&chunk)?;
+            output.write_all(&data)?;
+        } else if &chunk[..4] != b"EXIF" {
+            copy(input, output, pos, total, end)?;
+        }
+        pos += total;
+    }
+    output.write_all(b"EXIF")?;
+    output.write_all(&(exif.len() as u32).to_le_bytes())?;
+    output.write_all(exif)?;
+    if exif.len() & 1 != 0 {
+        output.write_all(&[0])?;
+    }
+    let riff_size = u32::try_from(output.stream_position()?.checked_sub(8).ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
+    output.seek(SeekFrom::Start(4))?;
+    output.write_all(&riff_size.to_le_bytes())?;
+    Ok(())
+}
+
+fn bounded_metadata_display(value: impl std::fmt::Display, limit: u64) -> Result<String, String> {
+    use std::fmt::Write;
+    struct Output {
+        value: String,
+        limit: u64,
+    }
+    impl Write for Output {
+        fn write_str(&mut self, value: &str) -> std::fmt::Result {
+            if (self.value.len() as u64).saturating_add(value.len() as u64) > self.limit {
+                return Err(std::fmt::Error);
+            }
+            self.value.push_str(value);
+            Ok(())
+        }
+    }
+    let mut output = Output { value: String::new(), limit };
+    write!(&mut output, "{value}").map_err(|_| {
+        policy_error(image_resource_policy::ResourcePolicyError::MetadataBytesExceedLimit {
+            bytes: limit.saturating_add(1),
+            max: limit,
+        })
+    })?;
+    Ok(output.value)
+}
+
 fn read_embedded_exif_metadata(path: &Path) -> Result<ExifData, String> {
     let _source_lease =
         image_resource_policy::ImageSource::open(path, OperationClass::MetadataOnly)
@@ -782,14 +1444,19 @@ fn read_embedded_exif_metadata(path: &Path) -> Result<ExifData, String> {
         extract_container_exif(path)?
     };
     let exifreader = exif::Reader::new();
-    let exif = exifreader.read_raw(bytes).map_err(|_| "No EXIF data found".to_string())?;
+    let exif = with_admitted_tiff(bytes, |bytes| {
+        exifreader.read_raw(bytes).map_err(|_| "No EXIF data found".to_string())
+    })?;
     let mut data = empty_exif_data();
 
     let mut expanded_bytes = 0u64;
 
     for field in exif.fields() {
         let tag = format!("{}", field.tag);
-        let value = field.display_value().with_unit(&exif).to_string();
+        let remaining = MAX_EMBEDDED_METADATA_READ_BYTES
+            .saturating_sub(expanded_bytes)
+            .saturating_sub(tag.len() as u64);
+        let value = bounded_metadata_display(field.display_value().with_unit(&exif), remaining)?;
         expanded_bytes =
             expanded_bytes.saturating_add(value.len() as u64).saturating_add(tag.len() as u64);
         image_resource_policy::validate_metadata_bytes(
@@ -1041,8 +1708,301 @@ fn parse_xmp_u32(value: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(crate) fn edit_exif_fixture() -> Vec<u8> {
+        let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+        push_u16(&mut bytes, 2, false);
+        push_u16(&mut bytes, 0x10f, false);
+        push_u16(&mut bytes, 2, false);
+        push_u32(&mut bytes, 4, false);
+        bytes.extend_from_slice(b"CAM\0");
+        push_u16(&mut bytes, 0x112, false);
+        push_u16(&mut bytes, 3, false);
+        push_u32(&mut bytes, 1, false);
+        push_u32(&mut bytes, 6, false);
+        push_u32(&mut bytes, 0, false);
+        bytes
+    }
+
+    pub(crate) fn insert_png_text(path: &Path, kind: &[u8], data: &[u8]) {
+        let bytes = fs::read(path).unwrap();
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(data);
+        chunk.extend_from_slice(&png_crc(kind, data).to_be_bytes());
+        let mut updated = bytes[..33].to_vec(); // after the encoder's IHDR
+        updated.extend_from_slice(&chunk);
+        updated.extend_from_slice(&bytes[33..]);
+        fs::write(path, updated).unwrap();
+    }
+
+    pub(crate) fn compressed_png_text(text: &[u8], keyword: &[u8]) -> Vec<u8> {
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(text).unwrap();
+        let mut chunk = keyword.to_vec();
+        chunk.extend_from_slice(&[0, 0]);
+        chunk.extend_from_slice(&encoder.finish().unwrap());
+        chunk
+    }
+
+    #[test]
+    fn edit_metadata_preserves_camera_and_normalizes_orientation_in_all_outputs() {
+        let dir = tempdir().unwrap();
+        for extension in ["jpg", "png", "webp"] {
+            let source_path = dir.path().join(format!("source.{extension}"));
+            let output_path = dir.path().join(format!("output.{extension}"));
+            image::RgbImage::new(16, 12).save(&source_path).unwrap();
+            image::RgbImage::new(8, 6).save(&output_path).unwrap();
+            write_edit_exif(&source_path, &edit_exif_fixture()).unwrap();
+            let source =
+                image_resource_policy::ImageSource::open(&source_path, OperationClass::Overwrite)
+                    .unwrap();
+            let metadata = read_edit_exif(&source).unwrap().unwrap();
+            write_edit_exif(&output_path, &metadata).unwrap();
+            let mut file = std::io::BufReader::new(fs::File::open(&output_path).unwrap());
+            let parsed = exif::Reader::new().read_from_container(&mut file).unwrap();
+            assert_eq!(
+                parsed
+                    .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+                    .unwrap()
+                    .value
+                    .get_uint(0),
+                Some(1)
+            );
+            assert_eq!(
+                parsed
+                    .get_field(exif::Tag::Make, exif::In::PRIMARY)
+                    .unwrap()
+                    .display_value()
+                    .to_string(),
+                "\"CAM\""
+            );
+            assert_eq!(image::open(&output_path).unwrap().dimensions(), (8, 6));
+        }
+    }
+
+    #[test]
+    fn compressed_png_profile_is_preserved_with_bounded_inflation() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("profile.png");
+        image::RgbImage::new(2, 2).save(&path).unwrap();
+        let mut raw = b"Exif\0\0".to_vec();
+        raw.extend(edit_exif_fixture());
+        let hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
+        let profile = format!("\nexif\n{}\n{hex}\n", raw.len());
+        insert_png_text(
+            &path,
+            b"zTXt",
+            &compressed_png_text(profile.as_bytes(), b"Raw profile type exif"),
+        );
+        let source =
+            image_resource_policy::ImageSource::open(&path, OperationClass::Overwrite).unwrap();
+        let metadata = read_edit_exif(&source).unwrap().unwrap();
+        let parsed = exif::Reader::new().read_raw(metadata).unwrap();
+        assert_eq!(
+            parsed.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0),
+            Some(1)
+        );
+        assert!(read_edit_exif_with_limit(&source, 128).unwrap_err().contains("safe read budget"));
+    }
+
+    #[test]
+    fn malformed_png_metadata_is_a_controlled_error() {
+        for data in [b"missing nul".as_slice(), b"Raw profile type exif\0\0not zlib".as_slice()] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("malformed.png");
+            image::RgbImage::new(2, 2).save(&path).unwrap();
+            insert_png_text(&path, b"zTXt", data);
+            let source =
+                image_resource_policy::ImageSource::open(&path, OperationClass::Overwrite).unwrap();
+            assert!(read_edit_exif(&source)
+                .unwrap_err()
+                .contains("preserve image metadata safely"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_publication_collision_preserves_concurrent_file_and_recovery() {
+        use image_resource_policy::PublicationStage;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("owned-output.png");
+        image::RgbImage::new(2, 2).save(&path).unwrap();
+        let original = fs::read(&path).unwrap();
+        let recovery = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let recorded = recovery.clone();
+        image_resource_policy::set_publication_hook(move |stage, destination, backup| {
+            if stage == PublicationStage::OriginalMoved {
+                fs::write(destination, b"concurrent file").unwrap();
+                *recorded.borrow_mut() = Some(backup.to_path_buf());
+            }
+            false
+        });
+        let result = write_edit_exif(&path, &edit_exif_fixture());
+        image_resource_policy::clear_publication_hook();
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"concurrent file");
+        assert_eq!(fs::read(recovery.borrow().as_ref().unwrap()).unwrap(), original);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn failed_metadata_writer_discards_only_owned_outputs() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("owned-output.png");
+        let unrelated = dir.path().join("unrelated.png");
+        fs::write(&path, b"not an image").unwrap();
+        fs::write(&unrelated, b"keep").unwrap();
+        assert!(write_edit_exif(&path, &edit_exif_fixture()).is_err());
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn metadata_display_stops_at_budget_before_consuming_more_output() {
+        struct Chunks<'a>(&'a std::cell::Cell<usize>);
+        impl std::fmt::Display for Chunks<'_> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                for _ in 0..100 {
+                    self.0.set(self.0.get() + 1);
+                    formatter.write_str("abcd")?;
+                }
+                Ok(())
+            }
+        }
+        let writes = std::cell::Cell::new(0);
+        let rejections = image_resource_policy::rejection_count();
+        assert!(bounded_metadata_display(Chunks(&writes), 8).unwrap_err().contains("safe limit"));
+        assert!(image_resource_policy::rejection_count() > rejections);
+        assert_eq!(writes.get(), 3);
+        assert_eq!(bounded_metadata_display("camera", 6).unwrap(), "camera");
+    }
+
+    fn shared_ifd_fixture(count: u16, big_endian: bool) -> Vec<u8> {
+        let mut bytes = if big_endian { b"MM".to_vec() } else { b"II".to_vec() };
+        push_u16(&mut bytes, 42, big_endian);
+        push_u32(&mut bytes, 8, big_endian);
+        let block = 6 + 12 * u32::from(count);
+        for level in 0..3 {
+            push_u16(&mut bytes, count, big_endian);
+            for _ in 0..count {
+                push_u16(&mut bytes, [0x8769, 0xa005, 0x100][level], big_endian);
+                push_u16(&mut bytes, if level == 2 { 3 } else { 4 }, big_endian);
+                push_u32(&mut bytes, 1, big_endian);
+                push_u32(
+                    &mut bytes,
+                    if level == 2 { 0 } else { 8 + block * (level as u32 + 1) },
+                    big_endian,
+                );
+            }
+            push_u32(&mut bytes, 0, big_endian);
+        }
+        bytes
+    }
+
+    #[test]
+    fn expanded_shared_ifds_are_rejected_before_parser_for_tiff_and_embedded_exif() {
+        let dir = tempdir().unwrap();
+        for big_endian in [false, true] {
+            let bytes = shared_ifd_fixture(32, big_endian);
+            assert!(bytes.len() < 2_000);
+            let path = dir.path().join("shared.tif");
+            fs::write(&path, &bytes).unwrap();
+            let compact = compact_tiff(&path).unwrap();
+            let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+            jpeg.extend_from_slice(&((bytes.len() + 8) as u16).to_be_bytes());
+            jpeg.extend_from_slice(b"Exif\0\0");
+            jpeg.extend_from_slice(&bytes);
+            jpeg.extend_from_slice(&[0xff, 0xd9]);
+            let jpeg_path = dir.path().join("shared.jpg");
+            fs::write(&jpeg_path, jpeg).unwrap();
+            let embedded = extract_container_exif(&jpeg_path).unwrap();
+            let mut payloads = vec![bytes.clone(), compact, embedded];
+            for (name, writer) in [
+                ("shared.png", write_png_with_far_exif as fn(&Path, &[u8])),
+                ("shared.webp", write_webp_with_far_exif),
+                ("shared.heif", write_heif_with_far_exif),
+            ] {
+                let path = dir.path().join(name);
+                writer(&path, &bytes);
+                payloads.push(extract_container_exif(&path).unwrap());
+            }
+            for payload in payloads {
+                let mut called = false;
+                let rejections = image_resource_policy::rejection_count();
+                let result = with_admitted_tiff(payload, |_| {
+                    called = true;
+                    Ok(())
+                });
+                assert!(result.unwrap_err().contains("safe read budget"));
+                assert!(!called);
+                assert!(image_resource_policy::rejection_count() > rejections);
+            }
+        }
+    }
+
+    #[test]
+    fn small_shared_ifds_remain_supported_in_both_byte_orders() {
+        for big_endian in [false, true] {
+            let parsed = with_admitted_tiff(shared_ifd_fixture(2, big_endian), |bytes| {
+                exif::Reader::new().read_raw(bytes).map_err(|error| error.to_string())
+            })
+            .unwrap();
+            assert_eq!(parsed.fields().count(), 8);
+        }
+    }
+
+    #[test]
+    fn aliased_ascii_values_are_charged_before_parser() {
+        let count = 2_048u16;
+        let value_offset = 8 + 6 + 12 * u32::from(count);
+        let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+        push_u16(&mut bytes, count, false);
+        for _ in 0..count {
+            push_u16(&mut bytes, 0x10f, false);
+            push_u16(&mut bytes, 2, false);
+            push_u32(&mut bytes, 1_024, false);
+            push_u32(&mut bytes, value_offset, false);
+        }
+        push_u32(&mut bytes, 0, false);
+        bytes.extend_from_slice(&[0; 1_024]);
+        assert!(bytes.len() < 26_000);
+        let result = with_admitted_tiff(bytes, |_| -> Result<(), String> {
+            panic!("overbudget value expansion reached parser")
+        });
+        assert!(result.unwrap_err().contains("safe read budget"));
+    }
+
+    #[test]
+    fn ordinary_large_undefined_maker_note_uses_flat_value_budget() {
+        let length = 256 * 1_024;
+        let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+        push_u16(&mut bytes, 1, false);
+        push_u16(&mut bytes, 0x8769, false);
+        push_u16(&mut bytes, 4, false);
+        push_u32(&mut bytes, 1, false);
+        push_u32(&mut bytes, 26, false);
+        push_u32(&mut bytes, 0, false);
+        push_u16(&mut bytes, 1, false);
+        push_u16(&mut bytes, 0x927c, false);
+        push_u16(&mut bytes, 7, false);
+        push_u32(&mut bytes, length, false);
+        push_u32(&mut bytes, 44, false);
+        push_u32(&mut bytes, 0, false);
+        bytes.resize(44 + length as usize, 1);
+        let parsed = with_admitted_tiff(bytes, |bytes| {
+            exif::Reader::new().read_raw(bytes).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        let field = parsed.get_field(exif::Tag::MakerNote, exif::In::PRIMARY).unwrap();
+        assert!(
+            matches!(&field.value, exif::Value::Undefined(value, _) if value.len() == length as usize)
+        );
+    }
+
     use super::*;
+    use image::GenericImageView;
     use std::io::Write;
     use tempfile::tempdir;
 
