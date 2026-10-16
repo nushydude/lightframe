@@ -84,6 +84,7 @@ interface GeneratedAssetRuntimeStats {
   placeholderThumbnailGenerations: number;
   placeholderPreviewGenerations: number;
   tileGenerations: number;
+  resourcePolicyRejections: number;
 }
 
 interface GeneratedAssetRuntimeTiming {
