@@ -44,6 +44,7 @@ describe('SettingsPanel', () => {
             placeholderThumbnailGenerations: 0,
             placeholderPreviewGenerations: 0,
             tileGenerations: 0,
+            resourcePolicyRejections: 0,
           },
         };
       }

@@ -1,6 +1,7 @@
 use crate::generated_cache_maintenance::{
     ensure_cache_root, record_cache_write, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES,
 };
+use crate::image_resource_policy::{self, OperationClass};
 use crate::native_codecs;
 use crate::path_normalization::normalize_path_for_key;
 use image::metadata::Orientation;
@@ -141,6 +142,7 @@ pub struct GeneratedAssetRuntimeStats {
     pub placeholder_thumbnail_generations: usize,
     pub placeholder_preview_generations: usize,
     pub tile_generations: usize,
+    pub resource_policy_rejections: usize,
     pub native_preview_timing: GeneratedAssetRuntimeTiming,
     pub rust_preview_timing: GeneratedAssetRuntimeTiming,
     pub placeholder_preview_timing: GeneratedAssetRuntimeTiming,
@@ -352,11 +354,46 @@ pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
     }
 }
 
+fn policy_error(
+    operation: OperationClass,
+    error: image_resource_policy::ResourcePolicyError,
+) -> String {
+    image_resource_policy::record_rejection(operation);
+    error.to_string()
+}
+
+fn source_lease_if_present(
+    path: &Path,
+    operation: OperationClass,
+) -> Result<Option<image_resource_policy::ImageSource>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    image_resource_policy::ImageSource::open(path, operation)
+        .map(Some)
+        .map_err(|error| policy_error(operation, error))
+}
+
+fn validate_generated_source(file_path: &Path, operation: OperationClass) -> Result<(), String> {
+    if let Err(error) = image_resource_policy::validate_file_size(file_path, operation) {
+        // Missing files and inaccessible paths must continue through the established generator
+        // error path so callers retain the existing diagnostic and no placeholder masks I/O.
+        if error == image_resource_policy::ResourcePolicyError::FileMetadataUnavailable {
+            return Ok(());
+        }
+        return Err(policy_error(operation, error));
+    }
+
+    Ok(())
+}
+
 pub fn get_or_create_thumbnail(
     file_path: &Path,
     metadata: &SourceMetadata,
     cache_root: &Path,
 ) -> Result<GeneratedImageAsset, String> {
+    validate_generated_source(file_path, OperationClass::Thumbnail)?;
+    let _source_lease = source_lease_if_present(file_path, OperationClass::Thumbnail)?;
     let cache_key = build_cache_key(file_path, metadata);
     let cache_hash = hash_cache_key(&cache_key);
     let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
@@ -422,9 +459,10 @@ pub fn get_or_create_preview(
     max_dimension: u32,
     invalidation_bust: Option<u64>,
 ) -> Result<GeneratedImageAsset, String> {
-    if max_dimension == 0 {
-        return Err("max_dimension must be greater than zero".to_string());
-    }
+    image_resource_policy::validate_requested_dimension(max_dimension, OperationClass::Preview)
+        .map_err(|error| policy_error(OperationClass::Preview, error))?;
+    validate_generated_source(file_path, OperationClass::Preview)?;
+    let _source_lease = source_lease_if_present(file_path, OperationClass::Preview)?;
 
     let cache_key = build_preview_cache_key(file_path, metadata, max_dimension, invalidation_bust);
     let cache_hash = hash_cache_key(&cache_key);
@@ -465,6 +503,7 @@ pub fn get_or_create_preview(
                     asset
                 });
             }
+            Err(native_codecs::NativeError::Policy(error)) => return Err(error.to_string()),
             Err(error) => {
                 eprintln!(
                     "Windows native preview decode failed for '{}': {}. Falling back to Rust preview path.",
@@ -475,7 +514,7 @@ pub fn get_or_create_preview(
         }
     }
 
-    let img = match decode_image_with_orientation(file_path) {
+    let img = match decode_image_with_orientation_for_preview(file_path, max_dimension) {
         Ok(img) => img,
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
@@ -505,6 +544,16 @@ pub fn get_or_create_preview(
     };
     let (width, height) = img.dimensions();
     let preview = if width > max_dimension || height > max_dimension {
+        let (output_width, output_height) =
+            image_resource_policy::preview_resize_dimensions(width, height, max_dimension);
+        image_resource_policy::validate_preview_resize_memory(
+            (width, height),
+            (output_width, output_height),
+            u64::from(img.color().bytes_per_pixel()),
+            0,
+            0,
+        )
+        .map_err(|error| policy_error(OperationClass::Preview, error))?;
         img.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
     } else {
         img
@@ -587,6 +636,19 @@ pub fn get_or_create_tile(
     }
 
     let bounds = validate_tile_request(request)?;
+    image_resource_policy::validate_file_size(file_path, OperationClass::Tile)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    let limits = image_resource_policy::PolicyLimits::for_operation(OperationClass::Tile);
+    image_resource_policy::validate_dimensions(
+        request.source_width,
+        request.source_height,
+        &limits,
+    )
+    .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    image_resource_policy::validate_output_dimensions(bounds.width, bounds.height, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    image_resource_policy::validate_working_memory(bounds.width, bounds.height, 3, 2, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
     let cache_key = build_tile_cache_key(file_path, metadata, request)?;
     let cache_hash = hash_cache_key(&cache_key);
     let cache_available = ensure_cache_root(cache_root, cleanup_cache_best_effort);
@@ -610,7 +672,8 @@ pub fn get_or_create_tile(
                 width: bounds.width,
                 height: bounds.height,
             },
-        )?;
+        )
+        .map_err(|error| error.to_string())?;
         (jpeg_bytes, TileGenerationBackend::Native)
     } else {
         let source = get_cached_jpeg_tile_source(file_path, metadata)?;
@@ -671,7 +734,7 @@ fn build_versioned_cache_key(
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
-    let img = decode_image_with_orientation(file_path)?;
+    let img = decode_image_with_orientation_for_operation(file_path, OperationClass::Thumbnail)?;
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
 
     let mut buffer = std::io::Cursor::new(Vec::new());
@@ -685,6 +748,9 @@ fn generate_best_thumbnail_jpeg(
     if native_codecs::should_prefer_native_thumbnail(file_path) {
         match native_codecs::generate_thumbnail_jpeg(file_path, THUMBNAIL_SIZE) {
             Ok(bytes) => return Ok((bytes, ThumbnailGenerationBackend::Native)),
+            Err(native_codecs::NativeError::Policy(error)) => {
+                return Err(image::ImageError::IoError(std::io::Error::other(error)))
+            }
             Err(error) => {
                 eprintln!(
                     "Windows native thumbnail decode failed for '{}': {}. Falling back to Rust thumbnail path.",
@@ -719,10 +785,27 @@ fn get_cached_jpeg_tile_source(
         }
     }
 
-    let bytes = Arc::new(
-        fs::read(file_path)
-            .map_err(|error| format!("Failed to read JPEG source for tile: {}", error))?,
-    );
+    let source = image_resource_policy::ImageSource::open(file_path, OperationClass::Tile)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    let limits = image_resource_policy::PolicyLimits::for_operation(OperationClass::Tile);
+    let encoded_reserve = source.encoded_len().checked_mul(4).ok_or_else(|| {
+        policy_error(
+            OperationClass::Tile,
+            image_resource_policy::ResourcePolicyError::AllocationOverflow,
+        )
+    })?;
+    if encoded_reserve > limits.max_working_bytes {
+        return Err(policy_error(
+            OperationClass::Tile,
+            image_resource_policy::ResourcePolicyError::WorkingBytesExceedLimit {
+                bytes: encoded_reserve,
+                max: limits.max_working_bytes,
+            },
+        ));
+    }
+    let source_bytes =
+        source.read_bytes().map_err(|error| policy_error(OperationClass::Tile, error))?;
+    let bytes = Arc::new(source_bytes);
     let max_cache_bytes = CUSTOM_MAX_TILE_SOURCE_CACHE_BYTES.load(Ordering::Relaxed);
     if metadata.size_bytes <= max_cache_bytes {
         *guard = Some(CachedJpegSource { key: source_key, bytes: Arc::clone(&bytes) });
@@ -752,22 +835,109 @@ pub fn calculate_tile_cache_limit_for_performance_mode(performance_mode: &str) -
 }
 
 pub fn oriented_image_dimensions(file_path: &Path) -> Result<(u32, u32), String> {
-    let reader = ImageReader::open(file_path)
-        .map_err(|error| format!("Failed to read image dimensions: {}", error))?;
-    let mut decoder = reader
-        .into_decoder()
-        .map_err(|error| format!("Failed to decode image dimensions: {}", error))?;
+    oriented_image_dimensions_for_operation(file_path, OperationClass::MetadataOnly)
+}
+
+pub(crate) fn oriented_image_dimensions_for_operation(
+    file_path: &Path,
+    operation: OperationClass,
+) -> Result<(u32, u32), String> {
+    oriented_decoder_resource_for_operation(file_path, operation)
+        .map(|(width, height, _)| (width, height))
+}
+
+fn oriented_decoder_resource_for_operation(
+    file_path: &Path,
+    operation: OperationClass,
+) -> Result<(u32, u32, u64), String> {
+    let source = image_resource_policy::ImageSource::open(file_path, operation)
+        .map_err(|error| policy_error(operation, error))?;
+    let mut decoder = image_resource_policy::decoder_for_source(&source, operation)
+        .map_err(|error| format!("Failed to decode image dimensions: {error}"))?;
     let (width, height) = decoder.dimensions();
     let orientation = decoder
         .orientation()
         .map_err(|error| format!("Failed to read image orientation: {}", error))?;
-    Ok(oriented_dimensions(width, height, orientation))
+    let decoder_bytes = decoder.total_bytes();
+    // This helper only inspects the codec header and orientation. Constructor/input admission
+    // already ran in `decoder_for_source`; apply dimension/pixel ceilings here, while leaving
+    // full-frame working-memory admission to paths that actually call `from_decoder`.
+    let limits = image_resource_policy::PolicyLimits::for_operation(operation);
+    image_resource_policy::validate_dimensions(width, height, &limits)
+        .map_err(|error| policy_error(operation, error))?;
+    let (width, height) = oriented_dimensions(width, height, orientation);
+    Ok((width, height, decoder_bytes))
 }
 
+#[cfg(test)]
 fn decode_image_with_orientation(file_path: &Path) -> Result<DynamicImage, image::ImageError> {
-    let reader = ImageReader::open(file_path)?;
-    let mut decoder = reader.into_decoder()?;
+    decode_image_with_orientation_for_operation(file_path, OperationClass::Preview)
+}
+
+fn decode_image_with_orientation_for_operation(
+    file_path: &Path,
+    operation: OperationClass,
+) -> Result<DynamicImage, image::ImageError> {
+    decode_image_with_orientation_with_preview_limit(file_path, operation, None)
+}
+
+fn decode_image_with_orientation_for_preview(
+    file_path: &Path,
+    max_dimension: u32,
+) -> Result<DynamicImage, image::ImageError> {
+    decode_image_with_orientation_with_preview_limit(
+        file_path,
+        OperationClass::Preview,
+        Some(max_dimension),
+    )
+}
+
+fn decode_image_with_orientation_with_preview_limit(
+    file_path: &Path,
+    operation: OperationClass,
+    preview_max_dimension: Option<u32>,
+) -> Result<DynamicImage, image::ImageError> {
+    let source =
+        image_resource_policy::ImageSource::open(file_path, operation).map_err(|error| {
+            image_resource_policy::record_rejection(operation);
+            image::ImageError::IoError(std::io::Error::other(error))
+        })?;
+    let mut decoder = image_resource_policy::decoder_for_source(&source, operation)?;
+    let (width, height) = decoder.dimensions();
+    let decoder_bytes = decoder.total_bytes();
+    image_resource_policy::validate_decoder_memory_with_source(
+        width,
+        height,
+        decoder_bytes,
+        source.encoded_len(),
+        operation,
+    )
+    .map_err(|error| {
+        image_resource_policy::record_rejection(operation);
+        image::ImageError::IoError(std::io::Error::other(error))
+    })?;
     let orientation = decoder.orientation()?;
+    if let Some(max_dimension) = preview_max_dimension {
+        let (oriented_width, oriented_height) = oriented_dimensions(width, height, orientation);
+        if oriented_width > max_dimension || oriented_height > max_dimension {
+            let output_dimensions = image_resource_policy::preview_resize_dimensions(
+                oriented_width,
+                oriented_height,
+                max_dimension,
+            );
+            image_resource_policy::validate_preview_resize_memory(
+                (oriented_width, oriented_height),
+                output_dimensions,
+                u64::from(decoder.color_type().bytes_per_pixel()),
+                source.encoded_len(),
+                decoder_bytes,
+            )
+            .map_err(|error| {
+                image_resource_policy::record_rejection(operation);
+                image::ImageError::IoError(std::io::Error::other(error))
+            })?;
+        }
+    }
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
     Ok(image)
@@ -844,8 +1014,24 @@ fn raw_tile_bounds(
 }
 
 fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, String> {
+    let limits = image_resource_policy::PolicyLimits::for_operation(OperationClass::Tile);
+    image_resource_policy::validate_input_bytes(source.len() as u64, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
     let (raw_width, raw_height, orientation) = jpeg_orientation(source)?;
+    image_resource_policy::validate_dimensions(raw_width, raw_height, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
     let raw_bounds = raw_tile_bounds(bounds, raw_width, raw_height, orientation);
+    validate_jpeg_tile_scratch(source, raw_bounds)?;
+    image_resource_policy::validate_output_dimensions(raw_bounds.width, raw_bounds.height, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    image_resource_policy::validate_working_memory(
+        raw_bounds.width,
+        raw_bounds.height,
+        3,
+        2,
+        &limits,
+    )
+    .map_err(|error| policy_error(OperationClass::Tile, error))?;
     let tile = libjpeg_turbo_rs::decompress_cropped(
         source,
         CropRegion {
@@ -896,6 +1082,69 @@ fn generate_jpeg_tile(source: &[u8], bounds: TileBounds) -> Result<Vec<u8>, Stri
         Subsampling::S444,
     )
     .map_err(|error| format!("Failed to encode JPEG tile: {}", error))
+}
+
+fn validate_jpeg_tile_scratch(source: &[u8], bounds: TileBounds) -> Result<(), String> {
+    // libjpeg-turbo-rs 0.6 allocates full MCU-aligned component planes even for cropped
+    // decoding. Progressive/lossless modes also retain coefficients or full output. A small
+    // requested tile alone is therefore insufficient admission evidence.
+    let decoder = libjpeg_turbo_rs::Decoder::new(source)
+        .map_err(|error| format!("Failed to inspect JPEG tile: {error}"))?;
+    let header = decoder.header();
+    let max_h = header
+        .components
+        .iter()
+        .map(|c| u64::from(c.horizontal_sampling))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let max_v =
+        header.components.iter().map(|c| u64::from(c.vertical_sampling)).max().unwrap_or(1).max(1);
+    let mcus_x = u64::from(header.width).div_ceil(max_h * 8);
+    let mcus_y = u64::from(header.height).div_ceil(max_v * 8);
+    let estimate = || -> Result<u64, image_resource_policy::ResourcePolicyError> {
+        use image_resource_policy::ResourcePolicyError;
+        let mut planes = 0u64;
+        for component in &header.components {
+            let bytes = image_resource_policy::checked_allocation_bytes(
+                mcus_x * u64::from(component.horizontal_sampling) * 8,
+                mcus_y * u64::from(component.vertical_sampling) * 8,
+                1,
+                1,
+            )?;
+            planes = planes.checked_add(bytes).ok_or(ResourcePolicyError::AllocationOverflow)?;
+        }
+        let plane_count =
+            if header.is_progressive || header.is_lossless || header.precision > 8 { 8 } else { 3 };
+        let output = image_resource_policy::checked_allocation_bytes(
+            u64::from(bounds.width) + 32,
+            u64::from(header.height),
+            8,
+            1,
+        )?;
+        let tile = image_resource_policy::checked_allocation_bytes(
+            u64::from(bounds.width) + 32,
+            u64::from(bounds.height) + 32,
+            16,
+            1,
+        )?;
+        planes
+            .checked_mul(plane_count)
+            .and_then(|n| n.checked_add((source.len() as u64).checked_mul(4)?))
+            .and_then(|n| n.checked_add(output))
+            .and_then(|n| n.checked_add(tile))
+            .ok_or(ResourcePolicyError::AllocationOverflow)
+    };
+    let bytes = estimate().map_err(|error| policy_error(OperationClass::Tile, error))?;
+    let max =
+        image_resource_policy::PolicyLimits::for_operation(OperationClass::Tile).max_working_bytes;
+    if bytes > max {
+        return Err(policy_error(
+            OperationClass::Tile,
+            image_resource_policy::ResourcePolicyError::WorkingBytesExceedLimit { bytes, max },
+        ));
+    }
+    Ok(())
 }
 
 fn cached_thumbnail_formats(file_path: &Path, cache_hash: &str) -> &'static [GeneratedImageFormat] {
@@ -1236,6 +1485,7 @@ pub fn generated_asset_runtime_stats() -> GeneratedAssetRuntimeStats {
         placeholder_thumbnail_generations: PLACEHOLDER_THUMBNAIL_COUNT.load(Ordering::Relaxed),
         placeholder_preview_generations,
         tile_generations: TILE_GENERATED_COUNT.load(Ordering::Relaxed),
+        resource_policy_rejections: image_resource_policy::rejection_count(),
         native_preview_timing: timing_snapshot(
             native_preview_generations,
             &NATIVE_PREVIEW_TOTAL_MS,
@@ -1525,6 +1775,96 @@ fn is_generated_cache_filename(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jpeg_above_full_decode_budget_still_decodes_small_cropped_tile() {
+        // Valid constant-color baseline JPEG: each component block has zero DC difference
+        // and EOB, represented by two one-bit Huffman codes. No giant pixel fixture is needed.
+        fn segment(bytes: &mut Vec<u8>, marker: u8, payload: &[u8]) {
+            bytes.extend_from_slice(&[0xff, marker]);
+            bytes.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            bytes.extend_from_slice(payload);
+        }
+        let mut jpeg = vec![0xff, 0xd8];
+        let mut quant = vec![0];
+        quant.extend([1; 64]);
+        segment(&mut jpeg, 0xdb, &quant);
+        let mut frame = vec![8];
+        frame.extend_from_slice(&8000u16.to_be_bytes());
+        frame.extend_from_slice(&10000u16.to_be_bytes());
+        frame.extend_from_slice(&[3, 1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0]);
+        segment(&mut jpeg, 0xc0, &frame);
+        for class in [0, 0x10] {
+            let mut table = vec![class, 1];
+            table.extend([0; 15]);
+            table.push(0);
+            segment(&mut jpeg, 0xc4, &table);
+        }
+        segment(&mut jpeg, 0xda, &[3, 1, 0, 2, 0, 3, 0, 0, 63, 0]);
+        jpeg.resize(jpeg.len() + 468_750, 0); // 625 x 500 MCUs, 12 bits each (4:2:0).
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+        assert!(image_resource_policy::validate_decoder_memory(
+            10000,
+            8000,
+            240_000_000,
+            OperationClass::Preview
+        )
+        .is_err());
+        let tile =
+            generate_jpeg_tile(&jpeg, TileBounds { x: 0, y: 0, width: 16, height: 16 }).unwrap();
+        assert_eq!(image::load_from_memory(&tile).unwrap().dimensions(), (16, 16));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_thumbnail_input_growth_is_terminal_without_rust_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("growing.dng");
+        fs::write(&path, b"small input").unwrap();
+        image_resource_policy::before_next_source_open(|path| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_len(512 * 1024 * 1024 + 1)
+                .unwrap();
+        });
+        let decoders = image_resource_policy::DECODER_STARTS.with(|count| count.get());
+        let rejections = image_resource_policy::rejection_count();
+        let error = generate_best_thumbnail_jpeg(&path).unwrap_err().to_string();
+        assert!(error.contains("Encoded image size"));
+        assert!(!error.contains(&path.to_string_lossy().to_string()));
+        assert!(image_resource_policy::rejection_count() > rejections);
+        assert_eq!(image_resource_policy::DECODER_STARTS.with(|count| count.get()), decoders);
+    }
+
+    #[test]
+    fn bounded_cached_assets_survive_full_source_admission_rejection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.jpg");
+        image::RgbImage::new(16, 16).save(&path).unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        let sof = bytes.windows(2).position(|value| value == [0xff, 0xc0]).unwrap();
+        bytes[sof + 5..sof + 7].copy_from_slice(&20000u16.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&20000u16.to_be_bytes());
+        fs::write(&path, bytes).unwrap();
+        let metadata = resolve_source_metadata(&path, None, None).unwrap();
+        let cache = dir.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        for key in [
+            build_cache_key(&path, &metadata),
+            build_preview_cache_key(&path, &metadata, 2048, None),
+        ] {
+            image::RgbImage::new(32, 24)
+                .save(cache.join(format!("{}.jpg", hash_cache_key(&key))))
+                .unwrap();
+        }
+        let count = image_resource_policy::DECODER_STARTS.with(|count| count.get());
+        assert!(get_or_create_thumbnail(&path, &metadata, &cache).is_ok());
+        assert!(get_or_create_preview(&path, &metadata, &cache, 2048, None).is_ok());
+        assert_eq!(image_resource_policy::DECODER_STARTS.with(|count| count.get()), count);
+        assert!(decode_image_with_orientation(&path).is_err());
+    }
     use base64::Engine;
     use tempfile::tempdir;
 
@@ -1689,6 +2029,7 @@ mod tests {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 100)
             .encode_image(&image::DynamicImage::ImageRgb8(source_image))
             .unwrap();
+        drop(file);
         write_orientation(&image_path, 8);
 
         let source = fs::read(&image_path).unwrap();

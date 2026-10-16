@@ -1,4 +1,35 @@
+use crate::image_resource_policy::{self, OperationClass};
 use std::path::Path;
+
+#[derive(Debug)]
+pub enum NativeError {
+    Policy(image_resource_policy::ResourcePolicyError),
+    Codec(String),
+}
+impl From<String> for NativeError {
+    fn from(value: String) -> Self {
+        Self::Codec(value)
+    }
+}
+impl std::fmt::Display for NativeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Policy(error) => error.fmt(f),
+            Self::Codec(error) => error.fmt(f),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn optional_native_result(
+    result: Result<Vec<u8>, NativeError>,
+) -> Result<Option<Vec<u8>>, NativeError> {
+    match result {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(NativeError::Codec(_)) => Ok(None),
+        Err(error @ NativeError::Policy(_)) => Err(error),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecBackend {
@@ -40,6 +71,27 @@ pub struct NativeImageRegion {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+}
+
+fn region_buffer_layout(region: NativeImageRegion) -> Result<(u32, usize), NativeError> {
+    let operation = OperationClass::Tile;
+    let checked = || -> Result<(u32, usize), image_resource_policy::ResourcePolicyError> {
+        use image_resource_policy::ResourcePolicyError;
+        region.x.checked_add(region.width).ok_or(ResourcePolicyError::AllocationOverflow)?;
+        region.y.checked_add(region.height).ok_or(ResourcePolicyError::AllocationOverflow)?;
+        let stride = region.width.checked_mul(4).ok_or(ResourcePolicyError::AllocationOverflow)?;
+        let bytes =
+            stride.checked_mul(region.height).ok_or(ResourcePolicyError::AllocationOverflow)?;
+        let limits = image_resource_policy::PolicyLimits::for_operation(operation);
+        image_resource_policy::validate_output_dimensions(region.width, region.height, &limits)?;
+        image_resource_policy::validate_working_memory(region.width, region.height, 4, 3, &limits)?;
+        Ok((
+            stride,
+            usize::try_from(bytes)
+                .map_err(|_| ResourcePolicyError::AllocationTooLargeForPlatform)?,
+        ))
+    };
+    checked().map_err(|error| policy_error(operation, error))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,20 +169,67 @@ pub fn should_prefer_native_detail(path: &Path) -> bool {
     codec_capability_for_path(path).detail == CodecBackend::WindowsNative
 }
 
-pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, String> {
-    platform::metadata_from_path(path)
+pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, NativeError> {
+    let _source = image_resource_policy::ImageSource::open(path, OperationClass::MetadataOnly)
+        .map_err(|error| policy_error(OperationClass::MetadataOnly, error))?;
+    image_resource_policy::validate_file_size(path, OperationClass::MetadataOnly)
+        .map_err(|error| policy_error(OperationClass::MetadataOnly, error))?;
+    let metadata = platform::metadata_from_path(path)?;
+    let limits = image_resource_policy::PolicyLimits::for_operation(OperationClass::MetadataOnly);
+    image_resource_policy::validate_dimensions(metadata.width, metadata.height, &limits)
+        .map_err(|error| policy_error(OperationClass::MetadataOnly, error))?;
+    Ok(metadata)
 }
 
-pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, NativeError> {
+    let _source = image_resource_policy::ImageSource::open(path, OperationClass::Thumbnail)
+        .map_err(|error| policy_error(OperationClass::Thumbnail, error))?;
+    validate_native_scaled_request(path, max_dimension, OperationClass::Thumbnail)?;
     platform::generate_thumbnail_jpeg(path, max_dimension)
 }
 
-pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, NativeError> {
+    let _source = image_resource_policy::ImageSource::open(path, OperationClass::Preview)
+        .map_err(|error| policy_error(OperationClass::Preview, error))?;
+    validate_native_scaled_request(path, max_dimension, OperationClass::Preview)?;
     platform::generate_preview_jpeg(path, max_dimension)
 }
 
-pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Vec<u8>, String> {
+pub fn generate_region_jpeg(
+    path: &Path,
+    region: NativeImageRegion,
+) -> Result<Vec<u8>, NativeError> {
+    region_buffer_layout(region)?;
+    let _source = image_resource_policy::ImageSource::open(path, OperationClass::Tile)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    image_resource_policy::validate_file_size(path, OperationClass::Tile)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    let limits = image_resource_policy::PolicyLimits::for_operation(OperationClass::Tile);
+    image_resource_policy::validate_output_dimensions(region.width, region.height, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
+    image_resource_policy::validate_working_memory(region.width, region.height, 4, 2, &limits)
+        .map_err(|error| policy_error(OperationClass::Tile, error))?;
     platform::generate_region_jpeg(path, region)
+}
+
+fn policy_error(
+    operation: OperationClass,
+    error: image_resource_policy::ResourcePolicyError,
+) -> NativeError {
+    image_resource_policy::record_rejection(operation);
+    NativeError::Policy(error)
+}
+
+fn validate_native_scaled_request(
+    path: &Path,
+    max_dimension: u32,
+    operation: OperationClass,
+) -> Result<(), NativeError> {
+    image_resource_policy::validate_requested_dimension(max_dimension, operation)
+        .map_err(|error| policy_error(operation, error))?;
+    image_resource_policy::validate_file_size(path, operation)
+        .map_err(|error| policy_error(operation, error))?;
+    Ok(())
 }
 
 pub fn native_decoder_health_for_extensions(extensions: &[&str]) -> NativeDecoderHealth {
@@ -179,7 +278,8 @@ fn raw_native_backend() -> CodecBackend {
 
 #[cfg(windows)]
 mod platform {
-    use super::{NativeDecoderHealth, NativeImageMetadata, NativeImageRegion};
+    use super::{NativeDecoderHealth, NativeError, NativeImageMetadata, NativeImageRegion};
+    use crate::image_resource_policy::{self, OperationClass};
     use image::{DynamicImage, RgbImage};
     use std::io::Cursor;
     use std::os::windows::ffi::OsStrExt;
@@ -194,6 +294,14 @@ mod platform {
         IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
         WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand, WICDecoder, WICRect,
     };
+
+    fn policy_error(
+        operation: OperationClass,
+        error: image_resource_policy::ResourcePolicyError,
+    ) -> NativeError {
+        image_resource_policy::record_rejection(operation);
+        NativeError::Policy(error)
+    }
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_MULTITHREADED,
@@ -213,7 +321,7 @@ mod platform {
         }
     }
 
-    pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, String> {
+    pub fn metadata_from_path(path: &Path) -> Result<NativeImageMetadata, NativeError> {
         let _com = initialize_com()?;
         let factory = create_factory()?;
         let decoder = create_decoder(&factory, path)?;
@@ -229,11 +337,14 @@ mod platform {
         })
     }
 
-    pub fn generate_thumbnail_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+    pub fn generate_thumbnail_jpeg(
+        path: &Path,
+        max_dimension: u32,
+    ) -> Result<Vec<u8>, NativeError> {
         generate_scaled_jpeg(path, max_dimension, NativeScaledSourceKind::Thumbnail)
     }
 
-    pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, String> {
+    pub fn generate_preview_jpeg(path: &Path, max_dimension: u32) -> Result<Vec<u8>, NativeError> {
         generate_scaled_jpeg(path, max_dimension, NativeScaledSourceKind::Preview)
     }
 
@@ -243,51 +354,99 @@ mod platform {
         Preview,
     }
 
+    fn embedded_or_full(
+        embedded: impl FnOnce() -> Result<Option<Vec<u8>>, NativeError>,
+        full: impl FnOnce() -> Result<Vec<u8>, NativeError>,
+    ) -> Result<Vec<u8>, NativeError> {
+        match embedded()? {
+            Some(bytes) => Ok(bytes),
+            None => full(),
+        }
+    }
+
     fn generate_scaled_jpeg(
         path: &Path,
         max_dimension: u32,
         source_kind: NativeScaledSourceKind,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, NativeError> {
         if max_dimension == 0 {
-            return Err("max_dimension must be greater than zero".to_string());
+            return Err("max_dimension must be greater than zero".to_string().into());
         }
 
         let _com = initialize_com()?;
         let factory = create_factory()?;
         let decoder = create_decoder(&factory, path)?;
+        let operation = match source_kind {
+            NativeScaledSourceKind::Thumbnail => OperationClass::Thumbnail,
+            NativeScaledSourceKind::Preview => OperationClass::Preview,
+        };
         // Try decoder-owned sources before frame 0 so RAW codecs can use embedded previews.
-        if let Some(jpeg_bytes) = match source_kind {
-            NativeScaledSourceKind::Thumbnail => {
-                try_decoder_thumbnail(&factory, &decoder, max_dimension)
-                    .or_else(|| try_decoder_preview(&factory, &decoder, max_dimension))
-            }
-            NativeScaledSourceKind::Preview => {
-                try_decoder_preview(&factory, &decoder, max_dimension).or_else(|| {
-                    try_decoder_thumbnail_for_preview(&factory, &decoder, max_dimension)
+        embedded_or_full(
+            || {
+                Ok(match source_kind {
+                    NativeScaledSourceKind::Thumbnail => {
+                        try_decoder_thumbnail(&factory, &decoder, max_dimension, operation)?
+                            .map(|bytes| Ok(Some(bytes)))
+                            .unwrap_or_else(|| {
+                                try_decoder_preview(&factory, &decoder, max_dimension, operation)
+                            })?
+                    }
+                    NativeScaledSourceKind::Preview => {
+                        try_decoder_preview(&factory, &decoder, max_dimension, operation)?
+                            .map(|bytes| Ok(Some(bytes)))
+                            .unwrap_or_else(|| {
+                                try_decoder_thumbnail_for_preview(
+                                    &factory,
+                                    &decoder,
+                                    max_dimension,
+                                    operation,
+                                )
+                            })?
+                    }
                 })
-            }
-        } {
-            return Ok(jpeg_bytes);
-        }
-
-        let frame = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
-        match source_kind {
-            NativeScaledSourceKind::Thumbnail => {
-                try_frame_thumbnail(&factory, &frame, max_dimension)
-            }
-            NativeScaledSourceKind::Preview => {
-                try_frame_thumbnail_for_preview(&factory, &frame, max_dimension)
-            }
-        }
-        .map(Ok)
-        .unwrap_or_else(|| encode_scaled_source_as_jpeg(&factory, &frame, max_dimension))
+            },
+            || {
+                let frame_for_limits = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
+                let frame = frame_for_limits;
+                if let Some(bytes) = match source_kind {
+                    NativeScaledSourceKind::Thumbnail => {
+                        try_frame_thumbnail(&factory, &frame, max_dimension, operation)
+                    }
+                    NativeScaledSourceKind::Preview => {
+                        try_frame_thumbnail_for_preview(&factory, &frame, max_dimension, operation)
+                    }
+                }? {
+                    return Ok(bytes);
+                }
+                let (source_width, source_height) = bitmap_source_size(&frame)?;
+                let limits = image_resource_policy::PolicyLimits::for_operation(operation);
+                image_resource_policy::validate_dimensions(source_width, source_height, &limits)
+                    .map_err(|error| policy_error(operation, error))?;
+                image_resource_policy::validate_working_memory(
+                    source_width,
+                    source_height,
+                    4,
+                    3,
+                    &limits,
+                )
+                .map_err(|error| policy_error(operation, error))?;
+                encode_scaled_source_as_jpeg(&factory, &frame, max_dimension, operation)
+            },
+        )
     }
 
-    pub fn generate_region_jpeg(path: &Path, region: NativeImageRegion) -> Result<Vec<u8>, String> {
+    pub fn generate_region_jpeg(
+        path: &Path,
+        region: NativeImageRegion,
+    ) -> Result<Vec<u8>, NativeError> {
         let _com = initialize_com()?;
         let factory = create_factory()?;
         let decoder = create_decoder(&factory, path)?;
         let frame = unsafe { decoder.GetFrame(0) }.map_err(windows_error)?;
+        let limits = image_resource_policy::PolicyLimits::for_operation(OperationClass::Tile);
+        let (source_width, source_height) = bitmap_source_size(&frame)?;
+        image_resource_policy::validate_dimensions(source_width, source_height, &limits)
+            .map_err(|error| policy_error(OperationClass::Tile, error))?;
         let region = clipped_region(&frame, region)?;
         let bgra = source_region_to_bgra(&factory, &frame, region)?;
         encode_bgra_as_jpeg(bgra)
@@ -304,12 +463,12 @@ mod platform {
                     .iter()
                     .map(|extension| normalize_extension_label(extension))
                     .collect(),
-                error: Some(error),
+                error: Some(error.to_string()),
             },
         }
     }
 
-    fn initialize_com() -> Result<ComApartment, String> {
+    fn initialize_com() -> Result<ComApartment, NativeError> {
         let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         if result == S_OK || result == S_FALSE {
             return Ok(ComApartment { should_uninitialize: true });
@@ -322,7 +481,7 @@ mod platform {
         Err(windows_hresult_error(result))
     }
 
-    fn create_factory() -> Result<IWICImagingFactory, String> {
+    fn create_factory() -> Result<IWICImagingFactory, NativeError> {
         unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
             .map_err(windows_error)
     }
@@ -330,7 +489,7 @@ mod platform {
     fn create_decoder(
         factory: &IWICImagingFactory,
         path: &Path,
-    ) -> Result<windows::Win32::Graphics::Imaging::IWICBitmapDecoder, String> {
+    ) -> Result<windows::Win32::Graphics::Imaging::IWICBitmapDecoder, NativeError> {
         let path_wide = path_to_wide(path);
         unsafe {
             factory.CreateDecoderFromFilename(
@@ -343,7 +502,7 @@ mod platform {
         .map_err(windows_error)
     }
 
-    fn native_decoder_health(extensions: &[&str]) -> Result<NativeDecoderHealth, String> {
+    fn native_decoder_health(extensions: &[&str]) -> Result<NativeDecoderHealth, NativeError> {
         let normalized_extensions: Vec<String> =
             extensions.iter().map(|extension| normalize_extension_label(extension)).collect();
 
@@ -454,7 +613,7 @@ mod platform {
         path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
     }
 
-    fn bitmap_source_size(source: &IWICBitmapSource) -> Result<(u32, u32), String> {
+    fn bitmap_source_size(source: &IWICBitmapSource) -> Result<(u32, u32), NativeError> {
         let mut width = 0;
         let mut height = 0;
         unsafe { source.GetSize(&mut width, &mut height) }.map_err(windows_error)?;
@@ -465,7 +624,7 @@ mod platform {
         factory: &IWICImagingFactory,
         source: &IWICBitmapSource,
         max_dimension: u32,
-    ) -> Result<IWICBitmapSource, String> {
+    ) -> Result<IWICBitmapSource, NativeError> {
         let (width, height) = bitmap_source_size(source)?;
         let scale = (max_dimension as f64 / width.max(height) as f64).min(1.0);
         let target_width = ((width as f64 * scale).round() as u32).max(1);
@@ -483,54 +642,87 @@ mod platform {
         factory: &IWICImagingFactory,
         decoder: &IWICBitmapDecoder,
         max_dimension: u32,
-    ) -> Option<Vec<u8>> {
-        unsafe { decoder.GetPreview() }
-            .ok()
-            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+        operation: OperationClass,
+    ) -> Result<Option<Vec<u8>>, NativeError> {
+        let source = unsafe { decoder.GetPreview() }.ok();
+        match source {
+            Some(source) => super::optional_native_result(encode_scaled_source_as_jpeg(
+                factory,
+                &source,
+                max_dimension,
+                operation,
+            )),
+            None => Ok(None),
+        }
     }
-
     fn try_decoder_thumbnail(
         factory: &IWICImagingFactory,
         decoder: &IWICBitmapDecoder,
         max_dimension: u32,
-    ) -> Option<Vec<u8>> {
-        unsafe { decoder.GetThumbnail() }
-            .ok()
-            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+        operation: OperationClass,
+    ) -> Result<Option<Vec<u8>>, NativeError> {
+        let source = unsafe { decoder.GetThumbnail() }.ok();
+        match source {
+            Some(source) => super::optional_native_result(encode_scaled_source_as_jpeg(
+                factory,
+                &source,
+                max_dimension,
+                operation,
+            )),
+            None => Ok(None),
+        }
     }
-
     fn try_decoder_thumbnail_for_preview(
         factory: &IWICImagingFactory,
         decoder: &IWICBitmapDecoder,
         max_dimension: u32,
-    ) -> Option<Vec<u8>> {
-        unsafe { decoder.GetThumbnail() }
-            .ok()
-            .filter(|source| source_is_large_enough_for_preview(source, max_dimension))
-            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+        operation: OperationClass,
+    ) -> Result<Option<Vec<u8>>, NativeError> {
+        let source = unsafe { decoder.GetThumbnail() }.ok();
+        match source.filter(|source| source_is_large_enough_for_preview(source, max_dimension)) {
+            Some(source) => super::optional_native_result(encode_scaled_source_as_jpeg(
+                factory,
+                &source,
+                max_dimension,
+                operation,
+            )),
+            None => Ok(None),
+        }
     }
-
     fn try_frame_thumbnail(
         factory: &IWICImagingFactory,
         frame: &IWICBitmapFrameDecode,
         max_dimension: u32,
-    ) -> Option<Vec<u8>> {
-        unsafe { frame.GetThumbnail() }
-            .ok()
-            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+        operation: OperationClass,
+    ) -> Result<Option<Vec<u8>>, NativeError> {
+        let source = unsafe { frame.GetThumbnail() }.ok();
+        match source {
+            Some(source) => super::optional_native_result(encode_scaled_source_as_jpeg(
+                factory,
+                &source,
+                max_dimension,
+                operation,
+            )),
+            None => Ok(None),
+        }
     }
-
     fn try_frame_thumbnail_for_preview(
         factory: &IWICImagingFactory,
         frame: &IWICBitmapFrameDecode,
         max_dimension: u32,
-    ) -> Option<Vec<u8>> {
-        unsafe { frame.GetThumbnail() }
-            .ok()
-            .filter(|source| source_is_large_enough_for_preview(source, max_dimension))
-            .and_then(|source| encode_scaled_source_as_jpeg(factory, &source, max_dimension).ok())
+        operation: OperationClass,
+    ) -> Result<Option<Vec<u8>>, NativeError> {
+        let source = unsafe { frame.GetThumbnail() }.ok();
+        match source.filter(|source| source_is_large_enough_for_preview(source, max_dimension)) {
+            Some(source) => super::optional_native_result(encode_scaled_source_as_jpeg(
+                factory,
+                &source,
+                max_dimension,
+                operation,
+            )),
+            None => Ok(None),
+        }
     }
-
     fn source_is_large_enough_for_preview(source: &IWICBitmapSource, max_dimension: u32) -> bool {
         bitmap_source_size(source)
             .map(|(width, height)| {
@@ -547,7 +739,14 @@ mod platform {
         factory: &IWICImagingFactory,
         source: &IWICBitmapSource,
         max_dimension: u32,
-    ) -> Result<Vec<u8>, String> {
+        operation: OperationClass,
+    ) -> Result<Vec<u8>, NativeError> {
+        let (width, height) = bitmap_source_size(source)?;
+        let limits = image_resource_policy::PolicyLimits::for_operation(operation);
+        image_resource_policy::validate_dimensions(width, height, &limits)
+            .map_err(|error| policy_error(operation, error))?;
+        image_resource_policy::validate_working_memory(width, height, 16, 2, &limits)
+            .map_err(|error| policy_error(operation, error))?;
         let source = scaled_source(factory, source, max_dimension)?;
         let bgra = source_to_bgra(factory, &source)?;
         encode_bgra_as_jpeg(bgra)
@@ -562,7 +761,7 @@ mod platform {
     fn source_to_bgra(
         factory: &IWICImagingFactory,
         source: &IWICBitmapSource,
-    ) -> Result<BgraPixels, String> {
+    ) -> Result<BgraPixels, NativeError> {
         let converter = unsafe { factory.CreateFormatConverter() }.map_err(windows_error)?;
         unsafe {
             converter.Initialize(
@@ -583,7 +782,23 @@ mod platform {
         let buffer_size = stride
             .checked_mul(height)
             .ok_or_else(|| "Windows native image buffer size overflowed".to_string())?;
-        let mut pixels = vec![0_u8; buffer_size as usize];
+        let allocation = image_resource_policy::validate_allocation_for_operation(
+            width,
+            height,
+            4,
+            2,
+            OperationClass::Preview,
+        )
+        .map_err(|error| policy_error(OperationClass::Preview, error))?;
+        let buffer_size = usize::try_from(buffer_size).map_err(|_| {
+            "Windows native image buffer is too large for this platform".to_string()
+        })?;
+        if buffer_size > allocation {
+            return Err("Windows native image buffer exceeded the safety estimate"
+                .to_string()
+                .into());
+        }
+        let mut pixels = vec![0_u8; buffer_size];
 
         unsafe { converter.CopyPixels(std::ptr::null(), stride, &mut pixels) }
             .map_err(windows_error)?;
@@ -595,7 +810,7 @@ mod platform {
         factory: &IWICImagingFactory,
         source: &IWICBitmapSource,
         region: NativeImageRegion,
-    ) -> Result<BgraPixels, String> {
+    ) -> Result<BgraPixels, NativeError> {
         let converter = unsafe { factory.CreateFormatConverter() }.map_err(windows_error)?;
         unsafe {
             converter.Initialize(
@@ -619,14 +834,8 @@ mod platform {
             Height: i32::try_from(region.height)
                 .map_err(|_| "Windows native tile height is too large".to_string())?,
         };
-        let stride = region
-            .width
-            .checked_mul(4)
-            .ok_or_else(|| "Windows native tile stride overflowed".to_string())?;
-        let buffer_size = stride
-            .checked_mul(region.height)
-            .ok_or_else(|| "Windows native tile buffer size overflowed".to_string())?;
-        let mut pixels = vec![0_u8; buffer_size as usize];
+        let (stride, buffer_size) = super::region_buffer_layout(region)?;
+        let mut pixels = vec![0_u8; buffer_size];
 
         unsafe { converter.CopyPixels(&rect, stride, &mut pixels) }.map_err(windows_error)?;
 
@@ -636,14 +845,16 @@ mod platform {
     fn clipped_region(
         source: &IWICBitmapSource,
         region: NativeImageRegion,
-    ) -> Result<NativeImageRegion, String> {
+    ) -> Result<NativeImageRegion, NativeError> {
         if region.width == 0 || region.height == 0 {
-            return Err("Windows native tile region must be greater than zero".to_string());
+            return Err("Windows native tile region must be greater than zero".to_string().into());
         }
 
         let (source_width, source_height) = bitmap_source_size(source)?;
         if region.x >= source_width || region.y >= source_height {
-            return Err("Windows native tile region is outside the source image".to_string());
+            return Err("Windows native tile region is outside the source image"
+                .to_string()
+                .into());
         }
 
         Ok(NativeImageRegion {
@@ -654,8 +865,8 @@ mod platform {
         })
     }
 
-    fn encode_bgra_as_jpeg(bgra: BgraPixels) -> Result<Vec<u8>, String> {
-        let rgb = bgra_to_rgb(&bgra.pixels);
+    fn encode_bgra_as_jpeg(bgra: BgraPixels) -> Result<Vec<u8>, NativeError> {
+        let rgb = bgra_to_rgb(&bgra.pixels)?;
         let image = RgbImage::from_raw(bgra.width, bgra.height, rgb)
             .ok_or_else(|| "Windows native image buffer had invalid dimensions".to_string())?;
 
@@ -666,14 +877,19 @@ mod platform {
         Ok(buffer.into_inner())
     }
 
-    fn bgra_to_rgb(bgra: &[u8]) -> Vec<u8> {
-        let mut rgb = Vec::with_capacity(bgra.len() / 4 * 3);
+    fn bgra_to_rgb(bgra: &[u8]) -> Result<Vec<u8>, NativeError> {
+        let capacity = bgra
+            .len()
+            .checked_div(4)
+            .and_then(|pixels| pixels.checked_mul(3))
+            .ok_or_else(|| "Windows native RGB buffer size overflowed".to_string())?;
+        let mut rgb = Vec::with_capacity(capacity);
         for pixel in bgra.chunks_exact(4) {
             rgb.push(pixel[2]);
             rgb.push(pixel[1]);
             rgb.push(pixel[0]);
         }
-        rgb
+        Ok(rgb)
     }
 
     fn container_format_label(format: windows::core::GUID) -> Option<&'static str> {
@@ -696,37 +912,76 @@ mod platform {
         }
     }
 
-    fn windows_error(error: windows::core::Error) -> String {
-        error.message().to_string()
+    fn windows_error(error: windows::core::Error) -> NativeError {
+        NativeError::Codec(error.message().to_string())
     }
 
-    fn windows_hresult_error(error: windows::core::HRESULT) -> String {
-        windows::core::Error::from(error).message().to_string()
+    fn windows_hresult_error(error: windows::core::HRESULT) -> NativeError {
+        NativeError::Codec(windows::core::Error::from(error).message().to_string())
+    }
+
+    #[cfg(test)]
+    mod embedded_tests {
+        use super::*;
+
+        #[test]
+        fn embedded_wic_source_succeeds_without_full_frame_admission() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("embedded.png");
+            image::RgbImage::new(32, 24).save(&path).unwrap();
+            let _com = initialize_com().unwrap();
+            let factory = create_factory().unwrap();
+            let decoder = create_decoder(&factory, &path).unwrap();
+            let bounded = unsafe { decoder.GetFrame(0) }.unwrap();
+            let full = || -> Result<Vec<u8>, NativeError> {
+                let limits =
+                    image_resource_policy::PolicyLimits::for_operation(OperationClass::Thumbnail);
+                image_resource_policy::validate_dimensions(20000, 20000, &limits)
+                    .map_err(|error| policy_error(OperationClass::Thumbnail, error))?;
+                panic!("full-frame pixels must not be decoded");
+            };
+            let bytes = embedded_or_full(
+                || {
+                    encode_scaled_source_as_jpeg(&factory, &bounded, 160, OperationClass::Thumbnail)
+                        .map(Some)
+                },
+                full,
+            )
+            .unwrap();
+            assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 32);
+            assert!(matches!(embedded_or_full(|| Ok(None), full), Err(NativeError::Policy(_))));
+        }
     }
 }
 
 #[cfg(not(windows))]
 mod platform {
-    use super::{NativeDecoderHealth, NativeImageMetadata, NativeImageRegion};
+    use super::{NativeDecoderHealth, NativeError, NativeImageMetadata, NativeImageRegion};
     use std::path::Path;
 
-    pub fn metadata_from_path(_path: &Path) -> Result<NativeImageMetadata, String> {
-        Err("Windows native codec path is unavailable on this platform".to_string())
+    pub fn metadata_from_path(_path: &Path) -> Result<NativeImageMetadata, NativeError> {
+        Err("Windows native codec path is unavailable on this platform".to_string().into())
     }
 
-    pub fn generate_thumbnail_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
-        Err("Windows native codec path is unavailable on this platform".to_string())
+    pub fn generate_thumbnail_jpeg(
+        _path: &Path,
+        _max_dimension: u32,
+    ) -> Result<Vec<u8>, NativeError> {
+        Err("Windows native codec path is unavailable on this platform".to_string().into())
     }
 
-    pub fn generate_preview_jpeg(_path: &Path, _max_dimension: u32) -> Result<Vec<u8>, String> {
-        Err("Windows native codec path is unavailable on this platform".to_string())
+    pub fn generate_preview_jpeg(
+        _path: &Path,
+        _max_dimension: u32,
+    ) -> Result<Vec<u8>, NativeError> {
+        Err("Windows native codec path is unavailable on this platform".to_string().into())
     }
 
     pub fn generate_region_jpeg(
         _path: &Path,
         _region: NativeImageRegion,
-    ) -> Result<Vec<u8>, String> {
-        Err("Windows native codec path is unavailable on this platform".to_string())
+    ) -> Result<Vec<u8>, NativeError> {
+        Err("Windows native codec path is unavailable on this platform".to_string().into())
     }
 
     pub fn native_decoder_health_for_extensions(_extensions: &[&str]) -> NativeDecoderHealth {
@@ -743,6 +998,24 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_region_overflow_and_budget_fail_before_open_or_allocation() {
+        for region in [
+            NativeImageRegion { x: u32::MAX, y: 0, width: 2, height: 1 },
+            NativeImageRegion { x: 0, y: 0, width: u32::MAX, height: 2 },
+            NativeImageRegion { x: 0, y: 0, width: 4097, height: 4097 },
+        ] {
+            assert!(matches!(
+                generate_region_jpeg(Path::new("not-opened.png"), region),
+                Err(NativeError::Policy(_))
+            ));
+        }
+        assert_eq!(
+            region_buffer_layout(NativeImageRegion { x: 0, y: 0, width: 35, height: 24 }).unwrap(),
+            (140, 3360)
+        );
+    }
 
     #[test]
     fn codec_capability_uses_rust_for_standard_decode_formats() {

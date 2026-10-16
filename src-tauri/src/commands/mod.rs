@@ -6,15 +6,13 @@ pub use settings_commands::*;
 
 use crate::atomic_file::{build_unique_sibling_path, replace_file_safely};
 pub use crate::image_metadata::ExifData;
-use crate::{folder_index, native_codecs, thumbnails};
-use image::GenericImageView;
+use crate::{folder_index, image_resource_policy, native_codecs, thumbnails};
+use image::{GenericImageView, ImageDecoder};
 use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
-use little_exif::exif_tag::ExifTag;
-use little_exif::metadata::Metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -92,6 +90,17 @@ fn read_comfy_png_metadata(path: &Path) -> EmbeddedComfyMetadata {
 
     let Ok(mut file) = fs::File::open(path) else { return unsupported };
     let Ok(file_len) = file.metadata().map(|metadata| metadata.len()) else { return unsupported };
+    if image_resource_policy::validate_file_size(
+        path,
+        image_resource_policy::OperationClass::MetadataOnly,
+    )
+    .is_err()
+    {
+        image_resource_policy::record_rejection(
+            image_resource_policy::OperationClass::MetadataOnly,
+        );
+        return unsupported;
+    }
     if !(8..=MAX_COMFY_METADATA_SCAN_BYTES).contains(&file_len) {
         // A file may be larger than the scan bound; the metadata chunks still have to appear early.
         if file_len < 8 {
@@ -186,6 +195,16 @@ fn get_embedded_comfy_metadata_blocking(file_path: String) -> EmbeddedComfyMetad
 
 const MAX_IMAGE_CAPTION_BYTES: u64 = 1024 * 1024;
 
+fn read_bounded_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "file exceeds its safe read limit"));
+    }
+    Ok(bytes)
+}
+
 fn decode_image_caption(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(&bytes[3..]).into_owned();
@@ -250,8 +269,22 @@ fn get_image_caption_blocking(file_path: String) -> Result<Option<ImageCaption>,
                 sidecar_path.display()
             ));
         }
+        image_resource_policy::validate_metadata_bytes(
+            metadata.len(),
+            &image_resource_policy::PolicyLimits::for_operation(
+                image_resource_policy::OperationClass::MetadataOnly,
+            ),
+        )
+        .map_err(|error| {
+            policy_error(image_resource_policy::OperationClass::MetadataOnly, error)
+        })?;
 
-        let bytes = fs::read(&sidecar_path).map_err(|error| {
+        let bytes = read_bounded_file(&sidecar_path, MAX_IMAGE_CAPTION_BYTES).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidData {
+                image_resource_policy::record_rejection(
+                    image_resource_policy::OperationClass::MetadataOnly,
+                );
+            }
             format!("Failed to read image caption '{}': {}", sidecar_path.display(), error)
         })?;
         let text = decode_image_caption(&bytes).trim().to_string();
@@ -325,12 +358,55 @@ pub struct CropRect {
 
 const MAX_SCALE_DIMENSION: u32 = 65_535;
 const MAX_SCALE_PIXELS: u64 = 50_000_000;
-const SCALE_DECODED_BYTES_PER_PIXEL: u64 = 8;
-const MAX_SCALE_WORKING_BYTES: u64 = 800 * 1024 * 1024;
 const SCALE_EXPORT_INPUT_EXTENSIONS: &[&str] =
     &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "avif"];
 const SCALE_EXPORT_OUTPUT_EXTENSIONS: &[&str] =
     &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"];
+
+fn policy_error(
+    operation: image_resource_policy::OperationClass,
+    error: image_resource_policy::ResourcePolicyError,
+) -> String {
+    image_resource_policy::record_rejection(operation);
+    error.to_string()
+}
+
+fn validate_source_for_operation(
+    source: &image_resource_policy::ImageSource,
+    operation: image_resource_policy::OperationClass,
+) -> Result<(u32, u32), String> {
+    let decoder = image_resource_policy::decoder_for_source(source, operation)
+        .map_err(|error| format!("Failed to inspect image dimensions: {error}"))?;
+    let (width, height) = decoder.dimensions();
+    image_resource_policy::validate_decoder_memory_with_source(
+        width,
+        height,
+        decoder.total_bytes(),
+        source.encoded_len(),
+        operation,
+    )
+    .map_err(|error| policy_error(operation, error))?;
+    Ok((width, height))
+}
+
+fn open_image_with_resource_limits(
+    source: &image_resource_policy::ImageSource,
+    operation: image_resource_policy::OperationClass,
+) -> Result<image::DynamicImage, String> {
+    let decoder = image_resource_policy::decoder_for_source(source, operation)
+        .map_err(|error| format!("Failed to inspect image: {error}"))?;
+    let (width, height) = decoder.dimensions();
+    image_resource_policy::validate_decoder_memory_with_source(
+        width,
+        height,
+        decoder.total_bytes(),
+        source.encoded_len(),
+        operation,
+    )
+    .map_err(|error| policy_error(operation, error))?;
+    image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("Failed to decode image: {error}"))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RotationSaveStrategy {
@@ -789,6 +865,12 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
+    image_resource_policy::validate_file_size(
+        path,
+        image_resource_policy::OperationClass::MetadataOnly,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::MetadataOnly, error))?;
+
     let file_metadata =
         fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
     let file_size_bytes = file_metadata.len();
@@ -825,6 +907,15 @@ fn get_image_metadata_blocking(file_path: String) -> Result<ImageMetadata, Strin
     } else {
         rust_or_fallback_dimensions(path, codec_capability.metadata, &mut codec_backend)
     };
+
+    if let (Some(width), Some(height)) = (width, height) {
+        let limits = image_resource_policy::PolicyLimits::for_operation(
+            image_resource_policy::OperationClass::MetadataOnly,
+        );
+        image_resource_policy::validate_dimensions(width, height, &limits).map_err(|error| {
+            policy_error(image_resource_policy::OperationClass::MetadataOnly, error)
+        })?;
+    }
 
     Ok(ImageMetadata {
         width,
@@ -1106,25 +1197,13 @@ fn write_high_quality_image(
 }
 
 fn restore_normal_orientation(
-    source_path: &Path,
+    metadata: Option<&[u8]>,
     output_path: &Path,
     context: &str,
 ) -> Result<(), String> {
-    let extension = source_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_lowercase())
-        .unwrap_or_default();
-
-    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
-        return Ok(());
-    }
-
-    if let Ok(mut metadata) = Metadata::new_from_path(source_path) {
-        metadata.set_tag(ExifTag::Orientation(vec![1]));
-        metadata
-            .write_to_file(output_path)
-            .map_err(|e| format!("Failed to write image metadata after {}: {}", context, e))?;
+    if let Some(metadata) = metadata {
+        crate::image_metadata::write_edit_exif(output_path, metadata)
+            .map_err(|error| format!("Failed to preserve metadata after {context}: {error}"))?;
     }
 
     Ok(())
@@ -1187,6 +1266,14 @@ fn get_preview_image_blocking(
     if !path.is_file() {
         return Err(format!("'{}' is not a valid file", file_path));
     }
+
+    image_resource_policy::validate_requested_dimension(
+        max_dimension,
+        image_resource_policy::OperationClass::Preview,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Preview, error))?;
+    image_resource_policy::validate_file_size(path, image_resource_policy::OperationClass::Preview)
+        .map_err(|error| policy_error(image_resource_policy::OperationClass::Preview, error))?;
 
     let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
     let preview_cache_dir = app_cache_dir.join("previews");
@@ -1254,7 +1341,10 @@ fn tile_source_dimensions(path: &Path) -> Result<(u32, u32), String> {
             .map_err(|e| format!("Failed to read native tile source dimensions: {}", e));
     }
 
-    thumbnails::oriented_image_dimensions(path)
+    thumbnails::oriented_image_dimensions_for_operation(
+        path,
+        image_resource_policy::OperationClass::Tile,
+    )
 }
 
 #[tauri::command]
@@ -1690,7 +1780,17 @@ pub async fn transfer_images_to_folder(
 
 /// Copy an image file to the OS clipboard
 fn copy_image_to_clipboard_blocking(file_path: String) -> Result<(), String> {
-    let img = image::open(&file_path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{}' is not a valid file", file_path));
+    }
+    let source = image_resource_policy::ImageSource::open(
+        path,
+        image_resource_policy::OperationClass::Clipboard,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Clipboard, error))?;
+    let img =
+        open_image_with_resource_limits(&source, image_resource_policy::OperationClass::Clipboard)?;
     let rgba = img.into_rgba8();
     let (width, height) = rgba.dimensions();
     let image_data = arboard::ImageData {
@@ -1773,26 +1873,72 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
+    let source = image_resource_policy::ImageSource::open(
+        path,
+        image_resource_policy::OperationClass::Rotate,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Rotate, error))?;
     let extension =
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+
+    // Extract from the admitted descriptor before any pixel/encoder allocation.
+    // Metadata policy errors are terminal, never a lossless-to-lossy fallback.
+    let metadata = if matches!(
+        rotation_save_strategy(&extension, rotation_degrees),
+        Some(RotationSaveStrategy::Reencode | RotationSaveStrategy::LosslessJpegThenFallback)
+    ) {
+        crate::image_metadata::read_edit_exif(&source)?
+    } else {
+        None
+    };
+    let (source_width, source_height) =
+        validate_source_for_operation(&source, image_resource_policy::OperationClass::Rotate)?;
 
     match rotation_save_strategy(&extension, rotation_degrees) {
         None => Ok(()),
         Some(RotationSaveStrategy::Unsupported) => {
             Err(format!("Saving rotation is not supported for {} files", extension.to_uppercase()))
         }
-        Some(RotationSaveStrategy::Reencode) => {
-            save_rotated_image_by_reencoding(path, rotation_degrees, "rotation")
-        }
+        Some(RotationSaveStrategy::Reencode) => save_rotated_image_by_reencoding(
+            source,
+            path,
+            rotation_degrees,
+            "rotation",
+            metadata.as_deref(),
+        ),
         Some(RotationSaveStrategy::LosslessJpegThenFallback) => {
-            if let Err(lossless_error) = save_lossless_jpeg_rotation(path, rotation_degrees) {
-                eprintln!(
+            image_resource_policy::validate_lossless_rotation_memory(
+                source_width,
+                source_height,
+                source.encoded_len(),
+            )
+            .map_err(|error| policy_error(image_resource_policy::OperationClass::Rotate, error))?;
+            match save_lossless_jpeg_rotation(&source, path, rotation_degrees) {
+                Err(lossless_error) => {
+                    eprintln!(
                     "Lossless JPEG rotation failed for '{}': {}. Falling back to pixel re-encode.",
                     file_path, lossless_error
                 );
-                save_rotated_image_by_reencoding(path, rotation_degrees, "rotation")
-            } else {
-                Ok(())
+                    save_rotated_image_by_reencoding(
+                        source,
+                        path,
+                        rotation_degrees,
+                        "rotation",
+                        metadata.as_deref(),
+                    )
+                }
+                Ok(temp_path) => {
+                    restore_normal_orientation(
+                        metadata.as_deref(),
+                        &temp_path,
+                        "lossless rotation",
+                    )?;
+                    let result = source.replace(&temp_path, path);
+                    if result.is_err() {
+                        let _ = fs::remove_file(temp_path);
+                    }
+                    result
+                }
             }
         }
     }
@@ -1808,45 +1954,42 @@ pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Res
     .map_err(|err| format!("Rotation worker failed: {}", err))?
 }
 
-fn save_lossless_jpeg_rotation(path: &Path, rotation_degrees: i32) -> Result<(), String> {
-    let jpeg_bytes =
-        fs::read(path).map_err(|e| format!("Failed to read JPEG for rotation: {}", e))?;
+fn save_lossless_jpeg_rotation(
+    source: &image_resource_policy::ImageSource,
+    path: &Path,
+    rotation_degrees: i32,
+) -> Result<PathBuf, String> {
+    let operation = image_resource_policy::OperationClass::Rotate;
+    let jpeg_bytes = source.read_bytes().map_err(|error| policy_error(operation, error))?;
     let rotated_bytes = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, rotation_degrees)?;
     let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
 
     fs::write(&temp_path, rotated_bytes)
         .map_err(|e| format!("Failed to write temporary rotated JPEG: {}", e))?;
+    drop(jpeg_bytes);
 
-    if let Err(err) = restore_normal_orientation(path, &temp_path, "lossless rotation") {
-        let _ = fs::remove_file(&temp_path);
-        return Err(err);
-    }
-
-    if let Err(err) = replace_file_safely(&temp_path, path) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(err);
-    }
-
-    Ok(())
+    Ok(temp_path)
 }
 
 fn save_rotated_image_by_reencoding(
+    source: image_resource_policy::ImageSource,
     path: &Path,
     rotation_degrees: i32,
     context_label: &str,
+    metadata: Option<&[u8]>,
 ) -> Result<(), String> {
-    let img = image::open(path).map_err(|e| format!("Failed to open image for saving: {}", e))?;
+    let img =
+        open_image_with_resource_limits(&source, image_resource_policy::OperationClass::Rotate)
+            .map_err(|error| format!("Failed to open image for saving: {error}"))?;
     let rotated = apply_rotation(img, rotation_degrees)?;
     let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
 
     write_dynamic_image(&rotated, &temp_path, "Failed to save rotated image")?;
+    drop(rotated);
 
-    if let Err(err) = restore_normal_orientation(path, &temp_path, context_label) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(err);
-    }
+    restore_normal_orientation(metadata, &temp_path, context_label)?;
 
-    if let Err(err) = replace_file_safely(&temp_path, path) {
+    if let Err(err) = source.replace(&temp_path, path) {
         let _ = fs::remove_file(&temp_path);
         return Err(err);
     }
@@ -1919,7 +2062,7 @@ fn validate_scale_dimensions(width: u32, height: u32) -> Result<(), String> {
         ));
     }
 
-    let pixel_count = scale_pixel_count(width, height)?;
+    let pixel_count = u64::from(width) * u64::from(height);
     if pixel_count > MAX_SCALE_PIXELS {
         return Err(format!(
             "Scaled export is limited to {} megapixels",
@@ -1927,61 +2070,14 @@ fn validate_scale_dimensions(width: u32, height: u32) -> Result<(), String> {
         ));
     }
 
-    Ok(())
-}
-
-fn scale_pixel_count(width: u32, height: u32) -> Result<u64, String> {
-    u64::from(width)
-        .checked_mul(u64::from(height))
-        .ok_or_else(|| "Scaled image dimensions are too large".to_string())
-}
-
-fn add_scale_working_bytes(
-    total: &mut u64,
-    pixel_count: u64,
-    buffer_count: u64,
-) -> Result<(), String> {
-    let bytes = pixel_count
-        .checked_mul(buffer_count)
-        .and_then(|value| value.checked_mul(SCALE_DECODED_BYTES_PER_PIXEL))
-        .ok_or_else(|| "Scaled export would require too much memory".to_string())?;
-    *total = total
-        .checked_add(bytes)
-        .ok_or_else(|| "Scaled export would require too much memory".to_string())?;
-    Ok(())
-}
-
-fn validate_scale_working_memory(
-    source_width: u32,
-    source_height: u32,
-    width: u32,
-    height: u32,
-    smoothing: f32,
-    sharpening: f32,
-) -> Result<(), String> {
-    let source_pixels = scale_pixel_count(source_width, source_height)?;
-    let target_pixels = scale_pixel_count(width, height)?;
-    let source_buffer_count = if normalized_adjustment(smoothing) > 0.0 { 2 } else { 1 };
-    let target_buffer_count = if normalized_adjustment(sharpening) > 0.0 { 2 } else { 1 };
-
-    let mut estimated_working_bytes = 0_u64;
-    add_scale_working_bytes(&mut estimated_working_bytes, source_pixels, source_buffer_count)?;
-    add_scale_working_bytes(&mut estimated_working_bytes, target_pixels, target_buffer_count)?;
-
-    if estimated_working_bytes > MAX_SCALE_WORKING_BYTES {
-        return Err(format!(
-            "Scaled export would require about {} MB of working memory; limit is {} MB",
-            estimated_working_bytes.div_ceil(1024 * 1024),
-            MAX_SCALE_WORKING_BYTES / (1024 * 1024)
-        ));
-    }
+    let limits = image_resource_policy::PolicyLimits::for_operation(
+        image_resource_policy::OperationClass::ScaledExport,
+    );
+    image_resource_policy::validate_output_dimensions(width, height, &limits).map_err(|error| {
+        policy_error(image_resource_policy::OperationClass::ScaledExport, error)
+    })?;
 
     Ok(())
-}
-
-fn read_scale_source_dimensions(input_path: &Path) -> Result<(u32, u32), String> {
-    image::image_dimensions(input_path)
-        .map_err(|e| format!("Failed to read source image dimensions: {}", e))
 }
 
 fn path_extension_lowercase(path: &Path) -> String {
@@ -2094,18 +2190,23 @@ fn save_scaled_copy_blocking(
     let output_path_ref = Path::new(&output_path);
     validate_copy_output_path(input_path, output_path_ref, true)?;
     validate_scaled_export_output_path(output_path_ref)?;
-    let (source_width, source_height) = read_scale_source_dimensions(input_path)?;
-    validate_scale_working_memory(
-        source_width,
-        source_height,
-        width,
-        height,
-        smoothing,
-        sharpening,
-    )?;
-
-    let img =
-        image::open(input_path).map_err(|e| format!("Failed to open image for scaling: {}", e))?;
+    let operation = image_resource_policy::OperationClass::ScaledExport;
+    let source = image_resource_policy::ImageSource::open(input_path, operation)
+        .map_err(|error| policy_error(operation, error))?;
+    let decoder = image_resource_policy::decoder_for_source(&source, operation)
+        .map_err(|error| format!("Failed to inspect source image: {error}"))?;
+    let (source_width, source_height) = decoder.dimensions();
+    image_resource_policy::validate_export_memory_with_source(
+        (source_width, source_height),
+        decoder.total_bytes(),
+        source.encoded_len(),
+        u64::from(decoder.color_type().bytes_per_pixel()),
+        (width, height),
+        (normalized_adjustment(smoothing) > 0.0, normalized_adjustment(sharpening) > 0.0),
+    )
+    .map_err(|error| policy_error(operation, error))?;
+    let img = image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("Failed to decode source image: {error}"))?;
     let scaled = apply_resize_adjustments(img, width, height, smoothing, sharpening);
     let temp_path = build_unique_sibling_path(output_path_ref, "lightframe-scale")?;
 
@@ -2172,12 +2273,34 @@ fn save_cropped_copy_blocking(
         return Err("Output path already exists; choose a new file name".to_string());
     }
 
-    let img =
-        image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
+    let source = image_resource_policy::ImageSource::open(
+        input_path,
+        image_resource_policy::OperationClass::Crop,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Crop, error))?;
+    let img = open_image_with_resource_limits(&source, image_resource_policy::OperationClass::Crop)
+        .map_err(|error| format!("Failed to open image for crop: {error}"))?;
     let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
     let (image_width, image_height) = rotated.dimensions();
 
     validate_crop_rect(crop_rect, image_width, image_height)?;
+    let crop_limits = image_resource_policy::PolicyLimits::for_operation(
+        image_resource_policy::OperationClass::Crop,
+    );
+    image_resource_policy::validate_output_dimensions(
+        crop_rect.width,
+        crop_rect.height,
+        &crop_limits,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Crop, error))?;
+    image_resource_policy::validate_working_memory(
+        crop_rect.width,
+        crop_rect.height,
+        8,
+        2,
+        &crop_limits,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Crop, error))?;
 
     let cropped = image::imageops::crop_imm(
         &rotated,
@@ -2207,17 +2330,35 @@ fn overwrite_with_crop_blocking(
         return Err(format!("'{}' is not a valid file", file_path));
     }
 
-    let extension = input_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_lowercase())
-        .unwrap_or_default();
-
+    let source = image_resource_policy::ImageSource::open(
+        input_path,
+        image_resource_policy::OperationClass::Overwrite,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Overwrite, error))?;
+    let metadata = crate::image_metadata::read_edit_exif(&source)?;
     let img =
-        image::open(input_path).map_err(|e| format!("Failed to open image for crop: {}", e))?;
+        open_image_with_resource_limits(&source, image_resource_policy::OperationClass::Overwrite)
+            .map_err(|error| format!("Failed to open image for crop: {error}"))?;
     let rotated = apply_rotation(img, rotation_degrees.unwrap_or(0))?;
     let (image_width, image_height) = rotated.dimensions();
     validate_crop_rect(crop_rect, image_width, image_height)?;
+    let crop_limits = image_resource_policy::PolicyLimits::for_operation(
+        image_resource_policy::OperationClass::Overwrite,
+    );
+    image_resource_policy::validate_output_dimensions(
+        crop_rect.width,
+        crop_rect.height,
+        &crop_limits,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Overwrite, error))?;
+    image_resource_policy::validate_working_memory(
+        crop_rect.width,
+        crop_rect.height,
+        8,
+        2,
+        &crop_limits,
+    )
+    .map_err(|error| policy_error(image_resource_policy::OperationClass::Overwrite, error))?;
 
     let cropped = image::imageops::crop_imm(
         &rotated,
@@ -2229,7 +2370,6 @@ fn overwrite_with_crop_blocking(
     .to_image();
 
     let temp_path = build_crop_temp_path(input_path)?;
-    let metadata = Metadata::new_from_path(input_path).ok();
 
     if let Err(err) =
         write_cropped_image(&cropped, &temp_path, "Failed to write temporary cropped image")
@@ -2238,16 +2378,11 @@ fn overwrite_with_crop_blocking(
         return Err(err);
     }
 
-    if matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
-        if let Some(mut current_metadata) = metadata {
-            current_metadata.set_tag(ExifTag::Orientation(vec![1]));
-            if let Err(err) = current_metadata.write_to_file(&temp_path) {
-                eprintln!("Failed to preserve metadata for cropped overwrite: {}", err);
-            }
-        }
-    }
+    drop(cropped);
+    drop(rotated);
+    restore_normal_orientation(metadata.as_deref(), &temp_path, "crop")?;
 
-    if let Err(err) = replace_file_safely(&temp_path, input_path) {
+    if let Err(err) = source.replace(&temp_path, input_path) {
         let _ = fs::remove_file(&temp_path);
         return Err(err);
     }
@@ -2346,6 +2481,156 @@ mod tests {
     use std::fs::File;
     use tempfile::tempdir;
 
+    #[test]
+    fn edit_metadata_policy_rejection_preserves_original_without_temporary_output() {
+        use crate::image_metadata::{
+            tests::{compressed_png_text, insert_png_text},
+            with_edit_metadata_test_limit,
+        };
+        for rotate in [false, true] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("original.png");
+            image::RgbImage::new(16, 12).save(&path).unwrap();
+            insert_png_text(
+                &path,
+                b"zTXt",
+                &compressed_png_text(&[b'a'; 4_096], b"XML:com.adobe.xmp"),
+            );
+            let original = fs::read(&path).unwrap();
+            let result = with_edit_metadata_test_limit(256, || {
+                if rotate {
+                    save_rotated_image_blocking(path.to_string_lossy().into_owned(), 90)
+                } else {
+                    overwrite_with_crop_blocking(
+                        path.to_string_lossy().into_owned(),
+                        CropRect { x: 0, y: 0, width: 4, height: 4 },
+                        None,
+                    )
+                }
+            });
+            assert!(result.unwrap_err().contains("safe read budget"));
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn edits_preserve_normal_exif_in_jpeg_png_and_webp() {
+        for extension in ["jpg", "png", "webp"] {
+            for rotate in [false, true] {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join(format!("original.{extension}"));
+                image::RgbImage::new(16, 16).save(&path).unwrap();
+                crate::image_metadata::write_edit_exif(
+                    &path,
+                    &crate::image_metadata::tests::edit_exif_fixture(),
+                )
+                .unwrap();
+                assert!(
+                    path.is_file(),
+                    "fixture missing after metadata write: {extension} rotate={rotate}: {:?}",
+                    fs::read_dir(dir.path())
+                        .unwrap()
+                        .map(|entry| entry.unwrap().file_name())
+                        .collect::<Vec<_>>()
+                );
+                if rotate {
+                    save_rotated_image_blocking(path.to_string_lossy().into_owned(), 90).unwrap();
+                } else {
+                    overwrite_with_crop_blocking(
+                        path.to_string_lossy().into_owned(),
+                        CropRect { x: 0, y: 0, width: 4, height: 4 },
+                        None,
+                    )
+                    .unwrap();
+                }
+                let mut file = std::io::BufReader::new(fs::File::open(&path).unwrap());
+                let metadata = exif::Reader::new().read_from_container(&mut file).unwrap();
+                assert_eq!(
+                    metadata
+                        .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+                        .unwrap()
+                        .value
+                        .get_uint(0),
+                    Some(1)
+                );
+                assert_eq!(
+                    metadata
+                        .get_field(exif::Tag::Make, exif::In::PRIMARY)
+                        .unwrap()
+                        .display_value()
+                        .to_string(),
+                    "\"CAM\""
+                );
+                assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_edit_metadata_returns_error_without_publishing() {
+        for rotate in [false, true] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("malformed.png");
+            image::RgbImage::new(8, 8).save(&path).unwrap();
+            crate::image_metadata::tests::insert_png_text(
+                &path,
+                b"zTXt",
+                b"Raw profile type exif\0\0invalid zlib",
+            );
+            let original = fs::read(&path).unwrap();
+            let result = if rotate {
+                save_rotated_image_blocking(path.to_string_lossy().into_owned(), 90)
+            } else {
+                overwrite_with_crop_blocking(
+                    path.to_string_lossy().into_owned(),
+                    CropRect { x: 0, y: 0, width: 4, height: 4 },
+                    None,
+                )
+            };
+            assert!(result.unwrap_err().contains("preserve image metadata safely"));
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_temp_collision_does_not_delete_concurrent_file_or_publish_original() {
+        use image_resource_policy::PublicationStage;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("original.png");
+        image::RgbImage::new(8, 8).save(&path).unwrap();
+        crate::image_metadata::write_edit_exif(
+            &path,
+            &crate::image_metadata::tests::edit_exif_fixture(),
+        )
+        .unwrap();
+        let original = fs::read(&path).unwrap();
+        let paths = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let recorded = paths.clone();
+        image_resource_policy::set_publication_hook(move |stage, destination, backup| {
+            if stage == PublicationStage::OriginalMoved {
+                fs::write(destination, b"concurrent temporary name").unwrap();
+                *recorded.borrow_mut() = Some((destination.to_path_buf(), backup.to_path_buf()));
+            }
+            false
+        });
+        let result = overwrite_with_crop_blocking(
+            path.to_string_lossy().into_owned(),
+            CropRect { x: 0, y: 0, width: 4, height: 4 },
+            None,
+        );
+        image_resource_policy::clear_publication_hook();
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let paths = paths.borrow();
+        let (destination, backup) = paths.as_ref().unwrap();
+        assert_eq!(fs::read(destination).unwrap(), b"concurrent temporary name");
+        assert_eq!(image::open(backup).unwrap().dimensions(), (4, 4));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+
     fn make_test_jpeg(width: usize, height: usize, subsampling: Subsampling) -> Vec<u8> {
         let mut pixels = vec![0_u8; width * height * 3];
         for y in 0..height {
@@ -2358,6 +2643,282 @@ mod tests {
         }
 
         compress(&pixels, width, height, PixelFormat::Rgb, 90, subsampling).unwrap()
+    }
+
+    fn make_jpeg_header_with_dimensions(width: u16, height: u16) -> Vec<u8> {
+        // Keep a valid compressed payload, changing only the SOF dimensions. The image crate
+        // can inspect this header without allocating the dimensions advertised by the payload.
+        let mut jpeg = make_test_jpeg(16, 16, Subsampling::S420);
+        let sof = jpeg
+            .windows(2)
+            .position(|marker| marker == [0xff, 0xc0])
+            .expect("test JPEG must contain a baseline SOF marker");
+        jpeg[sof + 5..sof + 7].copy_from_slice(&height.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&width.to_be_bytes());
+        jpeg
+    }
+
+    fn make_large_constant_jpeg() -> Vec<u8> {
+        // Compact valid 4:2:0 baseline JPEG matching the large-image tile regression. The
+        // entropy payload is constant-color data, so the fixture exercises 80 MP headers
+        // without allocating an 80 MP RGB source in the test process.
+        fn segment(bytes: &mut Vec<u8>, marker: u8, payload: &[u8]) {
+            bytes.extend_from_slice(&[0xff, marker]);
+            bytes.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            bytes.extend_from_slice(payload);
+        }
+        let mut jpeg = vec![0xff, 0xd8];
+        let mut quant = vec![0];
+        quant.extend([1; 64]);
+        segment(&mut jpeg, 0xdb, &quant);
+        let mut frame = vec![8];
+        frame.extend_from_slice(&8000u16.to_be_bytes());
+        frame.extend_from_slice(&10000u16.to_be_bytes());
+        frame.extend_from_slice(&[3, 1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0]);
+        segment(&mut jpeg, 0xc0, &frame);
+        for class in [0, 0x10] {
+            let mut table = vec![class, 1];
+            table.extend([0; 15]);
+            table.push(0);
+            segment(&mut jpeg, 0xc4, &table);
+        }
+        segment(&mut jpeg, 0xda, &[3, 1, 0, 2, 0, 3, 0, 0, 63, 0]);
+        jpeg.resize(jpeg.len() + 468_750, 0);
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+        jpeg
+    }
+
+    fn write_float_tiff_header(path: &Path, width: u32, height: u32) {
+        image::DynamicImage::ImageRgba32F(image::ImageBuffer::from_pixel(
+            2,
+            2,
+            image::Rgba([0.5, 0.25, 0.75, 1.0]),
+        ))
+        .save(path)
+        .unwrap();
+        let mut bytes = fs::read(path).unwrap();
+        assert_eq!(&bytes[..2], b"II");
+        let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+        for index in 0..count {
+            let offset = ifd + 2 + index * 12;
+            let tag = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+            if tag == 256 || tag == 257 {
+                bytes[offset + 2..offset + 4].copy_from_slice(&4u16.to_le_bytes());
+                bytes[offset + 8..offset + 12]
+                    .copy_from_slice(&(if tag == 256 { width } else { height }).to_le_bytes());
+            }
+        }
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn float_tiff_edit_and_export_admission_uses_actual_decoder_before_pixels() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("float.tiff");
+        let output = dir.path().join("output.png");
+        write_float_tiff_header(&path, 6000, 6000);
+        let original = fs::read(&path).unwrap();
+        let input = path.to_string_lossy().to_string();
+        let crop = CropRect { x: 0, y: 0, width: 2, height: 2 };
+        for result in [
+            copy_image_to_clipboard_blocking(input.clone()),
+            save_rotated_image_blocking(input.clone(), 90),
+            save_cropped_copy_blocking(
+                input.clone(),
+                crop,
+                output.to_string_lossy().to_string(),
+                None,
+            ),
+            overwrite_with_crop_blocking(input.clone(), crop, None),
+            save_scaled_copy_blocking(
+                input,
+                output.to_string_lossy().to_string(),
+                100,
+                100,
+                0.0,
+                0.0,
+            ),
+        ] {
+            let error = result.unwrap_err();
+            assert!(error.contains("working memory"), "{error}");
+            assert!(!error.contains(&path.to_string_lossy().to_string()));
+        }
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!output.exists());
+        // The same sample format at ordinary dimensions remains usable.
+        image::DynamicImage::ImageRgba32F(image::ImageBuffer::from_pixel(
+            16,
+            12,
+            image::Rgba([0.5, 0.25, 0.75, 1.0]),
+        ))
+        .save(&path)
+        .unwrap();
+        save_cropped_copy_blocking(
+            path.to_string_lossy().to_string(),
+            crop,
+            output.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(image::open(output).unwrap().dimensions(), (2, 2));
+    }
+
+    #[test]
+    fn crop_source_growth_is_terminal_before_decoder_and_keeps_output_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("growing.png");
+        image::RgbImage::new(2, 2).save(&path).unwrap();
+        image_resource_policy::before_next_source_open(|path| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_len(512 * 1024 * 1024 + 1)
+                .unwrap();
+        });
+        let before = image_resource_policy::rejection_count();
+        let decoders = image_resource_policy::DECODER_STARTS.with(|count| count.get());
+        let output = dir.path().join("output.png");
+        let error = save_cropped_copy_blocking(
+            path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 1, height: 1 },
+            output.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("Encoded image size"));
+        assert!(!error.contains(&path.to_string_lossy().to_string()));
+        assert!(image_resource_policy::rejection_count() > before);
+        assert_eq!(image_resource_policy::DECODER_STARTS.with(|count| count.get()), decoders);
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn preview_source_growth_is_terminal_before_native_or_rust_decode() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("growing.dng");
+        fs::write(&path, b"small source").unwrap();
+        image_resource_policy::before_next_source_open(|path| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_len(512 * 1024 * 1024 + 1)
+                .unwrap();
+        });
+        let before = image_resource_policy::rejection_count();
+        let decoders = image_resource_policy::DECODER_STARTS.with(|count| count.get());
+        let error = get_preview_image_blocking(
+            path.to_string_lossy().to_string(),
+            512,
+            None,
+            dir.path().join("cache"),
+        )
+        .unwrap_err();
+        assert!(error.contains("Encoded image size"));
+        assert!(!error.contains(&path.to_string_lossy().to_string()));
+        assert!(image_resource_policy::rejection_count() > before);
+        assert_eq!(image_resource_policy::DECODER_STARTS.with(|count| count.get()), decoders);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn edit_publication_preserves_collisions_rolls_back_and_reports_committed_cleanup_failure() {
+        use image_resource_policy::PublicationStage;
+        use std::{cell::RefCell, rc::Rc};
+        #[derive(Clone, Copy, PartialEq)]
+        enum Scenario {
+            Success,
+            PublishCollision,
+            Rollback,
+            RollbackCollision,
+            CleanupFailure,
+        }
+        for rotate in [false, true] {
+            for scenario in [
+                Scenario::Success,
+                Scenario::PublishCollision,
+                Scenario::Rollback,
+                Scenario::RollbackCollision,
+                Scenario::CleanupFailure,
+            ] {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("original.png");
+                image::RgbImage::new(12, 8).save(&path).unwrap();
+                let original = fs::read(&path).unwrap();
+                let recovery = Rc::new(RefCell::new(None::<PathBuf>));
+                let captured = Rc::clone(&recovery);
+                image_resource_policy::set_publication_hook(move |stage, destination, backup| {
+                    *captured.borrow_mut() = Some(backup.to_path_buf());
+                    if stage == PublicationStage::OriginalMoved
+                        && scenario == Scenario::PublishCollision
+                        || stage == PublicationStage::BeforeRollback
+                            && scenario == Scenario::RollbackCollision
+                    {
+                        fs::write(destination, b"concurrent destination").unwrap();
+                    }
+                    stage == PublicationStage::OriginalMoved
+                        && matches!(scenario, Scenario::Rollback | Scenario::RollbackCollision)
+                        || stage == PublicationStage::BeforeCleanup
+                            && scenario == Scenario::CleanupFailure
+                });
+                let publications =
+                    image_resource_policy::PUBLICATION_ATTEMPTS.with(|count| count.get());
+                let rollbacks = image_resource_policy::ROLLBACK_ATTEMPTS.with(|count| count.get());
+                let result = if rotate {
+                    save_rotated_image_blocking(path.to_string_lossy().to_string(), 90)
+                } else {
+                    overwrite_with_crop_blocking(
+                        path.to_string_lossy().to_string(),
+                        CropRect { x: 0, y: 0, width: 4, height: 3 },
+                        None,
+                    )
+                };
+                image_resource_policy::clear_publication_hook();
+                let backup = recovery.borrow().clone().expect("publication hook must run");
+                assert_eq!(
+                    image_resource_policy::PUBLICATION_ATTEMPTS.with(|count| count.get()),
+                    publications + 1
+                );
+                match scenario {
+                    Scenario::Success | Scenario::CleanupFailure => {
+                        assert!(result.is_ok(), "{result:?}");
+                        assert_eq!(
+                            image::open(&path).unwrap().dimensions(),
+                            if rotate { (8, 12) } else { (4, 3) }
+                        );
+                        assert_eq!(
+                            image_resource_policy::ROLLBACK_ATTEMPTS.with(|count| count.get()),
+                            rollbacks
+                        );
+                        if scenario == Scenario::CleanupFailure {
+                            assert_eq!(fs::read(backup).unwrap(), original);
+                        } else {
+                            assert!(!backup.exists());
+                        }
+                    }
+                    Scenario::Rollback => {
+                        assert!(result.is_err());
+                        assert_eq!(fs::read(&path).unwrap(), original);
+                        assert!(!backup.exists());
+                        assert_eq!(
+                            image_resource_policy::ROLLBACK_ATTEMPTS.with(|count| count.get()),
+                            rollbacks + 1
+                        );
+                    }
+                    Scenario::PublishCollision | Scenario::RollbackCollision => {
+                        assert!(result.is_err());
+                        assert_eq!(fs::read(&path).unwrap(), b"concurrent destination");
+                        assert_eq!(fs::read(backup).unwrap(), original);
+                        assert_eq!(
+                            image_resource_policy::ROLLBACK_ATTEMPTS.with(|count| count.get()),
+                            rollbacks + 1
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn add_exif_orientation(path: &Path, orientation: u16) {
@@ -3044,6 +3605,74 @@ mod tests {
     }
 
     #[test]
+    fn test_preview_policy_rejects_frontend_dimension_before_decode() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("malformed.jpg");
+        let cache_dir = dir.path().join("cache");
+        fs::write(&image_path, b"not a JPEG").unwrap();
+
+        let error = get_preview_image_blocking(
+            image_path.to_string_lossy().to_string(),
+            8_193,
+            None,
+            cache_dir.clone(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("safe limit of 8192"));
+        assert!(!cache_dir.exists());
+    }
+
+    #[test]
+    fn test_preview_policy_rejects_encoded_bytes_before_decode() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("oversized.jpg");
+        let cache_dir = dir.path().join("cache");
+        let file = File::create(&image_path).unwrap();
+        file.set_len(512 * 1024 * 1024 + 1).unwrap();
+
+        let error = get_preview_image_blocking(
+            image_path.to_string_lossy().to_string(),
+            2_048,
+            None,
+            cache_dir,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Encoded image size"));
+    }
+
+    #[test]
+    fn test_edit_policy_rejects_oversized_header_before_decode_and_preserves_files() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("oversized.jpg");
+        let output_path = dir.path().join("cropped.jpg");
+        let original = make_jpeg_header_with_dimensions(20_000, 20_000);
+        fs::write(&image_path, &original).unwrap();
+
+        let rotate_error =
+            save_rotated_image_blocking(image_path.to_string_lossy().to_string(), 90).unwrap_err();
+        assert!(rotate_error.contains("pixel count") || rotate_error.contains("working memory"));
+
+        let clipboard_error =
+            copy_image_to_clipboard_blocking(image_path.to_string_lossy().to_string()).unwrap_err();
+        assert!(
+            clipboard_error.contains("pixel count") || clipboard_error.contains("working memory")
+        );
+
+        let crop_error = save_cropped_copy_blocking(
+            image_path.to_string_lossy().to_string(),
+            CropRect { x: 0, y: 0, width: 10, height: 10 },
+            output_path.to_string_lossy().to_string(),
+            None,
+        )
+        .unwrap_err();
+        assert!(crop_error.contains("pixel count") || crop_error.contains("working memory"));
+        assert_eq!(fs::read(&image_path).unwrap(), original);
+        assert!(!output_path.exists());
+    }
+
+    #[test]
     fn test_get_preview_image_blocking_does_not_upscale_small_images() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("small.png");
@@ -3093,6 +3722,85 @@ mod tests {
         assert_eq!(tile.dimensions(), (128, 224));
         assert_eq!(tile_asset.width, Some(128));
         assert_eq!(tile_asset.height, Some(224));
+    }
+
+    #[test]
+    fn large_jpeg_metadata_dimensions_use_header_probe_without_full_decode_budget() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large-header.jpg");
+        fs::write(&image_path, make_large_constant_jpeg()).unwrap();
+
+        let metadata =
+            get_image_metadata_blocking(image_path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(metadata.width, Some(10_000));
+        assert_eq!(metadata.height, Some(8_000));
+        assert!(metadata.detail_supported);
+    }
+
+    #[test]
+    fn large_jpeg_tile_command_reaches_cropped_decoder_path() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large-tile.jpg");
+        let cache_dir = dir.path().join("cache");
+        fs::write(&image_path, make_large_constant_jpeg()).unwrap();
+
+        let tile_asset = get_image_tile_blocking(
+            image_path.to_string_lossy().into_owned(),
+            10_000,
+            8_000,
+            128,
+            0,
+            0,
+            cache_dir,
+        )
+        .unwrap();
+        assert_eq!(image::open(&tile_asset.file_path).unwrap().dimensions(), (128, 128));
+    }
+
+    #[test]
+    fn large_jpeg_full_preview_remains_rejected_before_pixel_decode() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large-preview.jpg");
+        let cache_dir = dir.path().join("cache");
+        fs::write(&image_path, make_large_constant_jpeg()).unwrap();
+
+        let error = get_preview_image_blocking(
+            image_path.to_string_lossy().into_owned(),
+            2048,
+            None,
+            cache_dir,
+        )
+        .unwrap_err();
+        assert!(error.contains("working memory") || error.contains("resource size"));
+    }
+
+    #[test]
+    fn tile_header_probe_uses_tile_pixel_ceiling_not_preview_ceiling() {
+        let dir = tempdir().unwrap();
+        let image_path = dir.path().join("large-tile-header.jpg");
+        fs::write(&image_path, make_jpeg_header_with_dimensions(20_000, 15_000)).unwrap();
+
+        assert_eq!(
+            thumbnails::oriented_image_dimensions_for_operation(
+                &image_path,
+                image_resource_policy::OperationClass::Tile,
+            )
+            .unwrap(),
+            (20_000, 15_000)
+        );
+        let metadata =
+            get_image_metadata_blocking(image_path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(metadata.width, Some(20_000));
+        assert_eq!(metadata.height, Some(15_000));
+        assert!(metadata.detail_supported);
+        let preview_error = get_preview_image_blocking(
+            image_path.to_string_lossy().into_owned(),
+            2048,
+            None,
+            dir.path().join("preview-cache"),
+        )
+        .unwrap_err();
+        assert!(preview_error.contains("pixel count") || preview_error.contains("working memory"));
     }
 
     #[test]
@@ -3239,8 +3947,17 @@ mod tests {
 
     #[test]
     fn test_scaled_copy_preflight_rejects_huge_source_dimensions() {
-        let error =
-            validate_scale_working_memory(250_000, 1_000, 3840, 2160, 0.0, 0.0).unwrap_err();
+        let error = image_resource_policy::validate_export_memory(
+            16_000,
+            1_000,
+            256_000_000,
+            16,
+            3840,
+            2160,
+            (false, false),
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("working memory"));
     }

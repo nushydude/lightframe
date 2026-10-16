@@ -49,6 +49,7 @@ const codecHealth: CodecHealthReport = {
     placeholderThumbnailGenerations: 8,
     placeholderPreviewGenerations: 9,
     tileGenerations: 10,
+    resourcePolicyRejections: 0,
   },
 };
 
