@@ -5,6 +5,7 @@ import { applyThemePreference } from '../services/themePreference';
 import { configureImageAssetCache } from '../services/imageAssetCache';
 import { configureThumbnailCache } from '../services/thumbnailCache';
 import { getPerformanceModeProfile } from '../services/performanceMode';
+import { configureNativeMedia } from '../services/nativeMedia';
 import {
   recordStartupFirstImageKnownTelemetry,
   setPerformanceTelemetryEnabled,
@@ -262,6 +263,9 @@ export function useAppWindowTitle({
 export function usePerformanceCacheConfiguration(performanceMode: PerformanceMode) {
   useEffect(() => {
     const profile = getPerformanceModeProfile(performanceMode);
+    void configureNativeMedia(profile.nativeMediaCapacity).catch((error) => {
+      console.warn('Failed to configure native media capacity:', error);
+    });
     configureImageAssetCache({ previewCacheBudgetBytes: profile.previewCacheBudgetBytes });
     configureThumbnailCache({ cacheBudgetBytes: profile.thumbnailCacheBudgetBytes });
   }, [performanceMode]);

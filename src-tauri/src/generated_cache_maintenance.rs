@@ -77,30 +77,40 @@ fn schedule_cache_reconciliation(cache_root: &Path, cleanup: fn(&Path)) {
         return;
     };
 
-    std::thread::spawn(move || {
-        cleanup(&root);
-        let should_reschedule = {
-            let mut registry =
-                cache_maintenance_registry().lock().unwrap_or_else(|error| error.into_inner());
-            registry.scheduled.remove(&root);
-            let current_revision = registry.write_revisions.get(&root).copied().unwrap_or(0);
-            if !should_reschedule_after_reconciliation(schedule_revision, current_revision) {
-                registry.reconciled.insert(root.clone());
-                registry.estimated.insert(root.clone(), (0, 0));
-                false
-            } else {
-                registry.reconciled.remove(&root);
-                registry.estimated.insert(
-                    root.clone(),
-                    (MAX_CACHE_ENTRIES.saturating_add(1), MAX_CACHE_BYTES.saturating_add(1)),
-                );
-                true
+    let scheduled_root = root.clone();
+    let accepted = crate::media_executor::schedule_maintenance(
+        format!("cache:{}", root.display()),
+        move || {
+            cleanup(&root);
+            {
+                let mut registry =
+                    cache_maintenance_registry().lock().unwrap_or_else(|error| error.into_inner());
+                registry.scheduled.remove(&root);
+                let current_revision = registry.write_revisions.get(&root).copied().unwrap_or(0);
+                if !should_reschedule_after_reconciliation(schedule_revision, current_revision) {
+                    registry.reconciled.insert(root.clone());
+                    registry.estimated.insert(root.clone(), (0, 0));
+                } else {
+                    registry.reconciled.remove(&root);
+                    registry.estimated.insert(
+                        root.clone(),
+                        (MAX_CACHE_ENTRIES.saturating_add(1), MAX_CACHE_BYTES.saturating_add(1)),
+                    );
+                }
             }
-        };
-        if should_reschedule {
-            schedule_cache_reconciliation(&root, cleanup);
-        }
-    });
+            // A later access retries if writes raced this scan. Scheduling the same key
+            // from inside its running job would coalesce into itself and lose the retry.
+        },
+    );
+    if !accepted {
+        // A later cache access retries after pressure subsides; never fall back to an
+        // unbounded thread when the executor queue is full or shutting down.
+        cache_maintenance_registry()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .scheduled
+            .remove(&scheduled_root);
+    }
 }
 
 fn should_reschedule_after_reconciliation(start_revision: u64, current_revision: u64) -> bool {

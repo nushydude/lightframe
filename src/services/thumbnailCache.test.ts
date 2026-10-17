@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { estimateThumbnailAssetBytes } from './cacheMemory';
+import type { MediaWorkContext } from './nativeMedia';
 
 const getThumbnailMock = vi.fn<
   (
     path: string,
     sizeBytes?: number,
-    modifiedAt?: string
+    modifiedAt?: string,
+    context?: MediaWorkContext
   ) => Promise<{
     file_path: string;
     cache_key: string;
@@ -77,7 +79,12 @@ describe('thumbnailCache', () => {
     expect(cached).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
     expect(second).toBe('asset://localhost/C:/cache/fallback.svg?v=FALLBACK');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
-    expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/unsupported.heic', 128, '42');
+    expect(getThumbnailMock).toHaveBeenCalledWith(
+      'C:/images/unsupported.heic',
+      128,
+      '42',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
 
     clearThumbnailCacheForTests();
   });
@@ -96,7 +103,12 @@ describe('thumbnailCache', () => {
     expect(first).toBe('asset://localhost/C:/cache/structured.jpg?v=STRUCTURED');
     expect(second).toBe('asset://localhost/C:/cache/structured.jpg?v=STRUCTURED');
     expect(getThumbnailMock).toHaveBeenCalledTimes(1);
-    expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/structured.jpg', 300, '10');
+    expect(getThumbnailMock).toHaveBeenCalledWith(
+      'C:/images/structured.jpg',
+      300,
+      '10',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
 
     clearThumbnailCacheForTests();
   });
@@ -126,8 +138,20 @@ describe('thumbnailCache', () => {
     });
 
     expect(refreshed).toBe('asset://localhost/C:/cache/new.jpg?v=NEW');
-    expect(getThumbnailMock).toHaveBeenNthCalledWith(1, 'C:/images/a.jpg', 100, '1');
-    expect(getThumbnailMock).toHaveBeenNthCalledWith(2, 'C:/images/a.jpg', 100, '2');
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(
+      1,
+      'C:/images/a.jpg',
+      100,
+      '1',
+      expect.any(Object)
+    );
+    expect(getThumbnailMock).toHaveBeenNthCalledWith(
+      2,
+      'C:/images/a.jpg',
+      100,
+      '2',
+      expect.any(Object)
+    );
 
     clearThumbnailCacheForTests();
   });
@@ -157,7 +181,8 @@ describe('thumbnailCache', () => {
       2,
       secondRequest.path,
       secondRequest.sizeBytes,
-      secondRequest.modifiedAt
+      secondRequest.modifiedAt,
+      expect.any(Object)
     );
     clearThumbnailCacheForTests();
   });
@@ -326,7 +351,7 @@ describe('thumbnailCache', () => {
     clearThumbnailCacheForTests();
   });
 
-  it('caps cache after in-flight over-cap queue settles and keeps latest keep-set paths', async () => {
+  it('keeps only retained results after out-of-range in-flight work settles', async () => {
     const {
       clearThumbnailCacheForTests,
       configureThumbnailCache,
@@ -379,7 +404,7 @@ describe('thumbnailCache', () => {
     await Promise.all(paths.map((path) => loadThumbnail(path).catch(() => undefined)));
 
     expect(getCachedThumbnail('C:/images/a.jpg')).toBeUndefined();
-    expect(getCachedThumbnail('C:/images/b.jpg')).toBe('asset://localhost/C:/cache/b.jpg?v=B');
+    expect(getCachedThumbnail('C:/images/b.jpg')).toBeUndefined();
     expect(getCachedThumbnail('C:/images/c.jpg')).toBe('asset://localhost/C:/cache/c.jpg?v=C');
     expect(getCachedThumbnail('C:/images/d.jpg')).toBeUndefined();
     expect(droppedListener).not.toHaveBeenCalled();
@@ -412,7 +437,12 @@ describe('thumbnailCache', () => {
     const stalePromise = loadThumbnail(stalePath);
 
     expect(getThumbnailMock).toHaveBeenCalledTimes(3);
-    expect(getThumbnailMock).not.toHaveBeenCalledWith(stalePath, undefined, undefined);
+    expect(getThumbnailMock).not.toHaveBeenCalledWith(
+      stalePath,
+      undefined,
+      undefined,
+      expect.any(Object)
+    );
 
     evictThumbnailsExcept(new Set(activePaths));
 
@@ -430,63 +460,87 @@ describe('thumbnailCache', () => {
     clearThumbnailCacheForTests();
   });
 
-  it('starts foreground thumbnails without releasing stale running capacity', async () => {
+  it('cancels native-queued thumbnails on rapid scroll while retaining visible consumers and physical accounting', async () => {
     const {
       clearThumbnailCacheForTests,
       evictThumbnailsExcept,
       getCachedThumbnail,
       loadThumbnail,
-      preloadThumbnails,
     } = await loadThumbnailCacheModule();
+    const { imageWorkScheduler } = await import('./imageWorkScheduler');
 
     const deferredByPath = new Map<
       string,
       ReturnType<typeof createDeferred<{ file_path: string; cache_key: string }>>
     >();
-    getThumbnailMock.mockImplementation((path: string) => {
-      let deferred = deferredByPath.get(path);
-      if (!deferred) {
-        deferred = createDeferred<{ file_path: string; cache_key: string }>();
-        deferredByPath.set(path, deferred);
+    const contexts = new Map<string, MediaWorkContext>();
+    const nativeQueue: string[] = [];
+    const nativeRunning = new Set<string>();
+    const nativeStarts: string[] = [];
+    const pumpNative = () => {
+      while (nativeRunning.size < 2 && nativeQueue.length > 0) {
+        const path = nativeQueue.shift()!;
+        nativeRunning.add(path);
+        nativeStarts.push(path);
       }
+    };
+    getThumbnailMock.mockImplementation((path, _size, _modified, context = {}) => {
+      const deferred = createDeferred<{ file_path: string; cache_key: string }>();
+      deferredByPath.set(path, deferred);
+      contexts.set(path, context);
+      nativeQueue.push(path);
+      context.signal?.addEventListener(
+        'abort',
+        () => {
+          const index = nativeQueue.indexOf(path);
+          if (index >= 0) {
+            nativeQueue.splice(index, 1);
+            deferred.reject(
+              Object.assign(new Error('Native queued work canceled'), { name: 'AbortError' })
+            );
+          }
+          // An uninterruptible running codec settles only when explicitly released below.
+        },
+        { once: true }
+      );
+      pumpNative();
       return deferred.promise;
     });
+    const retained = 'C:/images/retained.jpg';
+    const staleRunning = 'C:/images/stale-running.jpg';
+    const staleQueued = 'C:/images/stale-native-queued.jpg';
+    const fresh = 'C:/images/fresh.jpg';
+    const retainedPromise = loadThumbnail(retained);
+    const stalePromises = [staleRunning, staleQueued].map((path) =>
+      loadThumbnail(path).catch(() => undefined)
+    );
+    const freshPromise = loadThumbnail(fresh);
+    expect(nativeStarts).toEqual([retained, staleRunning]);
+    expect(nativeQueue).toEqual([staleQueued]);
+    expect(imageWorkScheduler.getSnapshot().inFlight).toBe(3);
 
-    const stalePaths = ['C:/images/stale-a.jpg', 'C:/images/stale-b.jpg', 'C:/images/stale-c.jpg'];
-    const stalePromises = stalePaths.map((path) => loadThumbnail(path).catch(() => undefined));
-    preloadThumbnails(['C:/images/fresh.jpg'], { priority: 'foreground-thumbnail' });
+    evictThumbnailsExcept(new Set([retained, fresh]));
+    expect(contexts.get(staleRunning)?.signal?.aborted).toBe(true);
+    expect(contexts.get(staleQueued)?.signal?.aborted).toBe(true);
+    expect(contexts.get(retained)?.signal?.aborted).toBe(false);
+    expect(imageWorkScheduler.getSnapshot().inFlight).toBe(3);
+    await vi.waitFor(() => expect(nativeQueue).toEqual([fresh]));
+    expect(contexts.get(fresh)?.signal?.aborted).toBe(false);
+    expect(nativeStarts).not.toContain(staleQueued);
 
-    expect(getThumbnailMock).toHaveBeenCalledTimes(4);
-    evictThumbnailsExcept(new Set(['C:/images/fresh.jpg']));
-
-    await vi.waitFor(() => {
-      expect(getThumbnailMock).toHaveBeenCalledWith('C:/images/fresh.jpg', undefined, undefined);
-    });
-
-    deferredByPath.get('C:/images/fresh.jpg')?.resolve({
-      file_path: 'C:/cache/fresh.jpg',
-      cache_key: 'FRESH',
-    });
-    await vi.waitFor(() => {
-      expect(getCachedThumbnail('C:/images/fresh.jpg')).toBe(
-        'asset://localhost/C:/cache/fresh.jpg?v=FRESH'
-      );
-    });
-
-    for (let index = 0; index < 20; index += 1) {
-      const path = `C:/images/rapid-${index}.jpg`;
-      preloadThumbnails([path], { priority: 'foreground-thumbnail' });
-      evictThumbnailsExcept(new Set([path]));
-    }
-    expect(getThumbnailMock).toHaveBeenCalledTimes(6);
-
-    stalePaths.forEach((path, index) => {
-      deferredByPath.get(path)?.resolve({
-        file_path: `C:/cache/stale-${index}.jpg`,
-        cache_key: `STALE-${index}`,
-      });
-    });
-    await Promise.all(stalePromises);
+    const finishNative = (path: string) => {
+      nativeRunning.delete(path);
+      deferredByPath.get(path)!.resolve({ file_path: `cache:${path}`, cache_key: path });
+      pumpNative();
+    };
+    finishNative(staleRunning);
+    expect(nativeStarts).toEqual([retained, staleRunning, fresh]);
+    finishNative(fresh);
+    finishNative(retained);
+    await Promise.all([retainedPromise, freshPromise, ...stalePromises]);
+    expect(getCachedThumbnail(fresh)).toBeDefined();
+    expect(getCachedThumbnail(staleRunning)).toBeUndefined();
+    expect(getCachedThumbnail(staleQueued)).toBeUndefined();
     clearThumbnailCacheForTests();
   });
 });

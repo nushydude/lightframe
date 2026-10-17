@@ -204,7 +204,12 @@ describe('imageAssetCache', () => {
     expect(first).toContain('asset://localhost/');
     expect(first).toContain('v=preview-2048-C%3A%2Fimages%2Fpreview-a.jpg-base');
     expect(getPreviewImageMock).toHaveBeenCalledTimes(1);
-    expect(getPreviewImageMock).toHaveBeenCalledWith(path, 2048, undefined);
+    expect(getPreviewImageMock).toHaveBeenCalledWith(
+      path,
+      2048,
+      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal), priority: 'current-preview' })
+    );
   });
 
   it('invalidateImageAsset clears stale preview cache for that path', async () => {
@@ -231,7 +236,12 @@ describe('imageAssetCache', () => {
     expect(second).toContain('v=after-edit-busted');
     expect(second).not.toBe(first);
     expect(getPreviewImageMock).toHaveBeenCalledTimes(2);
-    expect(getPreviewImageMock).toHaveBeenLastCalledWith(path, 2048, invalidationVersion);
+    expect(getPreviewImageMock).toHaveBeenLastCalledWith(
+      path,
+      2048,
+      invalidationVersion,
+      expect.objectContaining({ generationToken: invalidationVersion })
+    );
   });
 
   it('keeps the current preview cached even when the byte budget is exhausted', async () => {

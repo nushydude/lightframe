@@ -55,6 +55,7 @@ export function ExifPanel({
   const requestIdRef = useRef(0);
 
   useEffect(() => {
+    const controller = new AbortController();
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
 
@@ -68,9 +69,13 @@ export function ExifPanel({
       }
     }, 500);
 
-    void Promise.allSettled([getExifMetadata(filePath), getImageMetadata(filePath)])
+    const context = { signal: controller.signal, generationToken: requestId };
+    void Promise.allSettled([
+      getExifMetadata(filePath, context),
+      getImageMetadata(filePath, context),
+    ])
       .then(([exifResult, metadataResult]) => {
-        if (requestIdRef.current !== requestId) return;
+        if (controller.signal.aborted || requestIdRef.current !== requestId) return;
 
         if (metadataResult.status === 'fulfilled') {
           setImageMetadata(metadataResult.value);
@@ -89,13 +94,14 @@ export function ExifPanel({
         setError('No EXIF data found in this image.');
       })
       .finally(() => {
-        if (requestIdRef.current === requestId) {
+        if (!controller.signal.aborted && requestIdRef.current === requestId) {
           setLoading(false);
           setShowLoadingIndicator(false);
         }
       });
 
     return () => {
+      controller.abort();
       window.clearTimeout(loadingIndicatorTimer);
     };
   }, [filePath, refreshToken]);

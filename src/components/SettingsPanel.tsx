@@ -1,4 +1,5 @@
 import React from 'react';
+import { getNativeMediaStats } from '../services/nativeMedia';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../state/settingsStore';
@@ -801,6 +802,7 @@ function DiagnosticsSettings({ codecHealth }: { codecHealth: CodecHealthReport |
     }
 
     const snapshot = buildDiagnosticsSnapshot({
+      nativeMedia: await getNativeMediaStats().catch(() => null),
       settings,
       viewer: {
         currentImagePath,

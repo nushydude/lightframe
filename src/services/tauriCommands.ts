@@ -14,6 +14,7 @@ import type { ImageCuration } from '../types/curation';
 import type { AppSettings } from '../types/settings';
 import { settingsFromRust, settingsToRust } from '../types/settings';
 import { projectorWindowTitle } from './windowTitle';
+import { invokeNativeMedia, type MediaWorkContext } from './nativeMedia';
 
 export interface ExifData {
   make?: string;
@@ -216,18 +217,39 @@ export async function refreshFolderIndex(folderPath: string): Promise<ImageFile[
 }
 
 /** Get metadata (dimensions, format, file size) for an image */
-export async function getImageMetadata(filePath: string): Promise<ImageMetadata> {
-  return invoke<ImageMetadata>('get_image_metadata', { filePath });
+export async function getImageMetadata(
+  filePath: string,
+  context?: MediaWorkContext
+): Promise<ImageMetadata> {
+  return invokeNativeMedia<ImageMetadata>(
+    'get_image_metadata',
+    { filePath },
+    { priority: 'current-metadata', ...context }
+  );
 }
 
 /** Read a same-basename LoRA caption sidecar (`.txt`, then `.caption`) when present. */
-export async function getImageCaption(filePath: string): Promise<ImageCaption | null> {
-  return invoke<ImageCaption | null>('get_image_caption', { filePath });
+export async function getImageCaption(
+  filePath: string,
+  context?: MediaWorkContext
+): Promise<ImageCaption | null> {
+  return invokeNativeMedia<ImageCaption | null>(
+    'get_image_caption',
+    { filePath },
+    { priority: 'current-metadata', ...context }
+  );
 }
 
 /** Read bounded ComfyUI Prompt/workflow text from PNG metadata without decoding image pixels. */
-export async function getEmbeddedComfyMetadata(filePath: string): Promise<EmbeddedComfyMetadata> {
-  return invoke<EmbeddedComfyMetadata>('get_embedded_comfy_metadata', { filePath });
+export async function getEmbeddedComfyMetadata(
+  filePath: string,
+  context?: MediaWorkContext
+): Promise<EmbeddedComfyMetadata> {
+  return invokeNativeMedia<EmbeddedComfyMetadata>(
+    'get_embedded_comfy_metadata',
+    { filePath },
+    { priority: 'current-metadata', ...context }
+  );
 }
 
 /** Read codec and generated-cache diagnostics */
@@ -239,7 +261,11 @@ export async function getCodecHealth(): Promise<CodecHealthReport> {
 export async function clearGeneratedImageCache(
   scope: GeneratedCacheCommandScope
 ): Promise<GeneratedCacheSummary> {
-  return invoke<GeneratedCacheSummary>('clear_generated_image_cache', { scope });
+  return invokeNativeMedia<GeneratedCacheSummary>(
+    'clear_generated_image_cache',
+    { scope },
+    { priority: 'background-preload' }
+  );
 }
 
 /** Clear native decode negative cache so codecs are retried */
@@ -251,13 +277,18 @@ export async function retryNativeCodecs(): Promise<number> {
 export async function getPreviewImage(
   filePath: string,
   maxDimension: number,
-  invalidationBust?: number
+  invalidationBust?: number,
+  context?: MediaWorkContext
 ): Promise<GeneratedImageAsset> {
-  return invoke<GeneratedImageAsset>('get_preview_image', {
-    filePath,
-    maxDimension,
-    invalidationBust,
-  });
+  return invokeNativeMedia<GeneratedImageAsset>(
+    'get_preview_image',
+    {
+      filePath,
+      maxDimension,
+      invalidationBust,
+    },
+    context
+  );
 }
 
 /** Generate a cached native-resolution viewport tile for a large image */
@@ -267,16 +298,21 @@ export async function getImageTile(
   sourceHeight: number,
   tileSize: number,
   tileX: number,
-  tileY: number
+  tileY: number,
+  context?: MediaWorkContext
 ): Promise<GeneratedImageAsset> {
-  return invoke<GeneratedImageAsset>('get_image_tile', {
-    filePath,
-    sourceWidth,
-    sourceHeight,
-    tileSize,
-    tileX,
-    tileY,
-  });
+  return invokeNativeMedia<GeneratedImageAsset>(
+    'get_image_tile',
+    {
+      filePath,
+      sourceWidth,
+      sourceHeight,
+      tileSize,
+      tileX,
+      tileY,
+    },
+    { priority: 'current-full', ...context }
+  );
 }
 
 /** Read persisted application settings */
@@ -350,17 +386,28 @@ export async function transferImagesToFolder(
 
 /** Copy an image file to the OS clipboard */
 export async function copyImageToClipboard(filePath: string): Promise<void> {
-  return invoke('copy_image_to_clipboard', { filePath });
+  return invokeNativeMedia('copy_image_to_clipboard', { filePath }, { priority: 'explicit-edit' });
 }
 
 /** Extract EXIF metadata from an image file */
-export async function getExifMetadata(filePath: string): Promise<ExifData> {
-  return invoke<ExifData>('get_exif_metadata', { filePath });
+export async function getExifMetadata(
+  filePath: string,
+  context?: MediaWorkContext
+): Promise<ExifData> {
+  return invokeNativeMedia<ExifData>(
+    'get_exif_metadata',
+    { filePath },
+    { priority: 'current-metadata', ...context }
+  );
 }
 
 /** Rotate an image file on disk and save it */
 export async function saveRotatedImage(filePath: string, rotationDegrees: number): Promise<void> {
-  return invoke('save_rotated_image', { filePath, rotationDegrees });
+  return invokeNativeMedia(
+    'save_rotated_image',
+    { filePath, rotationDegrees },
+    { priority: 'explicit-edit' }
+  );
 }
 
 /** Save a cropped copy of an image without overwriting the original */
@@ -370,7 +417,11 @@ export async function saveCroppedCopy(
   outputPath: string,
   rotationDegrees?: number
 ): Promise<void> {
-  return invoke('save_cropped_copy', { filePath, cropRect, outputPath, rotationDegrees });
+  return invokeNativeMedia(
+    'save_cropped_copy',
+    { filePath, cropRect, outputPath, rotationDegrees },
+    { priority: 'explicit-edit' }
+  );
 }
 
 /** Save a high-quality scaled copy of an image without overwriting the original */
@@ -382,14 +433,18 @@ export async function saveScaledCopy(
   smoothing: number,
   sharpening: number
 ): Promise<void> {
-  return invoke('save_scaled_copy', {
-    filePath,
-    outputPath,
-    width,
-    height,
-    smoothing,
-    sharpening,
-  });
+  return invokeNativeMedia(
+    'save_scaled_copy',
+    {
+      filePath,
+      outputPath,
+      width,
+      height,
+      smoothing,
+      sharpening,
+    },
+    { priority: 'explicit-edit' }
+  );
 }
 
 /** Overwrite an image with a cropped version after explicit confirmation */
@@ -398,16 +453,25 @@ export async function overwriteWithCrop(
   cropRect: CropRect,
   rotationDegrees?: number
 ): Promise<void> {
-  return invoke('overwrite_with_crop', { filePath, cropRect, rotationDegrees });
+  return invokeNativeMedia(
+    'overwrite_with_crop',
+    { filePath, cropRect, rotationDegrees },
+    { priority: 'explicit-edit' }
+  );
 }
 
 /** Get a small cached thumbnail asset for an image */
 export async function getThumbnail(
   filePath: string,
   sizeBytes?: number,
-  modifiedAt?: string
+  modifiedAt?: string,
+  context?: MediaWorkContext
 ): Promise<GeneratedImageAsset> {
-  return invoke<GeneratedImageAsset>('get_thumbnail', { filePath, sizeBytes, modifiedAt });
+  return invokeNativeMedia<GeneratedImageAsset>(
+    'get_thumbnail',
+    { filePath, sizeBytes, modifiedAt },
+    { priority: 'visible-thumbnail', ...context }
+  );
 }
 
 /** Reveal a file in the OS file manager (Windows Explorer, Finder, etc.) */
