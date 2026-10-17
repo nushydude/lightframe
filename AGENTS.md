@@ -3,6 +3,11 @@
 This file is the repository-level entry point for Codex and other coding agents. It activates the
 workflow described in `.agent/orchestration/` for implementation requests.
 
+## Authoritative model routing
+
+- Implementation and remediation use GPT 6.1 Sol with `medium` reasoning.
+- Independent review uses GPT 6 Astra with `high` reasoning.
+
 ## Default implementation lifecycle
 
 When the user asks to implement, fix, refactor, or build a task:
