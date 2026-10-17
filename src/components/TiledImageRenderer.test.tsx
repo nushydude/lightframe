@@ -64,6 +64,8 @@ describe('TiledImageRenderer', () => {
   let rectSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    getImageTileMock.mockClear();
+    generatedImageAssetToUrlMock.mockClear();
     getImageTileMock.mockImplementation(() => createDeferred().promise);
     imageWorkScheduler.resetForTests();
     rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
@@ -96,6 +98,7 @@ describe('TiledImageRenderer', () => {
     });
 
     expect(getImageTileMock).toHaveBeenCalledTimes(2);
+    expect(getImageTileMock.mock.calls[0]?.[6]).toMatchObject({ generationToken: 0 });
 
     rerender(<Harness panX={10} />);
 
@@ -105,5 +108,26 @@ describe('TiledImageRenderer', () => {
     });
 
     expect(getImageTileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts running native tile consumers when the renderer leaves the image', async () => {
+    const pending = createDeferred<{ file_path: string; cache_key: string }>();
+    getImageTileMock.mockImplementation(() => pending.promise);
+    const { unmount } = render(<Harness panX={0} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const contexts = getImageTileMock.mock.calls.map((call) => call[6] as { signal: AbortSignal });
+    expect(contexts).toHaveLength(2);
+    expect(contexts.every((context) => !context.signal.aborted)).toBe(true);
+    unmount();
+    expect(contexts.every((context) => context.signal.aborted)).toBe(true);
+    await act(async () => {
+      pending.resolve({ file_path: 'stale', cache_key: 'stale' });
+    });
+    expect(generatedImageAssetToUrlMock).not.toHaveBeenCalledWith({
+      file_path: 'stale',
+      cache_key: 'stale',
+    });
   });
 });

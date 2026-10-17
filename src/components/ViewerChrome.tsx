@@ -350,6 +350,7 @@ export function ViewerChrome({
   useEffect(() => {
     let isCurrent = true;
     setImageCaption(null);
+    const controller = new AbortController();
 
     if (!currentImagePath) {
       return () => {
@@ -357,7 +358,10 @@ export function ViewerChrome({
       };
     }
 
-    void getImageCaption(currentImagePath)
+    void getImageCaption(currentImagePath, {
+      signal: controller.signal,
+      generationToken: captionRefreshToken,
+    })
       .then((caption) => {
         if (isCurrent) setImageCaption(caption);
       })
@@ -370,6 +374,7 @@ export function ViewerChrome({
 
     return () => {
       isCurrent = false;
+      controller.abort();
     };
   }, [captionRefreshToken, currentImagePath]);
 
@@ -382,10 +387,14 @@ export function ViewerChrome({
   useEffect(() => {
     let isCurrent = true;
     setEmbeddedComfyMetadata(null);
+    const controller = new AbortController();
     setComfyMetadataLoading(Boolean(currentImagePath && showExif));
     if (!currentImagePath || !showExif) return;
 
-    void getEmbeddedComfyMetadata(currentImagePath)
+    void getEmbeddedComfyMetadata(currentImagePath, {
+      signal: controller.signal,
+      generationToken: captionRefreshToken,
+    })
       .then((metadata) => {
         if (isCurrent) setEmbeddedComfyMetadata(metadata);
       })
@@ -405,6 +414,7 @@ export function ViewerChrome({
 
     return () => {
       isCurrent = false;
+      controller.abort();
     };
   }, [captionRefreshToken, currentImagePath, showExif]);
 

@@ -283,7 +283,8 @@ function loadThumbnailWithPriority(
     sourcePath: path,
     priority,
     generationToken: token,
-    run: async ({ signal }) => {
+    run: async (context) => {
+      const { signal } = context;
       if (signal.aborted) {
         throw createAbortError('Thumbnail work aborted before execution.');
       }
@@ -293,7 +294,7 @@ function loadThumbnailWithPriority(
         throw createAbortError('Thumbnail request became stale before execution.');
       }
 
-      const asset = await getThumbnail(path, sizeBytes, modifiedAt ?? undefined);
+      const asset = await getThumbnail(path, sizeBytes, modifiedAt ?? undefined, context);
       if (signal.aborted) {
         throw createAbortError('Thumbnail work aborted after execution.');
       }
@@ -378,6 +379,11 @@ export function evictThumbnailsExcept(
 
   latestKeepPaths = new Set(keepPaths);
   clearStaleListeners(latestKeepPaths);
+  // A frontend-running request may still be queued in the native executor. Cancel
+  // its consumer too; the scheduler retains physical accounting until run settles.
+  for (const [path, entry] of thumbnailCache) {
+    if (!latestKeepPaths.has(path)) entry.inFlightCancel?.();
+  }
   imageWorkScheduler.cancelQueued(
     (job) =>
       (job.priority === 'visible-thumbnail' || job.priority === 'foreground-thumbnail') &&

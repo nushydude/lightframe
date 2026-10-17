@@ -7,6 +7,7 @@ mod folder_watcher;
 mod generated_cache_maintenance;
 mod image_metadata;
 pub mod image_resource_policy;
+mod media_executor;
 mod native_codecs;
 mod path_normalization;
 mod thumbnails;
@@ -58,7 +59,10 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
+    let executor = media_executor::MediaExecutor::default();
+    executor.install_global();
     builder
+        .manage(executor)
         .manage(display_inhibition::DisplayInhibition::default())
         .setup(|_| {
             windows_shortcuts::repair_lightframe_shortcuts_async();
@@ -83,6 +87,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            media_executor::cancel_media_request,
+            media_executor::configure_media_executor,
+            media_executor::get_media_executor_stats,
             commands::is_dir,
             commands::scan_folder,
             folder_watcher::watch_folder,
@@ -122,6 +129,11 @@ pub fn run() {
             release_slideshow_display_inhibition,
             update_recent_folders_jump_list,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<media_executor::MediaExecutor>().shutdown();
+            }
+        });
 }

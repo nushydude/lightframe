@@ -1,4 +1,5 @@
 import packageJson from '../../package.json';
+import type { NativeMediaStats } from './nativeMedia';
 import type { PerformanceTelemetrySnapshot } from './performanceTelemetry';
 import type { CodecHealthReport } from './tauriCommands';
 import type { ImageMetadata } from '../types/image';
@@ -22,6 +23,7 @@ export interface ViewerDiagnosticsState {
 }
 
 export interface DiagnosticsSnapshot {
+  nativeMedia: NativeMediaStats | null;
   schemaVersion: 1;
   collectedAt: string;
   app: {
@@ -67,6 +69,7 @@ export interface DiagnosticsSnapshot {
 }
 
 export interface BuildDiagnosticsSnapshotOptions {
+  nativeMedia?: NativeMediaStats | null;
   settings: AppSettings;
   viewer: ViewerDiagnosticsState;
   codecHealth: CodecHealthReport | null;
@@ -93,6 +96,7 @@ export function buildDiagnosticsSnapshot(
   const collectedAt = options.collectedAt ?? new Date();
 
   return {
+    nativeMedia: options.nativeMedia ?? null,
     schemaVersion: 1,
     collectedAt: collectedAt.toISOString(),
     app: {

@@ -475,7 +475,8 @@ async function loadPreviewAssetWithPriority(
       sourcePath: path,
       generationToken: version,
       signal: options?.signal,
-      run: async ({ signal }) => {
+      run: async (context) => {
+        const { signal } = context;
         if (signal.aborted) {
           throw createAbortError('Preview work aborted before execution.');
         }
@@ -485,7 +486,7 @@ async function loadPreviewAssetWithPriority(
         const initialBust = initialVersion > 0 ? initialVersion : undefined;
         let entry = createPreviewAssetEntry(
           await measurePerformanceSpan('previewGeneration', () =>
-            getPreviewImage(path, maxDimension, initialBust)
+            getPreviewImage(path, maxDimension, initialBust, context)
           ),
           initialVersion,
           maxDimension
@@ -497,7 +498,10 @@ async function loadPreviewAssetWithPriority(
           const resolvedBust = resolvedVersion > 0 ? resolvedVersion : undefined;
           entry = createPreviewAssetEntry(
             await measurePerformanceSpan('previewGeneration', () =>
-              getPreviewImage(path, maxDimension, resolvedBust)
+              getPreviewImage(path, maxDimension, resolvedBust, {
+                ...context,
+                generationToken: resolvedVersion,
+              })
             ),
             resolvedVersion,
             maxDimension

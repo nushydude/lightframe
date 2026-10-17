@@ -8,6 +8,9 @@ import {
   setThumbnailInFlightTelemetry,
   setThumbnailQueueDepthTelemetry,
 } from './performanceTelemetry';
+import type { MediaWorkContext } from './nativeMedia';
+
+type WorkContext = MediaWorkContext & { signal: AbortSignal };
 
 export const IMAGE_WORK_PRIORITY = {
   currentPreview: 'current-preview',
@@ -60,7 +63,8 @@ type ImageWorkJob<T> = {
   sequence: number;
   settled: boolean;
   tombstoned: boolean;
-  run: (context: { signal: AbortSignal }) => Promise<T>;
+  generationToken?: string | number;
+  run: (context: WorkContext) => Promise<T>;
   controller: AbortController;
   consumers: Map<number, ImageWorkConsumer<T>>;
 };
@@ -71,7 +75,7 @@ type ScheduleOptions<T> = {
   sourcePath: string;
   generationToken?: number | string;
   signal?: AbortSignal;
-  run: (context: { signal: AbortSignal }) => Promise<T> | T;
+  run: (context: WorkContext) => Promise<T> | T;
 };
 
 type SchedulerOptions = {
@@ -122,8 +126,8 @@ function compareJobs(left: ImageWorkJob<unknown>, right: ImageWorkJob<unknown>):
     [IMAGE_WORK_PRIORITY.currentFull]: 1,
     [IMAGE_WORK_PRIORITY.currentMetadata]: 2,
     [IMAGE_WORK_PRIORITY.foregroundThumbnail]: 3,
-    [IMAGE_WORK_PRIORITY.adjacentDirectional]: 4,
-    [IMAGE_WORK_PRIORITY.visibleThumbnail]: 5,
+    [IMAGE_WORK_PRIORITY.adjacentDirectional]: 5,
+    [IMAGE_WORK_PRIORITY.visibleThumbnail]: 4,
     [IMAGE_WORK_PRIORITY.backgroundPreload]: 6,
   };
 
@@ -292,7 +296,13 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
       runningJobs.add(job);
       notify();
 
-      void Promise.resolve(job.run({ signal: job.controller.signal }))
+      void Promise.resolve(
+        job.run({
+          signal: job.controller.signal,
+          priority: job.priority,
+          generationToken: job.generationToken,
+        })
+      )
         .then((result) => {
           settleJob(job, (consumer) => consumer.resolve(result));
         })
@@ -332,7 +342,8 @@ export function createImageWorkScheduler(options: SchedulerOptions = {}) {
         sequence: nextSequence,
         settled: false,
         tombstoned: false,
-        run: async ({ signal }) => options.run({ signal }),
+        generationToken: options.generationToken,
+        run: async (context) => options.run(context),
         controller: new AbortController(),
         consumers: new Map<number, ImageWorkConsumer<T>>(),
       } satisfies ImageWorkJob<T>);

@@ -31,6 +31,7 @@ type ElementSize = {
 };
 
 type TileWorkState = {
+  controller: AbortController;
   sourceKey: string;
   workKey: string;
 };
@@ -103,6 +104,7 @@ export function TiledImageRenderer({
   const [tileUrls, setTileUrls] = useState<Record<string, string>>({});
   const tileUrlsRef = useRef<Record<string, string>>({});
   const activeSourceKeyRef = useRef<string | null>(tileSourceKey(filePath, metadata));
+  const sourceGenerationRef = useRef(0);
   const inFlightTileWorkRef = useRef<Map<string, TileWorkState>>(new Map());
   const tileRequestsRef = useRef<TileRequest[]>([]);
   const visibleTileKeysRef = useRef<Set<string>>(new Set());
@@ -138,12 +140,13 @@ export function TiledImageRenderer({
 
     for (const [tileKey, tileWork] of inFlightTileWorkRef.current) {
       if (tileWork.sourceKey !== sourceKey) {
-        imageWorkScheduler.cancelQueued((job) => job.key === tileWork.workKey);
+        tileWork.controller.abort();
         inFlightTileWorkRef.current.delete(tileKey);
       }
     }
 
     activeSourceKeyRef.current = sourceKey;
+    sourceGenerationRef.current += 1;
     tileUrlsRef.current = {};
     setTileUrls({});
   }, [sourceKey]);
@@ -151,7 +154,7 @@ export function TiledImageRenderer({
   useEffect(
     () => () => {
       for (const tileWork of inFlightTileWorkRef.current.values()) {
-        imageWorkScheduler.cancelQueued((job) => job.key === tileWork.workKey);
+        tileWork.controller.abort();
       }
       inFlightTileWorkRef.current.clear();
       activeSourceKeyRef.current = null;
@@ -218,10 +221,8 @@ export function TiledImageRenderer({
         continue;
       }
 
-      const canceled = imageWorkScheduler.cancelQueued((job) => job.key === tileWork.workKey);
-      if (canceled > 0) {
-        inFlightTileWorkRef.current.delete(tileKey);
-      }
+      tileWork.controller.abort();
+      inFlightTileWorkRef.current.delete(tileKey);
     }
 
     for (const request of currentTileRequests) {
@@ -235,7 +236,9 @@ export function TiledImageRenderer({
       }
 
       const workKey = tileWorkKey(filePath, metadata, TILE_SIZE, request);
+      const controller = new AbortController();
       inFlightTileWorkRef.current.set(request.key, {
+        controller,
         sourceKey,
         workKey,
       });
@@ -243,9 +246,12 @@ export function TiledImageRenderer({
       void imageWorkScheduler
         .schedule({
           key: workKey,
+          signal: controller.signal,
           priority: IMAGE_WORK_PRIORITY.currentFull,
           sourcePath: filePath,
-          run: async ({ signal }) => {
+          generationToken: sourceGenerationRef.current,
+          run: async (context) => {
+            const { signal } = context;
             if (signal.aborted) {
               throw createAbortError('Tile work aborted before execution.');
             }
@@ -257,7 +263,8 @@ export function TiledImageRenderer({
                 sourceHeight,
                 TILE_SIZE,
                 request.tileX,
-                request.tileY
+                request.tileY,
+                context
               )
             );
             if (signal.aborted) {
@@ -269,11 +276,12 @@ export function TiledImageRenderer({
         })
         .promise.then((url) => {
           const tileWork = inFlightTileWorkRef.current.get(request.key);
-          if (tileWork?.sourceKey === sourceKey && tileWork.workKey === workKey) {
+          if (tileWork?.controller === controller) {
             inFlightTileWorkRef.current.delete(request.key);
           }
 
           if (
+            controller.signal.aborted ||
             activeSourceKeyRef.current !== sourceKey ||
             !visibleTileKeysRef.current.has(request.key)
           ) {
@@ -292,7 +300,7 @@ export function TiledImageRenderer({
         })
         .catch((error) => {
           const tileWork = inFlightTileWorkRef.current.get(request.key);
-          if (tileWork?.sourceKey === sourceKey && tileWork.workKey === workKey) {
+          if (tileWork?.controller === controller) {
             inFlightTileWorkRef.current.delete(request.key);
           }
 

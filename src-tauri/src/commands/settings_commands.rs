@@ -39,6 +39,9 @@ pub async fn read_settings(app: AppHandle) -> Result<AppSettings, String> {
         thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
     );
 
+    app.state::<crate::media_executor::MediaExecutor>()
+        .configure(crate::media_executor::capacity_for_mode(&settings.performance_mode));
+
     Ok(settings)
 }
 
@@ -49,6 +52,8 @@ pub async fn write_settings(app: AppHandle, settings: AppSettings) -> Result<(),
     thumbnails::set_tile_source_cache_limit(
         thumbnails::calculate_tile_cache_limit_for_performance_mode(&settings.performance_mode),
     );
+    app.state::<crate::media_executor::MediaExecutor>()
+        .configure(crate::media_executor::capacity_for_mode(&settings.performance_mode));
     let path = settings_path(&app)?;
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;

@@ -279,13 +279,14 @@ export function ImageCanvas({
         sourcePath: path,
         generationToken: requestId,
         signal,
-        run: async ({ signal: workSignal }) => {
+        run: async (context) => {
+          const workSignal = context.signal;
           if (workSignal.aborted) {
             throw Object.assign(new Error('Metadata work aborted before execution.'), {
               name: 'AbortError',
             });
           }
-          const nextMetadata = await getImageMetadata(path);
+          const nextMetadata = await getImageMetadata(path, context);
           if (workSignal.aborted) {
             throw Object.assign(new Error('Metadata work aborted after execution.'), {
               name: 'AbortError',
