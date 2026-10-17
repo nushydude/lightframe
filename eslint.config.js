@@ -10,6 +10,7 @@ export default tseslint.config(
   {
     ignores: [
       '.fallow/**',
+      '.agent/runtime/**',
       '.worktrees/**',
       'coverage/**',
       'dist/**',

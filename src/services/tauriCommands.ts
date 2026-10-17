@@ -82,6 +82,14 @@ interface GeneratedAssetRuntimeStats {
   nativePreviewGenerations: number;
   rustThumbnailGenerations: number;
   rustPreviewGenerations: number;
+  jpegReducedThumbnailDecodes: number;
+  jpegReducedPreviewDecodes: number;
+  jpegFullDecodes: number;
+  jpegFallbackDecodes: number;
+  jpegReducedMaxOutputWidth: number;
+  jpegReducedMaxOutputHeight: number;
+  jpegFullMaxOutputWidth: number;
+  jpegFullMaxOutputHeight: number;
   placeholderThumbnailGenerations: number;
   placeholderPreviewGenerations: number;
   tileGenerations: number;

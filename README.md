@@ -48,6 +48,11 @@ uses cross-platform Tauri where possible.
 LightFrame scans and works with common image formats:
 
 - Standard formats: JPEG, PNG, WebP, GIF, BMP, TIFF/TIF, AVIF, and SVG.
+- JPEG thumbnails and bounded previews use decoder-side 1/2/4/8 reduction for supported
+  sequential 8-bit RGB/YCbCr and grayscale files, then preserve EXIF orientation and the requested output
+  bound. Progressive, lossless, embedded-ICC, CMYK/YCCK, malformed, truncated, or otherwise
+  unsupported JPEGs use the bounded full-decode fallback; reduced decoding does not promise
+  universal progressive-JPEG or latency improvements.
 - HEIC/HEIF: metadata, previews, thumbnails, and deep-zoom detail use Windows Imaging Component when
   the matching Windows codecs are installed. Without native support, LightFrame falls back to browser
   rendering or clear placeholders where appropriate.

@@ -9,6 +9,8 @@ use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader};
 use libjpeg_turbo_rs::{CropRegion, Subsampling};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -36,6 +38,14 @@ static NATIVE_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NATIVE_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 static RUST_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static RUST_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+static JPEG_REDUCED_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+static JPEG_REDUCED_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+static JPEG_FULL_DECODE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static JPEG_FALLBACK_COUNT: AtomicUsize = AtomicUsize::new(0);
+static JPEG_REDUCED_MAX_WIDTH: AtomicUsize = AtomicUsize::new(0);
+static JPEG_REDUCED_MAX_HEIGHT: AtomicUsize = AtomicUsize::new(0);
+static JPEG_FULL_MAX_WIDTH: AtomicUsize = AtomicUsize::new(0);
+static JPEG_FULL_MAX_HEIGHT: AtomicUsize = AtomicUsize::new(0);
 static PLACEHOLDER_THUMBNAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PLACEHOLDER_PREVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 static TILE_GENERATED_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -254,6 +264,14 @@ pub struct GeneratedAssetRuntimeStats {
     pub native_preview_generations: usize,
     pub rust_thumbnail_generations: usize,
     pub rust_preview_generations: usize,
+    pub jpeg_reduced_thumbnail_decodes: usize,
+    pub jpeg_reduced_preview_decodes: usize,
+    pub jpeg_full_decodes: usize,
+    pub jpeg_fallback_decodes: usize,
+    pub jpeg_reduced_max_output_width: usize,
+    pub jpeg_reduced_max_output_height: usize,
+    pub jpeg_full_max_output_width: usize,
+    pub jpeg_full_max_output_height: usize,
     pub placeholder_thumbnail_generations: usize,
     pub placeholder_preview_generations: usize,
     pub tile_generations: usize,
@@ -329,6 +347,119 @@ fn timing_snapshot(
         total_ms: total_ms.load(Ordering::Relaxed),
         max_ms: max_ms.load(Ordering::Relaxed),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JpegDecodeScale {
+    Full,
+    Reduced(u32),
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JpegTelemetryEvent {
+    Reduced { operation: OperationClass, width: u32, height: u32 },
+    Fallback,
+    Full { width: u32, height: u32 },
+}
+
+#[cfg(test)]
+thread_local! {
+    static JPEG_TEST_TELEMETRY: RefCell<Option<Vec<JpegTelemetryEvent>>> = RefCell::new(None);
+}
+
+#[cfg(test)]
+struct ScopedJpegTelemetryRecorder;
+
+#[cfg(test)]
+impl ScopedJpegTelemetryRecorder {
+    fn capture<R>(operation: impl FnOnce() -> R) -> (R, Vec<JpegTelemetryEvent>) {
+        JPEG_TEST_TELEMETRY.with(|events| {
+            assert!(events.borrow().is_none(), "nested JPEG telemetry recorder");
+            *events.borrow_mut() = Some(Vec::new());
+        });
+        let result = operation();
+        let events = JPEG_TEST_TELEMETRY.with(|slot| {
+            slot.borrow_mut().take().expect("JPEG telemetry recorder was not initialized")
+        });
+        (result, events)
+    }
+}
+
+#[cfg(test)]
+fn record_test_jpeg_event(event: JpegTelemetryEvent) {
+    JPEG_TEST_TELEMETRY.with(|slot| {
+        if let Some(events) = slot.borrow_mut().as_mut() {
+            events.push(event);
+        }
+    });
+}
+
+/// Pick the largest native JPEG reduction that still leaves at least one requested bound of
+/// source detail. JPEG's decoder-supported factors are powers of two; the post-decode resize
+/// retains the existing aspect-ratio and thumbnail filtering semantics.
+fn select_jpeg_decode_scale(
+    source_width: u32,
+    source_height: u32,
+    requested_max_dimension: u32,
+) -> JpegDecodeScale {
+    let source_max = u64::from(source_width.max(source_height));
+    let requested = u64::from(requested_max_dimension.max(1));
+    for factor in [8_u64, 4, 2] {
+        let scaled_max = source_max.div_ceil(factor);
+        if scaled_max >= requested {
+            return JpegDecodeScale::Reduced(factor as u32);
+        }
+    }
+    JpegDecodeScale::Full
+}
+
+fn update_max_dimension(counter: &AtomicUsize, value: usize) {
+    let mut observed = counter.load(Ordering::Relaxed);
+    while value > observed {
+        match counter.compare_exchange(observed, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(current) => observed = current,
+        }
+    }
+}
+
+fn record_jpeg_reduced_output(width: u32, height: u32) {
+    update_max_dimension(&JPEG_REDUCED_MAX_WIDTH, width as usize);
+    update_max_dimension(&JPEG_REDUCED_MAX_HEIGHT, height as usize);
+}
+
+fn record_jpeg_full_output(width: u32, height: u32) {
+    update_max_dimension(&JPEG_FULL_MAX_WIDTH, width as usize);
+    update_max_dimension(&JPEG_FULL_MAX_HEIGHT, height as usize);
+}
+
+fn record_jpeg_reduced_decode(operation: OperationClass, width: u32, height: u32) {
+    match operation {
+        OperationClass::Thumbnail => {
+            JPEG_REDUCED_THUMBNAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        OperationClass::Preview => {
+            JPEG_REDUCED_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+    record_jpeg_reduced_output(width, height);
+    #[cfg(test)]
+    record_test_jpeg_event(JpegTelemetryEvent::Reduced { operation, width, height });
+}
+
+fn record_jpeg_fallback() {
+    JPEG_FALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    record_test_jpeg_event(JpegTelemetryEvent::Fallback);
+}
+
+fn record_jpeg_full_decode(width: u32, height: u32) {
+    JPEG_FULL_DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
+    record_jpeg_full_output(width, height);
+    #[cfg(test)]
+    record_test_jpeg_event(JpegTelemetryEvent::Full { width, height });
 }
 
 pub fn resolve_source_metadata(
@@ -718,6 +849,12 @@ pub(crate) fn get_or_create_preview_with_generation(
     };
     generation.checkpoint()?;
     let preview_dimensions = preview.dimensions();
+    image_resource_policy::validate_output_dimensions(
+        preview_dimensions.0,
+        preview_dimensions.1,
+        &image_resource_policy::PolicyLimits::for_operation(OperationClass::Preview),
+    )
+    .map_err(|error| policy_error(OperationClass::Preview, error))?;
     let has_alpha = preview.color().has_alpha();
 
     let mut buffer = std::io::Cursor::new(Vec::new());
@@ -911,10 +1048,20 @@ fn build_versioned_cache_key(
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
-    let img = decode_image_with_orientation_for_operation(file_path, OperationClass::Thumbnail)?;
+    let img = decode_image_with_orientation_with_preview_limit(
+        file_path,
+        OperationClass::Thumbnail,
+        Some(THUMBNAIL_SIZE),
+    )?;
     image_checkpoint()?;
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
     image_checkpoint()?;
+    image_resource_policy::validate_output_dimensions(
+        thumb.width(),
+        thumb.height(),
+        &image_resource_policy::PolicyLimits::for_operation(OperationClass::Thumbnail),
+    )
+    .map_err(|error| reduced_jpeg_policy_error(OperationClass::Thumbnail, error))?;
 
     let mut buffer = std::io::Cursor::new(Vec::new());
     thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
@@ -1066,6 +1213,155 @@ fn decode_image_with_orientation(file_path: &Path) -> Result<DynamicImage, image
     decode_image_with_orientation_for_operation(file_path, OperationClass::Preview)
 }
 
+#[derive(Debug)]
+enum ReducedJpegDecode {
+    NotApplicable,
+    Reduced(DynamicImage),
+    Fallback,
+}
+
+fn is_jpeg_path(file_path: &Path) -> bool {
+    matches!(normalized_extension(file_path).as_deref(), Some("jpg" | "jpeg"))
+}
+
+fn reduced_jpeg_policy_error(
+    operation: OperationClass,
+    error: image_resource_policy::ResourcePolicyError,
+) -> image::ImageError {
+    image_resource_policy::record_rejection(operation);
+    image::ImageError::IoError(std::io::Error::other(error))
+}
+
+/// Decode a JPEG with libjpeg-turbo's native 1/2/4/8 IDCT scale. This intentionally handles
+/// sequential 8-bit RGB/YCbCr and grayscale JPEGs; progressive, lossless, non-8-bit, CMYK/YCCK,
+/// and codec failures use the existing full decoder so their established colour and error
+/// semantics remain intact.
+fn try_decode_reduced_jpeg(
+    file_path: &Path,
+    operation: OperationClass,
+    requested_max_dimension: u32,
+) -> Result<ReducedJpegDecode, image::ImageError> {
+    if !is_jpeg_path(file_path) {
+        return Ok(ReducedJpegDecode::NotApplicable);
+    }
+
+    let source = match image_resource_policy::ImageSource::open(file_path, operation) {
+        Ok(source) => source,
+        Err(_) => return Ok(ReducedJpegDecode::Fallback),
+    };
+    let encoded_len = source.encoded_len();
+    let source_bytes = match source.read_bytes() {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(ReducedJpegDecode::Fallback),
+    };
+    image_resource_policy::validate_decoder_input_reservation(encoded_len, operation)
+        .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+    let (orientation_width, orientation_height, orientation) = match jpeg_orientation(&source_bytes)
+    {
+        Ok(value) => value,
+        Err(_) => return Ok(ReducedJpegDecode::Fallback),
+    };
+    image_resource_policy::validate_dimensions(
+        orientation_width,
+        orientation_height,
+        &image_resource_policy::PolicyLimits::for_operation(operation),
+    )
+    .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+    let mut decoder = match libjpeg_turbo_rs::Decoder::new(&source_bytes) {
+        Ok(decoder) => decoder,
+        Err(_) => return Ok(ReducedJpegDecode::Fallback),
+    };
+    let header = decoder.header();
+    let source_width = u32::from(header.width);
+    let source_height = u32::from(header.height);
+    if source_width != orientation_width || source_height != orientation_height {
+        return Ok(ReducedJpegDecode::Fallback);
+    }
+    // Progressive JPEG retains one 64-coefficient i16 block per component block until all
+    // scans are complete (roughly 3-6 source bytes per pixel depending on subsampling). The
+    // reduced path's estimate intentionally covers sequential JPEG only; progressive, lossless,
+    // and non-8-bit streams use the existing bounded full decoder/fallback semantics.
+    if header.is_progressive || header.is_lossless || header.precision != 8 {
+        return Ok(ReducedJpegDecode::Fallback);
+    }
+    let scale = select_jpeg_decode_scale(source_width, source_height, requested_max_dimension);
+    let JpegDecodeScale::Reduced(factor) = scale else {
+        return Ok(ReducedJpegDecode::NotApplicable);
+    };
+
+    let color_space = decoder.jpeg_color_space();
+    let (pixel_format, bytes_per_pixel) = match color_space {
+        libjpeg_turbo_rs::ColorSpace::Grayscale => (libjpeg_turbo_rs::PixelFormat::Grayscale, 1),
+        libjpeg_turbo_rs::ColorSpace::Rgb | libjpeg_turbo_rs::ColorSpace::YCbCr => {
+            (libjpeg_turbo_rs::PixelFormat::Rgb, 3)
+        }
+        libjpeg_turbo_rs::ColorSpace::Cmyk
+        | libjpeg_turbo_rs::ColorSpace::Ycck
+        | libjpeg_turbo_rs::ColorSpace::Unknown => return Ok(ReducedJpegDecode::Fallback),
+    };
+    let decoded_width = source_width.div_ceil(factor);
+    let decoded_height = source_height.div_ceil(factor);
+    let component_sampling = header
+        .components
+        .iter()
+        .map(|component| image_resource_policy::JpegComponentSampling {
+            horizontal: component.horizontal_sampling,
+            vertical: component.vertical_sampling,
+        })
+        .collect::<Vec<_>>();
+    image_resource_policy::validate_scaled_decoder_memory(
+        (source_width, source_height),
+        (decoded_width, decoded_height),
+        encoded_len,
+        bytes_per_pixel,
+        factor,
+        &component_sampling,
+        operation,
+    )
+    .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+
+    decoder.set_scale(libjpeg_turbo_rs::ScalingFactor::new(1, factor));
+    decoder.set_output_format(pixel_format);
+    let decoded = match decoder.decode_image() {
+        Ok(decoded) => decoded,
+        Err(_) => return Ok(ReducedJpegDecode::Fallback),
+    };
+    // DynamicImage's JPEG encoder cannot carry an embedded ICC profile. Preserve the existing
+    // profile-aware full path rather than publishing a reduced asset with changed colour intent.
+    if decoded.icc_profile.is_some() {
+        return Ok(ReducedJpegDecode::Fallback);
+    }
+    let decoded_width = u32::try_from(decoded.width).map_err(|_| {
+        reduced_jpeg_policy_error(
+            operation,
+            image_resource_policy::ResourcePolicyError::AllocationTooLargeForPlatform,
+        )
+    })?;
+    let decoded_height = u32::try_from(decoded.height).map_err(|_| {
+        reduced_jpeg_policy_error(
+            operation,
+            image_resource_policy::ResourcePolicyError::AllocationTooLargeForPlatform,
+        )
+    })?;
+    let mut image = match decoded.pixel_format {
+        libjpeg_turbo_rs::PixelFormat::Grayscale => {
+            image::GrayImage::from_raw(decoded_width, decoded_height, decoded.data)
+                .map(DynamicImage::ImageLuma8)
+        }
+        libjpeg_turbo_rs::PixelFormat::Rgb => {
+            image::RgbImage::from_raw(decoded_width, decoded_height, decoded.data)
+                .map(DynamicImage::ImageRgb8)
+        }
+        _ => None,
+    };
+    let Some(mut image) = image.take() else {
+        return Ok(ReducedJpegDecode::Fallback);
+    };
+    image.apply_orientation(orientation);
+    Ok(ReducedJpegDecode::Reduced(image))
+}
+
+#[cfg(test)]
 fn decode_image_with_orientation_for_operation(
     file_path: &Path,
     operation: OperationClass,
@@ -1090,6 +1386,19 @@ fn decode_image_with_orientation_with_preview_limit(
     preview_max_dimension: Option<u32>,
 ) -> Result<DynamicImage, image::ImageError> {
     image_checkpoint()?;
+
+    if let Some(max_dimension) = preview_max_dimension {
+        match try_decode_reduced_jpeg(file_path, operation, max_dimension)? {
+            ReducedJpegDecode::Reduced(image) => {
+                record_jpeg_reduced_decode(operation, image.width(), image.height());
+                return Ok(image);
+            }
+            ReducedJpegDecode::Fallback => {
+                record_jpeg_fallback();
+            }
+            ReducedJpegDecode::NotApplicable => {}
+        }
+    }
     let source =
         image_resource_policy::ImageSource::open(file_path, operation).map_err(|error| {
             image_resource_policy::record_rejection(operation);
@@ -1135,6 +1444,9 @@ fn decode_image_with_orientation_with_preview_limit(
     let mut image = DynamicImage::from_decoder(decoder)?;
     image_checkpoint()?;
     image.apply_orientation(orientation);
+    if is_jpeg_path(file_path) {
+        record_jpeg_full_decode(image.width(), image.height());
+    }
     Ok(image)
 }
 
@@ -1692,6 +2004,14 @@ pub fn generated_asset_runtime_stats() -> GeneratedAssetRuntimeStats {
         native_preview_generations,
         rust_thumbnail_generations: RUST_THUMBNAIL_COUNT.load(Ordering::Relaxed),
         rust_preview_generations,
+        jpeg_reduced_thumbnail_decodes: JPEG_REDUCED_THUMBNAIL_COUNT.load(Ordering::Relaxed),
+        jpeg_reduced_preview_decodes: JPEG_REDUCED_PREVIEW_COUNT.load(Ordering::Relaxed),
+        jpeg_full_decodes: JPEG_FULL_DECODE_COUNT.load(Ordering::Relaxed),
+        jpeg_fallback_decodes: JPEG_FALLBACK_COUNT.load(Ordering::Relaxed),
+        jpeg_reduced_max_output_width: JPEG_REDUCED_MAX_WIDTH.load(Ordering::Relaxed),
+        jpeg_reduced_max_output_height: JPEG_REDUCED_MAX_HEIGHT.load(Ordering::Relaxed),
+        jpeg_full_max_output_width: JPEG_FULL_MAX_WIDTH.load(Ordering::Relaxed),
+        jpeg_full_max_output_height: JPEG_FULL_MAX_HEIGHT.load(Ordering::Relaxed),
         placeholder_thumbnail_generations: PLACEHOLDER_THUMBNAIL_COUNT.load(Ordering::Relaxed),
         placeholder_preview_generations,
         tile_generations: TILE_GENERATED_COUNT.load(Ordering::Relaxed),
@@ -2020,6 +2340,371 @@ fn is_generated_cache_filename(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_decode_scale_uses_safe_power_of_two_boundaries() {
+        assert_eq!(select_jpeg_decode_scale(159, 80, 160), JpegDecodeScale::Full);
+        assert_eq!(select_jpeg_decode_scale(320, 160, 160), JpegDecodeScale::Reduced(2));
+        assert_eq!(select_jpeg_decode_scale(640, 320, 160), JpegDecodeScale::Reduced(4));
+        assert_eq!(select_jpeg_decode_scale(1_280, 640, 160), JpegDecodeScale::Reduced(8));
+        assert_eq!(select_jpeg_decode_scale(1_281, 640, 160), JpegDecodeScale::Reduced(8));
+    }
+
+    #[test]
+    fn reduced_decode_wide_jpeg_public_assets_resize_intermediate_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("wide.jpg");
+        image::RgbImage::from_pixel(20_000, 64, image::Rgb([40, 80, 120])).save(&source).unwrap();
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+
+        let (thumbnail, events) = ScopedJpegTelemetryRecorder::capture(|| {
+            get_or_create_thumbnail(&source, &metadata, &dir.path().join("thumbnails"))
+        });
+        let thumbnail = thumbnail.unwrap();
+        let dimensions = image::image_dimensions(&thumbnail.file_path).unwrap();
+        assert_eq!(dimensions, (THUMBNAIL_SIZE, 1));
+        assert_eq!(
+            events,
+            vec![JpegTelemetryEvent::Reduced {
+                operation: OperationClass::Thumbnail,
+                width: 2_500,
+                height: 8,
+            }]
+        );
+
+        let (preview, events) = ScopedJpegTelemetryRecorder::capture(|| {
+            get_or_create_preview(&source, &metadata, &dir.path().join("previews"), 8_192, None)
+        });
+        let preview = preview.unwrap();
+        let dimensions = image::image_dimensions(&preview.file_path).unwrap();
+        assert_eq!(dimensions, image_resource_policy::preview_resize_dimensions(10_000, 32, 8_192));
+        assert_eq!(
+            events,
+            vec![JpegTelemetryEvent::Reduced {
+                operation: OperationClass::Preview,
+                width: 10_000,
+                height: 32,
+            }]
+        );
+
+        let rejected_cache = dir.path().join("oversized-preview");
+        let (rejected, events) = ScopedJpegTelemetryRecorder::capture(|| {
+            get_or_create_preview(&source, &metadata, &rejected_cache, 8_193, None)
+        });
+        assert!(rejected.unwrap_err().contains("8193"));
+        assert!(events.is_empty(), "oversized requests must fail before decoding");
+        assert!(!rejected_cache.exists());
+    }
+
+    #[test]
+    fn reduced_decode_preserves_orientation_and_bound_detail() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("reduced-oriented.jpg");
+        image::RgbImage::from_fn(1_280, 640, |x, y| image::Rgb([x as u8, y as u8, 17]))
+            .save(&image_path)
+            .unwrap();
+        write_orientation(&image_path, 6);
+
+        let decoded = try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160).unwrap();
+        let ReducedJpegDecode::Reduced(decoded) = decoded else {
+            panic!("expected reduced JPEG decode");
+        };
+        // 1/8 native decode is 160x80 in source space, then EXIF 90-degree rotation swaps it.
+        assert_eq!(decoded.dimensions(), (80, 160));
+    }
+
+    #[test]
+    fn reduced_decode_preserves_grayscale_output_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("reduced-gray.jpg");
+        image::GrayImage::from_fn(1_280, 640, |x, y| image::Luma([(x ^ y) as u8]))
+            .save(&image_path)
+            .unwrap();
+
+        let decoded = try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160).unwrap();
+        let ReducedJpegDecode::Reduced(decoded) = decoded else {
+            panic!("expected reduced grayscale JPEG decode");
+        };
+        assert_eq!(decoded.dimensions(), (160, 80));
+        assert!(matches!(decoded, DynamicImage::ImageLuma8(_)));
+    }
+
+    #[test]
+    fn reduced_decode_falls_back_for_cmyk_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("cmyk.jpg");
+        let pixels = (0..(320 * 160)).flat_map(|_| [32_u8, 64, 96, 128]).collect::<Vec<_>>();
+        let bytes = libjpeg_turbo_rs::compress(
+            &pixels,
+            320,
+            160,
+            libjpeg_turbo_rs::PixelFormat::Cmyk,
+            85,
+            libjpeg_turbo_rs::Subsampling::S444,
+        )
+        .unwrap();
+        fs::write(&image_path, bytes).unwrap();
+
+        assert!(matches!(
+            try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160).unwrap(),
+            ReducedJpegDecode::Fallback
+        ));
+    }
+
+    #[test]
+    fn reduced_decode_falls_back_for_genuine_ycck_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("ycck.jpg");
+        let bytes = test_ycck_jpeg();
+        let decoder = libjpeg_turbo_rs::Decoder::new(&bytes).unwrap();
+        assert_eq!(decoder.jpeg_color_space(), libjpeg_turbo_rs::ColorSpace::Ycck);
+        fs::write(&image_path, bytes).unwrap();
+
+        let (result, events) = ScopedJpegTelemetryRecorder::capture(|| {
+            decode_image_with_orientation_with_preview_limit(
+                &image_path,
+                OperationClass::Preview,
+                Some(8),
+            )
+        });
+        match result {
+            Ok(image) => assert_eq!(
+                events,
+                vec![
+                    JpegTelemetryEvent::Fallback,
+                    JpegTelemetryEvent::Full { width: image.width(), height: image.height() },
+                ],
+                "YCCK must use bounded fallback telemetry before full decode"
+            ),
+            Err(_) => assert_eq!(
+                events,
+                vec![JpegTelemetryEvent::Fallback],
+                "YCCK rejection must report only the bounded fallback attempt"
+            ),
+        }
+    }
+
+    #[test]
+    fn jpeg_telemetry_records_reduced_fallback_full_and_oriented_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let reduced_path = dir.path().join("telemetry-reduced.jpg");
+        fs::write(
+            &reduced_path,
+            libjpeg_turbo_rs::compress(
+                &test_rgb_pixels(128, 96),
+                128,
+                96,
+                libjpeg_turbo_rs::PixelFormat::Rgb,
+                90,
+                libjpeg_turbo_rs::Subsampling::S444,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        write_orientation(&reduced_path, 6);
+        let (reduced, reduced_events) = ScopedJpegTelemetryRecorder::capture(|| {
+            decode_image_with_orientation_with_preview_limit(
+                &reduced_path,
+                OperationClass::Preview,
+                Some(16),
+            )
+        });
+        let reduced = reduced.unwrap();
+        assert_eq!(reduced.dimensions(), (12, 16));
+        assert_eq!(
+            reduced_events,
+            vec![JpegTelemetryEvent::Reduced {
+                operation: OperationClass::Preview,
+                width: 12,
+                height: 16,
+            }]
+        );
+
+        let fallback_path = dir.path().join("telemetry-fallback.jpg");
+        let progressive = libjpeg_turbo_rs::compress_progressive(
+            &test_rgb_pixels(64, 32),
+            64,
+            32,
+            libjpeg_turbo_rs::PixelFormat::Rgb,
+            90,
+            libjpeg_turbo_rs::Subsampling::S444,
+        )
+        .unwrap();
+        fs::write(&fallback_path, progressive).unwrap();
+        let (full, full_events) = ScopedJpegTelemetryRecorder::capture(|| {
+            decode_image_with_orientation_with_preview_limit(
+                &fallback_path,
+                OperationClass::Preview,
+                Some(16),
+            )
+        });
+        let full = full.unwrap();
+        assert_eq!(full.dimensions(), (64, 32));
+        assert_eq!(
+            full_events,
+            vec![JpegTelemetryEvent::Fallback, JpegTelemetryEvent::Full { width: 64, height: 32 },]
+        );
+    }
+
+    #[test]
+    fn reduced_decode_falls_back_for_progressive_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("progressive.jpg");
+        let pixels = (0..(320 * 160)).flat_map(|index| [index as u8, 64, 128]).collect::<Vec<_>>();
+        let bytes = libjpeg_turbo_rs::compress_progressive(
+            &pixels,
+            320,
+            160,
+            libjpeg_turbo_rs::PixelFormat::Rgb,
+            85,
+            libjpeg_turbo_rs::Subsampling::S444,
+        )
+        .unwrap();
+        fs::write(&image_path, bytes).unwrap();
+
+        assert!(matches!(
+            try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160).unwrap(),
+            ReducedJpegDecode::Fallback
+        ));
+    }
+
+    #[test]
+    fn reduced_decode_falls_back_when_icc_profile_cannot_be_republished() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("profiled.jpg");
+        let pixels = vec![128_u8; 320 * 160 * 3];
+        let bytes = libjpeg_turbo_rs::compress_with_metadata(
+            &pixels,
+            320,
+            160,
+            libjpeg_turbo_rs::PixelFormat::Rgb,
+            85,
+            libjpeg_turbo_rs::Subsampling::S444,
+            Some(&[1_u8, 2, 3, 4]),
+            None,
+        )
+        .unwrap();
+        fs::write(&image_path, bytes).unwrap();
+
+        assert!(matches!(
+            try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160).unwrap(),
+            ReducedJpegDecode::Fallback
+        ));
+    }
+
+    #[test]
+    fn reduced_decode_falls_back_for_truncated_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("truncated.jpg");
+        image::RgbImage::from_pixel(640, 320, image::Rgb([12, 34, 56])).save(&image_path).unwrap();
+        let mut bytes = fs::read(&image_path).unwrap();
+        bytes.truncate(bytes.len().saturating_sub(32));
+        fs::write(&image_path, bytes).unwrap();
+
+        assert!(matches!(
+            try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160).unwrap(),
+            ReducedJpegDecode::Fallback
+        ));
+    }
+
+    #[test]
+    fn reduced_decode_rejects_source_before_codec_allocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("oversized-header.jpg");
+        image::RgbImage::new(16, 16).save(&image_path).unwrap();
+        let mut bytes = fs::read(&image_path).unwrap();
+        let sof = bytes
+            .windows(2)
+            .position(|marker| marker == [0xff, 0xc0])
+            .expect("test JPEG must contain a baseline SOF marker");
+        bytes[sof + 5..sof + 7].copy_from_slice(&20_000_u16.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&20_000_u16.to_be_bytes());
+        fs::write(&image_path, bytes).unwrap();
+
+        let error = try_decode_reduced_jpeg(&image_path, OperationClass::Preview, 160)
+            .expect_err("oversized source must be rejected before native decode");
+        assert!(format!("{error}").contains("pixel count"));
+    }
+
+    #[test]
+    fn reduced_decode_matches_full_decode_for_rgb_ycbcr_scales() {
+        let dir = tempfile::tempdir().unwrap();
+        for subsampling in
+            [libjpeg_turbo_rs::Subsampling::S444, libjpeg_turbo_rs::Subsampling::S420]
+        {
+            let image_path = dir.path().join(format!("rgb-{:?}.jpg", subsampling));
+            let pixels = test_rgb_pixels(128, 96);
+            let bytes = libjpeg_turbo_rs::compress(
+                &pixels,
+                128,
+                96,
+                libjpeg_turbo_rs::PixelFormat::Rgb,
+                90,
+                subsampling,
+            )
+            .unwrap();
+            let decoder = libjpeg_turbo_rs::Decoder::new(&bytes).unwrap();
+            assert!(matches!(
+                decoder.jpeg_color_space(),
+                libjpeg_turbo_rs::ColorSpace::Rgb | libjpeg_turbo_rs::ColorSpace::YCbCr
+            ));
+            fs::write(&image_path, bytes).unwrap();
+
+            for requested_max_dimension in [128, 64, 32, 16] {
+                let reduced = bounded_test_decode(&image_path, requested_max_dimension);
+                let full = bounded_full_test_decode(&image_path, requested_max_dimension);
+                // Native IDCT scaling and full-resolution Triangle resize use different
+                // rounding. Require a bounded 8-bit channel delta and a much tighter mean.
+                assert_images_within_tolerance(&reduced, &full, 64, 8.0);
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_decode_matches_full_decode_for_grayscale_and_exif_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let grayscale_path = dir.path().join("gray-scale.jpg");
+        let grayscale = test_gray_pixels(128, 96);
+        fs::write(
+            &grayscale_path,
+            libjpeg_turbo_rs::compress(
+                &grayscale,
+                128,
+                96,
+                libjpeg_turbo_rs::PixelFormat::Grayscale,
+                90,
+                libjpeg_turbo_rs::Subsampling::S444,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for requested_max_dimension in [128, 64, 32, 16] {
+            let reduced = bounded_test_decode(&grayscale_path, requested_max_dimension);
+            let full = bounded_full_test_decode(&grayscale_path, requested_max_dimension);
+            assert_images_within_tolerance(&reduced, &full, 64, 6.0);
+        }
+
+        let rotated_path = dir.path().join("rotated-scale.jpg");
+        fs::write(
+            &rotated_path,
+            libjpeg_turbo_rs::compress(
+                &test_rgb_pixels(128, 96),
+                128,
+                96,
+                libjpeg_turbo_rs::PixelFormat::Rgb,
+                90,
+                libjpeg_turbo_rs::Subsampling::S444,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        write_orientation(&rotated_path, 6);
+        for requested_max_dimension in [128, 64, 32, 16] {
+            let reduced = bounded_test_decode(&rotated_path, requested_max_dimension);
+            let full = bounded_full_test_decode(&rotated_path, requested_max_dimension);
+            assert_images_within_tolerance(&reduced, &full, 64, 8.0);
+        }
+    }
 
     #[test]
     fn cache_epoch_survives_first_directory_creation_and_changes_on_clear() {
@@ -2398,6 +3083,116 @@ mod tests {
         segment.extend_from_slice(&exif);
         image.splice(2..2, segment);
         fs::write(path, image).unwrap();
+    }
+
+    fn test_rgb_pixels(width: usize, height: usize) -> Vec<u8> {
+        (0..height)
+            .flat_map(|y| {
+                (0..width).flat_map(move |x| {
+                    [
+                        ((x * 2 + y) % 256) as u8,
+                        ((y * 2 + x * 3 + 29) % 256) as u8,
+                        ((x + y * 3 + 61) % 256) as u8,
+                    ]
+                })
+            })
+            .collect()
+    }
+
+    fn test_gray_pixels(width: usize, height: usize) -> Vec<u8> {
+        (0..height)
+            .flat_map(|y| (0..width).map(move |x| ((x * 2 + y * 3 + 17) % 256) as u8))
+            .collect()
+    }
+
+    fn test_ycck_jpeg() -> Vec<u8> {
+        let mut ycck = Vec::with_capacity(16 * 16 * 4);
+        for y in 0..16_u32 {
+            for x in 0..16_u32 {
+                let red = (x * 13 + y * 5 + 17) as f64;
+                let green = (x * 7 + y * 11 + 29) as f64;
+                let blue = (x * 3 + y * 19 + 43) as f64;
+                let luma = (0.299 * red + 0.587 * green + 0.114 * blue).round().clamp(0.0, 255.0);
+                let cb = (128.0 - 0.168_736 * red - 0.331_264 * green + 0.5 * blue)
+                    .round()
+                    .clamp(0.0, 255.0);
+                let cr = (128.0 + 0.5 * red - 0.418_688 * green - 0.081_312 * blue)
+                    .round()
+                    .clamp(0.0, 255.0);
+                ycck.extend([luma as u8, cb as u8, cr as u8, ((x + y) * 7) as u8]);
+            }
+        }
+        let mut jpeg = libjpeg_turbo_rs::compress(
+            &ycck,
+            16,
+            16,
+            libjpeg_turbo_rs::PixelFormat::Cmyk,
+            90,
+            libjpeg_turbo_rs::Subsampling::S444,
+        )
+        .unwrap();
+        let adobe = jpeg
+            .windows(5)
+            .position(|marker| marker == b"Adobe")
+            .expect("CMYK JPEG must contain an Adobe APP14 marker");
+        // APP14 stores Adobe, version, flags0, flags1, then the transform byte; transform 2 is
+        // the YCCK declaration. The source channels above are already YCbCr plus K.
+        jpeg[adobe + 11] = 2;
+        jpeg
+    }
+
+    fn bounded_test_decode(path: &Path, max_dimension: u32) -> DynamicImage {
+        let reduced =
+            try_decode_reduced_jpeg(path, OperationClass::Preview, max_dimension).unwrap();
+        let image = match reduced {
+            ReducedJpegDecode::Reduced(image) => image,
+            ReducedJpegDecode::NotApplicable => {
+                decode_image_with_orientation_for_operation(path, OperationClass::Preview).unwrap()
+            }
+            ReducedJpegDecode::Fallback => panic!("test fixture should decode successfully"),
+        };
+        if image.width() > max_dimension || image.height() > max_dimension {
+            image.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
+        } else {
+            image
+        }
+    }
+
+    fn bounded_full_test_decode(path: &Path, max_dimension: u32) -> DynamicImage {
+        let image =
+            decode_image_with_orientation_for_operation(path, OperationClass::Preview).unwrap();
+        if image.width() > max_dimension || image.height() > max_dimension {
+            image.resize(max_dimension, max_dimension, image::imageops::FilterType::Triangle)
+        } else {
+            image
+        }
+    }
+
+    fn assert_images_within_tolerance(
+        actual: &DynamicImage,
+        expected: &DynamicImage,
+        max_channel_delta: u8,
+        max_mean_delta: f64,
+    ) {
+        assert_eq!(actual.dimensions(), expected.dimensions());
+        let actual = actual.to_rgb8();
+        let expected = expected.to_rgb8();
+        let mut max_delta = 0_u8;
+        let mut total_delta = 0_u64;
+        let mut sample_count = 0_u64;
+        for (actual, expected) in actual.pixels().zip(expected.pixels()) {
+            for (actual, expected) in actual.0.iter().zip(expected.0.iter()) {
+                let delta = actual.abs_diff(*expected);
+                max_delta = max_delta.max(delta);
+                total_delta += u64::from(delta);
+                sample_count += 1;
+            }
+        }
+        let mean_delta = total_delta as f64 / sample_count.max(1) as f64;
+        assert!(
+            max_delta <= max_channel_delta && mean_delta <= max_mean_delta,
+            "reduced JPEG differs from full decode: max delta {max_delta}, mean delta {mean_delta:.2}"
+        );
     }
 
     fn cache_file_name_for_index(index: usize, extension: &str) -> String {
