@@ -25,9 +25,12 @@ Workers check cancellation between codec stages and before publication. A codec
 call already inside a native library cannot be forcibly interrupted, so physical
 capacity remains occupied until it returns. Edit replacement, once begun, finishes
 atomically. Generated output is staged and only published after cancellation,
-source-version and root-epoch validation. Clearing a cache retires its namespace
-while scanning and removing files outside the root lock; stale producers cannot
-write back. Tile source memory has its own retirement epoch. Maintenance uses the
+source-version and root-epoch validation. Thumbnail, preview and tile jobs capture
+their root generation before queue admission, so work dispatched after a clear
+cannot adopt the replacement namespace or return a retired cache hit. Clearing a
+cache retires its namespace while scanning and removing files outside the root
+lock; stale producers cannot write back. Tile source memory has its own retirement
+epoch. Maintenance uses the
 same pool at background priority and retries on later cache access after overload.
 
 Application exit rejects queued/new requests and signals running jobs. Fixed worker

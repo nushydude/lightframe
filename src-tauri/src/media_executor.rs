@@ -110,7 +110,7 @@ fn sample(samples: &mut VecDeque<u64>, value: u64) {
 #[serde(rename_all = "camelCase")]
 pub struct ExecutorStats {
     capacity: usize,
-    queue_depth: usize,
+    pub(crate) queue_depth: usize,
     running: usize,
     queued_by_class: [usize; 7],
     running_by_class: [usize; 7],

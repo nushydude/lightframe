@@ -61,7 +61,7 @@ struct CacheRootState {
     retiring: bool,
 }
 
-struct CacheGeneration {
+pub(crate) struct CacheGeneration {
     state: Arc<Mutex<CacheRootState>>,
     epoch: u64,
     source: Option<(PathBuf, SourceMetadata)>,
@@ -82,12 +82,8 @@ fn cache_root_state(root: &Path) -> Arc<Mutex<CacheRootState>> {
 
 /// Namespace identity is included in queued read-only work keys, so post-clear
 /// consumers cannot attach to a retiring producer from the previous namespace.
-pub(crate) fn cache_epoch(root: &Path) -> u64 {
-    cache_root_state(root).lock().unwrap_or_else(|error| error.into_inner()).epoch
-}
-
 impl CacheGeneration {
-    fn capture(root: &Path) -> Result<Self, String> {
+    pub(crate) fn capture(root: &Path) -> Result<Self, String> {
         crate::media_executor::checkpoint()?;
         let state = cache_root_state(root);
         let epoch = {
@@ -100,10 +96,19 @@ impl CacheGeneration {
         Ok(Self { state, epoch, source: None })
     }
 
+    #[cfg(test)]
     fn for_source(root: &Path, path: &Path, metadata: &SourceMetadata) -> Result<Self, String> {
-        let mut generation = Self::capture(root)?;
-        generation.source = Some((path.to_path_buf(), metadata.clone()));
-        Ok(generation)
+        Self::capture(root)?.with_source(path, metadata)
+    }
+
+    fn with_source(mut self, path: &Path, metadata: &SourceMetadata) -> Result<Self, String> {
+        self.checkpoint()?;
+        self.source = Some((path.to_path_buf(), metadata.clone()));
+        Ok(self)
+    }
+
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     fn validate_source(&self) -> Result<(), String> {
@@ -497,12 +502,23 @@ fn validate_generated_source(file_path: &Path, operation: OperationClass) -> Res
     Ok(())
 }
 
+#[cfg(test)]
 pub fn get_or_create_thumbnail(
     file_path: &Path,
     metadata: &SourceMetadata,
     cache_root: &Path,
 ) -> Result<GeneratedImageAsset, String> {
-    let generation = CacheGeneration::for_source(cache_root, file_path, metadata)?;
+    let generation = CacheGeneration::capture(cache_root)?;
+    get_or_create_thumbnail_with_generation(file_path, metadata, cache_root, generation)
+}
+
+pub(crate) fn get_or_create_thumbnail_with_generation(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    generation: CacheGeneration,
+) -> Result<GeneratedImageAsset, String> {
+    let generation = generation.with_source(file_path, metadata)?;
     validate_generated_source(file_path, OperationClass::Thumbnail)?;
     let _source_lease = source_lease_if_present(file_path, OperationClass::Thumbnail)?;
     let cache_key = build_cache_key(file_path, metadata);
@@ -516,6 +532,7 @@ pub fn get_or_create_thumbnail(
             cached_thumbnail_formats(file_path, &cache_hash),
             Some((THUMBNAIL_SIZE, THUMBNAIL_SIZE)),
         ) {
+            generation.checkpoint()?;
             THUMBNAIL_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
@@ -566,6 +583,7 @@ pub fn get_or_create_thumbnail(
     })
 }
 
+#[cfg(test)]
 pub fn get_or_create_preview(
     file_path: &Path,
     metadata: &SourceMetadata,
@@ -573,7 +591,26 @@ pub fn get_or_create_preview(
     max_dimension: u32,
     invalidation_bust: Option<u64>,
 ) -> Result<GeneratedImageAsset, String> {
-    let generation = CacheGeneration::for_source(cache_root, file_path, metadata)?;
+    let generation = CacheGeneration::capture(cache_root)?;
+    get_or_create_preview_with_generation(
+        file_path,
+        metadata,
+        cache_root,
+        max_dimension,
+        invalidation_bust,
+        generation,
+    )
+}
+
+pub(crate) fn get_or_create_preview_with_generation(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+    generation: CacheGeneration,
+) -> Result<GeneratedImageAsset, String> {
+    let generation = generation.with_source(file_path, metadata)?;
     image_resource_policy::validate_requested_dimension(max_dimension, OperationClass::Preview)
         .map_err(|error| policy_error(OperationClass::Preview, error))?;
     validate_generated_source(file_path, OperationClass::Preview)?;
@@ -590,6 +627,7 @@ pub fn get_or_create_preview(
             cached_preview_formats(file_path, &cache_hash),
             Some((PREVIEW_PLACEHOLDER_SIZE, PREVIEW_PLACEHOLDER_SIZE)),
         ) {
+            generation.checkpoint()?;
             PREVIEW_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
@@ -747,13 +785,25 @@ pub fn validate_tile_request(request: TileRequest) -> Result<TileBounds, String>
     Ok(TileBounds { x: x as u32, y: y as u32, width: width as u32, height: height as u32 })
 }
 
+#[cfg(test)]
 pub fn get_or_create_tile(
     file_path: &Path,
     metadata: &SourceMetadata,
     cache_root: &Path,
     request: TileRequest,
 ) -> Result<GeneratedImageAsset, String> {
-    let generation = CacheGeneration::for_source(cache_root, file_path, metadata)?;
+    let generation = CacheGeneration::capture(cache_root)?;
+    get_or_create_tile_with_generation(file_path, metadata, cache_root, request, generation)
+}
+
+pub(crate) fn get_or_create_tile_with_generation(
+    file_path: &Path,
+    metadata: &SourceMetadata,
+    cache_root: &Path,
+    request: TileRequest,
+    generation: CacheGeneration,
+) -> Result<GeneratedImageAsset, String> {
+    let generation = generation.with_source(file_path, metadata)?;
     if !tile_decode_supported_for_path(file_path) {
         return Err("Tiled rendering currently supports JPEG images only".to_string());
     }
@@ -780,6 +830,7 @@ pub fn get_or_create_tile(
         if let Some(asset) =
             cached_asset_from_disk(cache_root, &cache_hash, &[GeneratedImageFormat::Jpeg], None)
         {
+            generation.checkpoint()?;
             TILE_CACHE_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             return Ok(asset);
         }
@@ -1980,7 +2031,147 @@ mod tests {
         assert!(Arc::ptr_eq(&first.state, &created.state));
         clear_generated_cache_root(&root).unwrap();
         assert!(first.checkpoint().is_err());
-        assert_ne!(cache_epoch(&root), first.epoch);
+        assert_ne!(CacheGeneration::capture(&root).unwrap().epoch(), first.epoch);
+    }
+
+    fn assert_queued_before_clear_rejected<F, G>(
+        priority: crate::media_executor::Priority,
+        root: &Path,
+        stale_work: F,
+        replacement_work: G,
+    ) where
+        F: FnOnce() -> Result<GeneratedImageAsset, String> + Send + 'static,
+        G: FnOnce() -> Result<GeneratedImageAsset, String>,
+    {
+        use crate::media_executor::{MediaExecutor, Priority};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let executor = MediaExecutor::new(2);
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut blockers = Vec::new();
+        for _ in 0..2 {
+            let worker = executor.clone();
+            let started = started_tx.clone();
+            let (release_tx, release_rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                tokio::runtime::Runtime::new().unwrap().block_on(worker.execute(
+                    None,
+                    Priority::CurrentPreview,
+                    None,
+                    move || {
+                        started.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                        Ok(())
+                    },
+                ))
+            });
+            blockers.push((release_tx, handle));
+        }
+        for _ in 0..2 {
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+
+        let worker = executor.clone();
+        let queued = std::thread::spawn(move || {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(worker.execute(None, priority, None, stale_work))
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while executor.stats().queue_depth == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(executor.stats().queue_depth, 1);
+        clear_generated_cache_root(root).unwrap();
+        for (release, _) in &blockers {
+            release.send(()).unwrap();
+        }
+        for (_, handle) in blockers {
+            handle.join().unwrap().unwrap();
+        }
+        let error = queued.join().unwrap().unwrap_err();
+        assert!(error.contains("stale"), "unexpected error: {error}");
+        assert!(!root.exists() || fs::read_dir(root).unwrap().next().is_none());
+        let replacement = replacement_work().unwrap();
+        assert!(Path::new(&replacement.file_path).exists());
+        executor.shutdown();
+    }
+
+    #[test]
+    fn queued_generated_assets_keep_admission_generation_across_clear() {
+        use crate::media_executor::Priority;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("photo.jpg");
+        image::RgbImage::from_pixel(256, 256, image::Rgb([40, 80, 120])).save(&source).unwrap();
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+
+        let thumbnail_root = dir.path().join("thumbnails");
+        let generation = CacheGeneration::capture(&thumbnail_root).unwrap();
+        let stale_source = source.clone();
+        let stale_metadata = metadata.clone();
+        let stale_root = thumbnail_root.clone();
+        assert_queued_before_clear_rejected(
+            Priority::VisibleThumbnail,
+            &thumbnail_root,
+            move || {
+                get_or_create_thumbnail_with_generation(
+                    &stale_source,
+                    &stale_metadata,
+                    &stale_root,
+                    generation,
+                )
+            },
+            || get_or_create_thumbnail(&source, &metadata, &thumbnail_root),
+        );
+
+        let preview_root = dir.path().join("previews");
+        let generation = CacheGeneration::capture(&preview_root).unwrap();
+        let stale_source = source.clone();
+        let stale_metadata = metadata.clone();
+        let stale_root = preview_root.clone();
+        assert_queued_before_clear_rejected(
+            Priority::CurrentPreview,
+            &preview_root,
+            move || {
+                get_or_create_preview_with_generation(
+                    &stale_source,
+                    &stale_metadata,
+                    &stale_root,
+                    64,
+                    None,
+                    generation,
+                )
+            },
+            || get_or_create_preview(&source, &metadata, &preview_root, 64, None),
+        );
+
+        let tile_root = dir.path().join("tiles");
+        let generation = CacheGeneration::capture(&tile_root).unwrap();
+        let stale_source = source.clone();
+        let stale_metadata = metadata.clone();
+        let stale_root = tile_root.clone();
+        let request = TileRequest {
+            source_width: 256,
+            source_height: 256,
+            tile_size: 128,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        assert_queued_before_clear_rejected(
+            Priority::CurrentFull,
+            &tile_root,
+            move || {
+                get_or_create_tile_with_generation(
+                    &stale_source,
+                    &stale_metadata,
+                    &stale_root,
+                    request,
+                    generation,
+                )
+            },
+            || get_or_create_tile(&source, &metadata, &tile_root, request),
+        );
     }
 
     #[test]

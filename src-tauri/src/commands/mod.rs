@@ -1282,11 +1282,29 @@ pub async fn get_embedded_comfy_metadata(
         .await
 }
 
+#[cfg(test)]
 fn get_preview_image_blocking(
     file_path: String,
     max_dimension: u32,
     invalidation_bust: Option<u64>,
     app_cache_dir: PathBuf,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("previews"))?;
+    get_preview_image_blocking_admitted(
+        file_path,
+        max_dimension,
+        invalidation_bust,
+        app_cache_dir,
+        generation,
+    )
+}
+
+fn get_preview_image_blocking_admitted(
+    file_path: String,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+    app_cache_dir: PathBuf,
+    generation: thumbnails::CacheGeneration,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
@@ -1303,12 +1321,13 @@ fn get_preview_image_blocking(
 
     let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
     let preview_cache_dir = app_cache_dir.join("previews");
-    thumbnails::get_or_create_preview(
+    thumbnails::get_or_create_preview_with_generation(
         path,
         &metadata,
         &preview_cache_dir,
         max_dimension,
         invalidation_bust,
+        generation,
     )
 }
 
@@ -1323,15 +1342,26 @@ pub async fn get_preview_image(
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    let epoch = thumbnails::cache_epoch(&app_cache_dir.join("previews"));
-    let key = Some(format!("preview:{epoch}:{file_path:?}:{max_dimension}:{invalidation_bust:?}"));
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("previews"))?;
+    let key = Some(format!(
+        "preview:{}:{file_path:?}:{max_dimension}:{invalidation_bust:?}",
+        generation.epoch()
+    ));
     executor
         .execute(request, Priority::CurrentPreview, key, move || {
-            get_preview_image_blocking(file_path, max_dimension, invalidation_bust, app_cache_dir)
+            get_preview_image_blocking_admitted(
+                file_path,
+                max_dimension,
+                invalidation_bust,
+                app_cache_dir,
+                generation,
+            )
         })
         .await
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn get_image_tile_blocking(
     file_path: String,
     source_width: u32,
@@ -1340,6 +1370,30 @@ fn get_image_tile_blocking(
     tile_x: u32,
     tile_y: u32,
     app_cache_dir: PathBuf,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("tiles"))?;
+    get_image_tile_blocking_admitted(
+        file_path,
+        source_width,
+        source_height,
+        tile_size,
+        tile_x,
+        tile_y,
+        app_cache_dir,
+        generation,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_image_tile_blocking_admitted(
+    file_path: String,
+    source_width: u32,
+    source_height: u32,
+    tile_size: u32,
+    tile_x: u32,
+    tile_y: u32,
+    app_cache_dir: PathBuf,
+    generation: thumbnails::CacheGeneration,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
@@ -1356,11 +1410,12 @@ fn get_image_tile_blocking(
 
     let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
     let tile_cache_dir = app_cache_dir.join("tiles");
-    thumbnails::get_or_create_tile(
+    thumbnails::get_or_create_tile_with_generation(
         path,
         &metadata,
         &tile_cache_dir,
         thumbnails::TileRequest { source_width, source_height, tile_size, tile_x, tile_y },
+        generation,
     )
 }
 
@@ -1392,13 +1447,14 @@ pub async fn get_image_tile(
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    let epoch = thumbnails::cache_epoch(&app_cache_dir.join("tiles"));
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("tiles"))?;
     let key = Some(format!(
-        "tile:{epoch}:{file_path:?}:{source_width}:{source_height}:{tile_size}:{tile_x}:{tile_y}"
+        "tile:{}:{file_path:?}:{source_width}:{source_height}:{tile_size}:{tile_x}:{tile_y}",
+        generation.epoch()
     ));
     executor
         .execute(request, Priority::CurrentFull, key, move || {
-            get_image_tile_blocking(
+            get_image_tile_blocking_admitted(
                 file_path,
                 source_width,
                 source_height,
@@ -1406,6 +1462,7 @@ pub async fn get_image_tile(
                 tile_x,
                 tile_y,
                 app_cache_dir,
+                generation,
             )
         })
         .await
@@ -2514,11 +2571,17 @@ fn get_thumbnail_blocking(
     size_bytes: Option<u64>,
     modified_at: Option<String>,
     app_cache_dir: PathBuf,
+    generation: thumbnails::CacheGeneration,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     let metadata = thumbnails::resolve_source_metadata(path, size_bytes, modified_at.as_deref())?;
     let thumbnail_cache_dir = app_cache_dir.join("thumbnails");
-    thumbnails::get_or_create_thumbnail(path, &metadata, &thumbnail_cache_dir)
+    thumbnails::get_or_create_thumbnail_with_generation(
+        path,
+        &metadata,
+        &thumbnail_cache_dir,
+        generation,
+    )
 }
 
 /// Generate a small cached thumbnail asset for high-performance navigation
@@ -2533,11 +2596,14 @@ pub async fn get_thumbnail(
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    let epoch = thumbnails::cache_epoch(&app_cache_dir.join("thumbnails"));
-    let key = Some(format!("thumbnail:{epoch}:{file_path:?}:{size_bytes:?}:{modified_at:?}"));
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("thumbnails"))?;
+    let key = Some(format!(
+        "thumbnail:{}:{file_path:?}:{size_bytes:?}:{modified_at:?}",
+        generation.epoch()
+    ));
     executor
         .execute(request, Priority::VisibleThumbnail, key, move || {
-            get_thumbnail_blocking(file_path, size_bytes, modified_at, app_cache_dir)
+            get_thumbnail_blocking(file_path, size_bytes, modified_at, app_cache_dir, generation)
         })
         .await
 }
