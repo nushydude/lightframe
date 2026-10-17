@@ -3,6 +3,7 @@ import type { PerformanceMode } from '../types/settings';
 const MB = 1024 * 1024;
 
 export type PerformanceModeProfile = {
+  nativeMediaCapacity: number;
   previewCacheBudgetBytes: number;
   thumbnailCacheBudgetBytes: number;
   adjacentPreviousImages: number;
@@ -17,18 +18,21 @@ export const PERFORMANCE_MODE_LABELS: Record<PerformanceMode, string> = {
 
 const PERFORMANCE_MODE_PROFILES: Record<PerformanceMode, PerformanceModeProfile> = {
   fast: {
+    nativeMediaCapacity: 4,
     previewCacheBudgetBytes: 256 * MB,
     thumbnailCacheBudgetBytes: 160 * MB,
     adjacentPreviousImages: 3,
     adjacentNextImages: 4,
   },
   balanced: {
+    nativeMediaCapacity: 3,
     previewCacheBudgetBytes: 192 * MB,
     thumbnailCacheBudgetBytes: 104 * MB,
     adjacentPreviousImages: 2,
     adjacentNextImages: 3,
   },
   lowMemory: {
+    nativeMediaCapacity: 2,
     previewCacheBudgetBytes: 64 * MB,
     thumbnailCacheBudgetBytes: 32 * MB,
     adjacentPreviousImages: 1,

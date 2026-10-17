@@ -6,6 +6,7 @@ pub use settings_commands::*;
 
 use crate::atomic_file::{build_unique_sibling_path, replace_file_safely};
 pub use crate::image_metadata::ExifData;
+use crate::media_executor::{MediaExecutor, MediaRequest, Priority};
 use crate::{folder_index, image_resource_policy, native_codecs, thumbnails};
 use image::{GenericImageView, ImageDecoder};
 use libjpeg_turbo_rs::{MarkerCopyMode, TransformOp, TransformOptions};
@@ -393,6 +394,7 @@ fn open_image_with_resource_limits(
     source: &image_resource_policy::ImageSource,
     operation: image_resource_policy::OperationClass,
 ) -> Result<image::DynamicImage, String> {
+    crate::media_executor::checkpoint()?;
     let decoder = image_resource_policy::decoder_for_source(source, operation)
         .map_err(|error| format!("Failed to inspect image: {error}"))?;
     let (width, height) = decoder.dimensions();
@@ -404,8 +406,10 @@ fn open_image_with_resource_limits(
         operation,
     )
     .map_err(|error| policy_error(operation, error))?;
-    image::DynamicImage::from_decoder(decoder)
-        .map_err(|error| format!("Failed to decode image: {error}"))
+    let image = image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("Failed to decode image: {error}"))?;
+    crate::media_executor::checkpoint()?;
+    Ok(image)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1101,26 +1105,34 @@ fn codec_health_status(
 }
 
 #[tauri::command]
-pub async fn get_codec_health(app: AppHandle) -> Result<CodecHealthReport, String> {
+pub async fn get_codec_health(
+    app: AppHandle,
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+) -> Result<CodecHealthReport, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || codec_health_report_blocking(app_cache_dir))
+    executor
+        .execute(request, Priority::BackgroundPreload, None, move || {
+            Ok(codec_health_report_blocking(app_cache_dir))
+        })
         .await
-        .map_err(|err| format!("Codec health worker failed: {}", err))
 }
 
 #[tauri::command]
 pub async fn clear_generated_image_cache(
     app: AppHandle,
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     scope: GeneratedCacheCommandScope,
 ) -> Result<thumbnails::GeneratedCacheSummary, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        thumbnails::clear_generated_cache(&app_cache_dir, scope.into())
-    })
-    .await
-    .map_err(|err| format!("Generated cache cleanup worker failed: {}", err))?
+    executor
+        .execute(request, Priority::BackgroundPreload, None, move || {
+            thumbnails::clear_generated_cache(&app_cache_dir, scope.into())
+        })
+        .await
 }
 
 #[tauri::command]
@@ -1230,37 +1242,69 @@ fn try_lossless_jpeg_rotation_bytes(
 
 /// Get image metadata (dimensions, format, file size)
 #[tauri::command]
-pub async fn get_image_metadata(file_path: String) -> Result<ImageMetadata, String> {
-    tauri::async_runtime::spawn_blocking(move || get_image_metadata_blocking(file_path))
+pub async fn get_image_metadata(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+    file_path: String,
+) -> Result<ImageMetadata, String> {
+    executor
+        .execute(request, Priority::CurrentMetadata, None, move || {
+            get_image_metadata_blocking(file_path)
+        })
         .await
-        .map_err(|err| format!("Image metadata worker failed: {}", err))?
 }
 
 /// Read a same-basename LoRA caption sidecar (`.txt`, then `.caption`) when present.
 #[tauri::command]
-pub async fn get_image_caption(file_path: String) -> Result<Option<ImageCaption>, String> {
-    tauri::async_runtime::spawn_blocking(move || get_image_caption_blocking(file_path))
+pub async fn get_image_caption(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+    file_path: String,
+) -> Result<Option<ImageCaption>, String> {
+    executor
+        .execute(request, Priority::CurrentMetadata, None, move || {
+            get_image_caption_blocking(file_path)
+        })
         .await
-        .map_err(|err| format!("Image caption worker failed: {}", err))?
 }
 
 /// Read bounded ComfyUI Prompt/workflow text from PNG chunks without decoding image pixels.
 #[tauri::command]
-pub async fn get_embedded_comfy_metadata(file_path: String) -> EmbeddedComfyMetadata {
-    tauri::async_runtime::spawn_blocking(move || get_embedded_comfy_metadata_blocking(file_path))
-        .await
-        .unwrap_or(EmbeddedComfyMetadata {
-            prompt_json: None,
-            workflow_json: None,
-            source: "Embedded metadata could not be read".to_string(),
+pub async fn get_embedded_comfy_metadata(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+    file_path: String,
+) -> Result<EmbeddedComfyMetadata, String> {
+    executor
+        .execute(request, Priority::CurrentMetadata, None, move || {
+            Ok(get_embedded_comfy_metadata_blocking(file_path))
         })
+        .await
 }
 
+#[cfg(test)]
 fn get_preview_image_blocking(
     file_path: String,
     max_dimension: u32,
     invalidation_bust: Option<u64>,
     app_cache_dir: PathBuf,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("previews"))?;
+    get_preview_image_blocking_admitted(
+        file_path,
+        max_dimension,
+        invalidation_bust,
+        app_cache_dir,
+        generation,
+    )
+}
+
+fn get_preview_image_blocking_admitted(
+    file_path: String,
+    max_dimension: u32,
+    invalidation_bust: Option<u64>,
+    app_cache_dir: PathBuf,
+    generation: thumbnails::CacheGeneration,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
@@ -1277,31 +1321,47 @@ fn get_preview_image_blocking(
 
     let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
     let preview_cache_dir = app_cache_dir.join("previews");
-    thumbnails::get_or_create_preview(
+    thumbnails::get_or_create_preview_with_generation(
         path,
         &metadata,
         &preview_cache_dir,
         max_dimension,
         invalidation_bust,
+        generation,
     )
 }
 
 #[tauri::command]
 pub async fn get_preview_image(
     app: AppHandle,
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     file_path: String,
     max_dimension: u32,
     invalidation_bust: Option<u64>,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        get_preview_image_blocking(file_path, max_dimension, invalidation_bust, app_cache_dir)
-    })
-    .await
-    .map_err(|err| format!("Preview image worker failed: {}", err))?
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("previews"))?;
+    let key = Some(format!(
+        "preview:{}:{file_path:?}:{max_dimension}:{invalidation_bust:?}",
+        generation.epoch()
+    ));
+    executor
+        .execute(request, Priority::CurrentPreview, key, move || {
+            get_preview_image_blocking_admitted(
+                file_path,
+                max_dimension,
+                invalidation_bust,
+                app_cache_dir,
+                generation,
+            )
+        })
+        .await
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn get_image_tile_blocking(
     file_path: String,
     source_width: u32,
@@ -1310,6 +1370,30 @@ fn get_image_tile_blocking(
     tile_x: u32,
     tile_y: u32,
     app_cache_dir: PathBuf,
+) -> Result<thumbnails::GeneratedImageAsset, String> {
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("tiles"))?;
+    get_image_tile_blocking_admitted(
+        file_path,
+        source_width,
+        source_height,
+        tile_size,
+        tile_x,
+        tile_y,
+        app_cache_dir,
+        generation,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_image_tile_blocking_admitted(
+    file_path: String,
+    source_width: u32,
+    source_height: u32,
+    tile_size: u32,
+    tile_x: u32,
+    tile_y: u32,
+    app_cache_dir: PathBuf,
+    generation: thumbnails::CacheGeneration,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     if !path.is_file() {
@@ -1326,11 +1410,12 @@ fn get_image_tile_blocking(
 
     let metadata = thumbnails::resolve_source_metadata(path, None, None)?;
     let tile_cache_dir = app_cache_dir.join("tiles");
-    thumbnails::get_or_create_tile(
+    thumbnails::get_or_create_tile_with_generation(
         path,
         &metadata,
         &tile_cache_dir,
         thumbnails::TileRequest { source_width, source_height, tile_size, tile_x, tile_y },
+        generation,
     )
 }
 
@@ -1348,8 +1433,11 @@ fn tile_source_dimensions(path: &Path) -> Result<(u32, u32), String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Preserve existing IPC fields plus executor/request metadata.
 pub async fn get_image_tile(
     app: AppHandle,
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     file_path: String,
     source_width: u32,
     source_height: u32,
@@ -1359,19 +1447,25 @@ pub async fn get_image_tile(
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        get_image_tile_blocking(
-            file_path,
-            source_width,
-            source_height,
-            tile_size,
-            tile_x,
-            tile_y,
-            app_cache_dir,
-        )
-    })
-    .await
-    .map_err(|err| format!("Image tile worker failed: {}", err))?
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("tiles"))?;
+    let key = Some(format!(
+        "tile:{}:{file_path:?}:{source_width}:{source_height}:{tile_size}:{tile_x}:{tile_y}",
+        generation.epoch()
+    ));
+    executor
+        .execute(request, Priority::CurrentFull, key, move || {
+            get_image_tile_blocking_admitted(
+                file_path,
+                source_width,
+                source_height,
+                tile_size,
+                tile_x,
+                tile_y,
+                app_cache_dir,
+                generation,
+            )
+        })
+        .await
 }
 
 fn diagnostics_export_path(path: &str) -> Result<PathBuf, String> {
@@ -1800,6 +1894,7 @@ fn copy_image_to_clipboard_blocking(file_path: String) -> Result<(), String> {
     };
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
+    crate::media_executor::checkpoint()?;
     clipboard
         .set_image(image_data)
         .map_err(|e| format!("Failed to copy image to clipboard: {}", e))?;
@@ -1808,10 +1903,16 @@ fn copy_image_to_clipboard_blocking(file_path: String) -> Result<(), String> {
 
 /// Copy an image file to the OS clipboard
 #[tauri::command]
-pub async fn copy_image_to_clipboard(file_path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || copy_image_to_clipboard_blocking(file_path))
+pub async fn copy_image_to_clipboard(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+    file_path: String,
+) -> Result<(), String> {
+    executor
+        .execute(request, Priority::ExplicitEdit, None, move || {
+            copy_image_to_clipboard_blocking(file_path)
+        })
         .await
-        .map_err(|err| format!("Clipboard worker failed: {}", err))?
 }
 
 fn open_in_external_application_blocking(
@@ -1915,6 +2016,7 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
             .map_err(|error| policy_error(image_resource_policy::OperationClass::Rotate, error))?;
             match save_lossless_jpeg_rotation(&source, path, rotation_degrees) {
                 Err(lossless_error) => {
+                    crate::media_executor::checkpoint()?;
                     eprintln!(
                     "Lossless JPEG rotation failed for '{}': {}. Falling back to pixel re-encode.",
                     file_path, lossless_error
@@ -1933,7 +2035,8 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
                         &temp_path,
                         "lossless rotation",
                     )?;
-                    let result = source.replace(&temp_path, path);
+                    let result = checkpoint_before_edit_publish(&temp_path)
+                        .and_then(|()| source.replace(&temp_path, path));
                     if result.is_err() {
                         let _ = fs::remove_file(temp_path);
                     }
@@ -1946,12 +2049,17 @@ fn save_rotated_image_blocking(file_path: String, rotation_degrees: i32) -> Resu
 
 /// Rotate an image file on disk and save it
 #[tauri::command]
-pub async fn save_rotated_image(file_path: String, rotation_degrees: i32) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        save_rotated_image_blocking(file_path, rotation_degrees)
-    })
-    .await
-    .map_err(|err| format!("Rotation worker failed: {}", err))?
+pub async fn save_rotated_image(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+    file_path: String,
+    rotation_degrees: i32,
+) -> Result<(), String> {
+    executor
+        .execute(request, Priority::ExplicitEdit, None, move || {
+            save_rotated_image_blocking(file_path, rotation_degrees)
+        })
+        .await
 }
 
 fn save_lossless_jpeg_rotation(
@@ -1962,6 +2070,7 @@ fn save_lossless_jpeg_rotation(
     let operation = image_resource_policy::OperationClass::Rotate;
     let jpeg_bytes = source.read_bytes().map_err(|error| policy_error(operation, error))?;
     let rotated_bytes = try_lossless_jpeg_rotation_bytes(&jpeg_bytes, rotation_degrees)?;
+    crate::media_executor::checkpoint()?;
     let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
 
     fs::write(&temp_path, rotated_bytes)
@@ -1982,6 +2091,7 @@ fn save_rotated_image_by_reencoding(
         open_image_with_resource_limits(&source, image_resource_policy::OperationClass::Rotate)
             .map_err(|error| format!("Failed to open image for saving: {error}"))?;
     let rotated = apply_rotation(img, rotation_degrees)?;
+    crate::media_executor::checkpoint()?;
     let temp_path = build_unique_sibling_path(path, "lightframe-rotate")?;
 
     write_dynamic_image(&rotated, &temp_path, "Failed to save rotated image")?;
@@ -1989,12 +2099,21 @@ fn save_rotated_image_by_reencoding(
 
     restore_normal_orientation(metadata, &temp_path, context_label)?;
 
-    if let Err(err) = source.replace(&temp_path, path) {
+    if let Err(err) =
+        checkpoint_before_edit_publish(&temp_path).and_then(|()| source.replace(&temp_path, path))
+    {
         let _ = fs::remove_file(&temp_path);
         return Err(err);
     }
 
     Ok(())
+}
+
+/// Cancellation may abort before publication. Once replacement starts it runs to completion.
+fn checkpoint_before_edit_publish(temp_path: &Path) -> Result<(), String> {
+    crate::media_executor::checkpoint().inspect_err(|_| {
+        let _ = fs::remove_file(temp_path);
+    })
 }
 
 fn validate_crop_rect(
@@ -2207,7 +2326,9 @@ fn save_scaled_copy_blocking(
     .map_err(|error| policy_error(operation, error))?;
     let img = image::DynamicImage::from_decoder(decoder)
         .map_err(|error| format!("Failed to decode source image: {error}"))?;
+    crate::media_executor::checkpoint()?;
     let scaled = apply_resize_adjustments(img, width, height, smoothing, sharpening);
+    crate::media_executor::checkpoint()?;
     let temp_path = build_unique_sibling_path(output_path_ref, "lightframe-scale")?;
 
     if let Err(err) = write_high_quality_image(&scaled, &temp_path, "Failed to save scaled copy") {
@@ -2215,6 +2336,7 @@ fn save_scaled_copy_blocking(
         return Err(err);
     }
 
+    checkpoint_before_edit_publish(&temp_path)?;
     let replace_result = if output_path_ref.exists() {
         replace_file_safely(&temp_path, output_path_ref)
     } else {
@@ -2311,6 +2433,7 @@ fn save_cropped_copy_blocking(
     )
     .to_image();
 
+    crate::media_executor::checkpoint()?;
     write_cropped_image(&cropped, output_path_ref, "Failed to save cropped copy")?;
 
     Ok(())
@@ -2382,7 +2505,9 @@ fn overwrite_with_crop_blocking(
     drop(rotated);
     restore_normal_orientation(metadata.as_deref(), &temp_path, "crop")?;
 
-    if let Err(err) = source.replace(&temp_path, input_path) {
+    if let Err(err) = checkpoint_before_edit_publish(&temp_path)
+        .and_then(|()| source.replace(&temp_path, input_path))
+    {
         let _ = fs::remove_file(&temp_path);
         return Err(err);
     }
@@ -2392,20 +2517,25 @@ fn overwrite_with_crop_blocking(
 
 #[tauri::command]
 pub async fn save_cropped_copy(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     file_path: String,
     crop_rect: CropRect,
     output_path: String,
     rotation_degrees: Option<i32>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        save_cropped_copy_blocking(file_path, crop_rect, output_path, rotation_degrees)
-    })
-    .await
-    .map_err(|err| format!("Crop copy worker failed: {}", err))?
+    executor
+        .execute(request, Priority::ExplicitEdit, None, move || {
+            save_cropped_copy_blocking(file_path, crop_rect, output_path, rotation_degrees)
+        })
+        .await
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Preserve existing IPC fields plus executor/request metadata.
 pub async fn save_scaled_copy(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     file_path: String,
     output_path: String,
     width: u32,
@@ -2413,24 +2543,26 @@ pub async fn save_scaled_copy(
     smoothing: f32,
     sharpening: f32,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        save_scaled_copy_blocking(file_path, output_path, width, height, smoothing, sharpening)
-    })
-    .await
-    .map_err(|err| format!("Scale copy worker failed: {}", err))?
+    executor
+        .execute(request, Priority::ExplicitEdit, None, move || {
+            save_scaled_copy_blocking(file_path, output_path, width, height, smoothing, sharpening)
+        })
+        .await
 }
 
 #[tauri::command]
 pub async fn overwrite_with_crop(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     file_path: String,
     crop_rect: CropRect,
     rotation_degrees: Option<i32>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        overwrite_with_crop_blocking(file_path, crop_rect, rotation_degrees)
-    })
-    .await
-    .map_err(|err| format!("Crop overwrite worker failed: {}", err))?
+    executor
+        .execute(request, Priority::ExplicitEdit, None, move || {
+            overwrite_with_crop_blocking(file_path, crop_rect, rotation_degrees)
+        })
+        .await
 }
 
 /// Generate a small cached thumbnail asset for high-performance navigation
@@ -2439,38 +2571,57 @@ fn get_thumbnail_blocking(
     size_bytes: Option<u64>,
     modified_at: Option<String>,
     app_cache_dir: PathBuf,
+    generation: thumbnails::CacheGeneration,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let path = Path::new(&file_path);
     let metadata = thumbnails::resolve_source_metadata(path, size_bytes, modified_at.as_deref())?;
     let thumbnail_cache_dir = app_cache_dir.join("thumbnails");
-    thumbnails::get_or_create_thumbnail(path, &metadata, &thumbnail_cache_dir)
+    thumbnails::get_or_create_thumbnail_with_generation(
+        path,
+        &metadata,
+        &thumbnail_cache_dir,
+        generation,
+    )
 }
 
 /// Generate a small cached thumbnail asset for high-performance navigation
 #[tauri::command]
 pub async fn get_thumbnail(
     app: AppHandle,
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
     file_path: String,
     size_bytes: Option<u64>,
     modified_at: Option<String>,
 ) -> Result<thumbnails::GeneratedImageAsset, String> {
     let app_cache_dir =
         app.path().app_cache_dir().map_err(|e| format!("Failed to get app cache dir: {}", e))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        get_thumbnail_blocking(file_path, size_bytes, modified_at, app_cache_dir)
-    })
-    .await
-    .map_err(|err| format!("Thumbnail worker failed: {}", err))?
+    let generation = thumbnails::CacheGeneration::capture(&app_cache_dir.join("thumbnails"))?;
+    let key = Some(format!(
+        "thumbnail:{}:{file_path:?}:{size_bytes:?}:{modified_at:?}",
+        generation.epoch()
+    ));
+    executor
+        .execute(request, Priority::VisibleThumbnail, key, move || {
+            get_thumbnail_blocking(file_path, size_bytes, modified_at, app_cache_dir, generation)
+        })
+        .await
 }
 
 /// Extract EXIF metadata from an image.
 pub use crate::image_metadata::get_exif_metadata_blocking;
 
 #[tauri::command]
-pub async fn get_exif_metadata(file_path: String) -> Result<ExifData, String> {
-    tauri::async_runtime::spawn_blocking(move || get_exif_metadata_blocking(file_path))
+pub async fn get_exif_metadata(
+    executor: tauri::State<'_, MediaExecutor>,
+    request: Option<MediaRequest>,
+    file_path: String,
+) -> Result<ExifData, String> {
+    executor
+        .execute(request, Priority::CurrentMetadata, None, move || {
+            get_exif_metadata_blocking(file_path)
+        })
         .await
-        .map_err(|error| format!("EXIF worker failed: {error}"))?
 }
 
 #[cfg(test)]

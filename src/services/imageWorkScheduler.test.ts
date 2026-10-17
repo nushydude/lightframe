@@ -54,14 +54,16 @@ describe('imageWorkScheduler', () => {
       }).promise;
 
     const backgroundPromise = scheduleTask('background', IMAGE_WORK_PRIORITY.backgroundPreload);
+    const adjacentPromise = scheduleTask('adjacent', IMAGE_WORK_PRIORITY.adjacentDirectional);
     const visiblePromise = scheduleTask('visible', IMAGE_WORK_PRIORITY.visibleThumbnail);
     const currentPromise = scheduleTask('current', IMAGE_WORK_PRIORITY.currentPreview);
 
     blocker.resolve();
     await expect(currentPromise).resolves.toBe('current');
     await expect(visiblePromise).resolves.toBe('visible');
+    await expect(adjacentPromise).resolves.toBe('adjacent');
     await expect(backgroundPromise).resolves.toBe('background');
-    expect(started).toEqual(['blocker', 'current', 'visible', 'background']);
+    expect(started).toEqual(['blocker', 'current', 'visible', 'adjacent', 'background']);
   });
 
   it('deduplicates work by key and promotes queued priority when a stronger request arrives', async () => {

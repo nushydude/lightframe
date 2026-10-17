@@ -36,7 +36,14 @@ describe('tauriCommands caption wrapper', () => {
 
     expect(vi.mocked(invoke).mock.calls[vi.mocked(invoke).mock.calls.length - 1]).toEqual([
       'get_image_caption',
-      { filePath: 'C:/Images/photo.png' },
+      {
+        filePath: 'C:/Images/photo.png',
+        request: {
+          requestId: expect.any(String),
+          priority: 'current-metadata',
+          generationToken: undefined,
+        },
+      },
     ]);
   });
 });

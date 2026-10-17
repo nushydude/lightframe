@@ -1,4 +1,5 @@
 import type { PerformanceTelemetrySnapshot } from '../services/performanceTelemetry';
+import { useNativeMediaStats } from '../hooks/useNativeMediaStats';
 import { usePerformanceTelemetrySnapshot } from '../services/performanceTelemetry';
 import { formatBytesForHumans } from '../services/cacheMemory';
 
@@ -112,6 +113,7 @@ export function PerformanceTelemetryOverlay({
   onReset,
 }: PerformanceTelemetryOverlayProps) {
   const liveSnapshot = usePerformanceTelemetrySnapshot();
+  const nativeMedia = useNativeMediaStats();
   const resolvedSnapshot = snapshot ?? liveSnapshot;
   const rows = buildRows(resolvedSnapshot);
 
@@ -297,6 +299,30 @@ export function PerformanceTelemetryOverlay({
           <div>
             <dt>Thumbnail in flight</dt>
             <dd>{resolvedSnapshot.queues.thumbnailInFlight}</dd>
+          </div>
+          <div>
+            <dt>Native queue / running / capacity</dt>
+            <dd>
+              {nativeMedia
+                ? `${nativeMedia.queueDepth} / ${nativeMedia.running} / ${nativeMedia.capacity}`
+                : '--'}
+            </dd>
+          </div>
+          <div>
+            <dt>Native canceled queued / running</dt>
+            <dd>
+              {nativeMedia
+                ? `${nativeMedia.canceledQueued} / ${nativeMedia.canceledRunning}`
+                : '--'}
+            </dd>
+          </div>
+          <div>
+            <dt>Native wait p50 / p95 / max</dt>
+            <dd>
+              {nativeMedia
+                ? `${nativeMedia.queueWait.p50Ms} / ${nativeMedia.queueWait.p95Ms} / ${nativeMedia.queueWait.maxMs} ms`
+                : '--'}
+            </dd>
           </div>
           <div>
             <dt>Image work depth</dt>
