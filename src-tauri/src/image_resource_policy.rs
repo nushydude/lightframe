@@ -192,6 +192,14 @@ pub enum ResourcePolicyError {
     AllocationTooLargeForPlatform,
 }
 
+/// JPEG component sampling factors needed to model libjpeg-turbo-rs's scaled component planes.
+/// The codec accepts factors from 1 through 4; callers must pass the parsed frame components.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JpegComponentSampling {
+    pub horizontal: u8,
+    pub vertical: u8,
+}
+
 impl std::fmt::Display for ResourcePolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -774,6 +782,105 @@ pub fn validate_decoder_memory_with_source(
     Ok(aggregate_bytes)
 }
 
+/// Validate a decoder that produces a reduced JPEG frame before the generic resize step.
+///
+/// The JPEG codec still allocates MCU-aligned component planes related to the source frame, but
+/// it does not allocate a full RGB frame. Keep the encoded source reservation, checked component
+/// planes, reduced decoder output, and conversion/encoder buffers in one estimate so the reduced
+/// path cannot bypass Task 53's policy boundary. The later Triangle resize is admitted separately
+/// by `validate_preview_resize_memory` after the source and decoder are released.
+pub fn validate_scaled_decoder_memory(
+    source_dimensions: (u32, u32),
+    decoded_dimensions: (u32, u32),
+    encoded_bytes: u64,
+    bytes_per_pixel: u64,
+    scale_factor: u32,
+    components: &[JpegComponentSampling],
+    operation: OperationClass,
+) -> Result<u64, ResourcePolicyError> {
+    let (source_width, source_height) = source_dimensions;
+    let (decoded_width, decoded_height) = decoded_dimensions;
+    let limits = PolicyLimits::for_operation(operation);
+    validate_dimensions(source_width, source_height, &limits)?;
+    // The IDCT frame is an intermediate source for resizing, so it may exceed the final asset
+    // limits. Admit its geometry under the source ceilings and its buffers under the memory
+    // budget; callers validate the requested and resized output separately.
+    validate_dimensions(decoded_width, decoded_height, &limits)?;
+    let retained_source_bytes = retained_source_bytes(encoded_bytes, operation)?;
+    // libjpeg-turbo-rs allocates full MCU-aligned component planes. A source-pixel multiplier
+    // undercounts narrow/padded frames (for example, a 1x4096 4:4:4 frame at 1/2 scale has
+    // three padded 4x2048 planes). Reproduce the codec's checked geometry instead of assuming
+    // padding is negligible.
+    let min_block_size = match scale_factor {
+        2 => 4_u64,
+        4 => 2_u64,
+        8 => 1_u64,
+        _ => return Err(ResourcePolicyError::AllocationOverflow),
+    };
+    if components.is_empty()
+        || components.iter().any(|component| {
+            component.horizontal == 0
+                || component.vertical == 0
+                || component.horizontal > 4
+                || component.vertical > 4
+        })
+    {
+        return Err(ResourcePolicyError::AllocationOverflow);
+    }
+    let max_horizontal =
+        components.iter().map(|component| u64::from(component.horizontal)).max().unwrap_or(0);
+    let max_vertical =
+        components.iter().map(|component| u64::from(component.vertical)).max().unwrap_or(0);
+    let mcu_width = max_horizontal.checked_mul(8).ok_or(ResourcePolicyError::AllocationOverflow)?;
+    let mcu_height = max_vertical.checked_mul(8).ok_or(ResourcePolicyError::AllocationOverflow)?;
+    let mcus_x = u64::from(source_width).div_ceil(mcu_width);
+    let mcus_y = u64::from(source_height).div_ceil(mcu_height);
+    let mut source_decoder_bytes = 0_u64;
+    for component in components {
+        let horizontal = u64::from(component.horizontal);
+        let vertical = u64::from(component.vertical);
+        let mut block_size = min_block_size;
+        while block_size < 8
+            && (max_horizontal * min_block_size) % (horizontal * block_size * 2) == 0
+            && (max_vertical * min_block_size) % (vertical * block_size * 2) == 0
+        {
+            block_size *= 2;
+        }
+        let plane_width = mcus_x
+            .checked_mul(horizontal)
+            .and_then(|value| value.checked_mul(block_size))
+            .ok_or(ResourcePolicyError::AllocationOverflow)?;
+        let plane_height = mcus_y
+            .checked_mul(vertical)
+            .and_then(|value| value.checked_mul(block_size))
+            .ok_or(ResourcePolicyError::AllocationOverflow)?;
+        let plane_bytes = checked_allocation_bytes(plane_width, plane_height, 1, 1)?;
+        source_decoder_bytes = source_decoder_bytes
+            .checked_add(plane_bytes)
+            .ok_or(ResourcePolicyError::AllocationOverflow)?;
+    }
+    let decoded_pixels = u64::from(decoded_width)
+        .checked_mul(u64::from(decoded_height))
+        .ok_or(ResourcePolicyError::PixelCountOverflow)?;
+    let decoded_bytes = decoded_pixels
+        .checked_mul(bytes_per_pixel)
+        .ok_or(ResourcePolicyError::AllocationOverflow)?;
+    let conversion_bytes =
+        decoded_bytes.checked_mul(2).ok_or(ResourcePolicyError::AllocationOverflow)?;
+    let aggregate_bytes = retained_source_bytes
+        .checked_add(source_decoder_bytes)
+        .and_then(|bytes| bytes.checked_add(decoded_bytes))
+        .and_then(|bytes| bytes.checked_add(conversion_bytes))
+        .ok_or(ResourcePolicyError::AllocationOverflow)?;
+    if aggregate_bytes > limits.max_working_bytes {
+        return Err(ResourcePolicyError::WorkingBytesExceedLimit {
+            bytes: aggregate_bytes,
+            max: limits.max_working_bytes,
+        });
+    }
+    Ok(aggregate_bytes)
+}
+
 pub fn validate_decoder_input_reservation(
     encoded_bytes: u64,
     operation: OperationClass,
@@ -1058,6 +1165,41 @@ mod tests {
         ));
         assert!(matches!(
             validate_decoder_memory_with_source(32, 24, 0, encoded, operation),
+            Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn scaled_jpeg_budget_counts_mcu_padding_for_narrow_rgb_frames() {
+        let operation = OperationClass::Thumbnail;
+        let limits = PolicyLimits::for_operation(operation);
+        let source_width = 1_u32;
+        let source_height = 4_096_u32;
+        let decoded_width = 1_u32;
+        let decoded_height = 2_048_u32;
+        let encoded_bytes = (limits.max_working_bytes - 40_000) / 2;
+        let components = [
+            JpegComponentSampling { horizontal: 1, vertical: 1 },
+            JpegComponentSampling { horizontal: 1, vertical: 1 },
+            JpegComponentSampling { horizontal: 1, vertical: 1 },
+        ];
+
+        // The old source_pixels*2 estimate would fit under the budget. At 1/2 scale the codec
+        // allocates three padded 4x2048 planes, so the checked model must reject this boundary.
+        let old_estimate = u64::from(encoded_bytes) * 2
+            + u64::from(source_width) * u64::from(source_height) * 2
+            + u64::from(decoded_width) * u64::from(decoded_height) * 3 * 3;
+        assert!(old_estimate <= limits.max_working_bytes);
+        assert!(matches!(
+            validate_scaled_decoder_memory(
+                (source_width, source_height),
+                (decoded_width, decoded_height),
+                encoded_bytes,
+                3,
+                2,
+                &components,
+                operation,
+            ),
             Err(ResourcePolicyError::WorkingBytesExceedLimit { .. })
         ));
     }

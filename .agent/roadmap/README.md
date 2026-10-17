@@ -49,6 +49,11 @@ Tasks 50-66 were created by the July 26, 2026 product and architecture audit:
 65. `tasks/65-paged-folder-catalog.md`
 66. `tasks/66-support-privacy-update-and-crash-recovery.md`
 
+Task 67 begins the independently reviewed Artcraft media optimisation sequence. Its prerequisites,
+Tasks 53 and 54, are merged:
+
+67. `tasks/67-reduced-resolution-jpeg-decode.md`
+
 ## Execution Order
 
 Use this order unless the user explicitly reprioritizes work:

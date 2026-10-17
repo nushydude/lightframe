@@ -3909,20 +3909,21 @@ mod tests {
     }
 
     #[test]
-    fn large_jpeg_full_preview_remains_rejected_before_pixel_decode() {
+    fn large_jpeg_preview_uses_reduced_decode_before_full_frame_budget() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("large-preview.jpg");
         let cache_dir = dir.path().join("cache");
         fs::write(&image_path, make_large_constant_jpeg()).unwrap();
 
-        let error = get_preview_image_blocking(
+        let preview = get_preview_image_blocking(
             image_path.to_string_lossy().into_owned(),
             2048,
             None,
             cache_dir,
         )
-        .unwrap_err();
-        assert!(error.contains("working memory") || error.contains("resource size"));
+        .unwrap();
+        assert_eq!(preview.width, Some(2_048));
+        assert_eq!(preview.height, Some(1_638));
     }
 
     #[test]
