@@ -311,6 +311,33 @@ impl ImageSource {
         }))
     }
 
+    pub(crate) fn validate_unchanged(&self) -> Result<(), ResourcePolicyError> {
+        let actual =
+            self.file.metadata().map_err(|_| ResourcePolicyError::SourceUnavailableOrChanged)?;
+        if actual.len() != self.metadata.len()
+            || actual.modified().ok() != self.metadata.modified().ok()
+        {
+            return Err(ResourcePolicyError::SourceUnavailableOrChanged);
+        }
+        if let Some(path) = &self.source_path {
+            let named =
+                fs::metadata(path).map_err(|_| ResourcePolicyError::SourceUnavailableOrChanged)?;
+            if named.len() != self.metadata.len()
+                || named.modified().ok() != self.metadata.modified().ok()
+            {
+                return Err(ResourcePolicyError::SourceUnavailableOrChanged);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if named.dev() != self.metadata.dev() || named.ino() != self.metadata.ino() {
+                    return Err(ResourcePolicyError::SourceUnavailableOrChanged);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn read_bytes(&self) -> Result<Vec<u8>, ResourcePolicyError> {
         validate_input_bytes(self.encoded_len(), &PolicyLimits::for_operation(self.operation))?;
         let mut reader = self.reader()?;

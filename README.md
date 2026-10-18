@@ -56,7 +56,17 @@ LightFrame scans and works with common image formats:
 - HEIC/HEIF: metadata, previews, thumbnails, and deep-zoom detail use Windows Imaging Component when
   the matching Windows codecs are installed. Without native support, LightFrame falls back to browser
   rendering or clear placeholders where appropriate.
-- RAW review files: DNG, CR2, CR3, NEF, NRW, ARW, SRF, SR2, RAF, ORF, RW2, PEF, and SRW appear in
+- RAF: thumbnails, previews, and dimensions use the embedded JPEG without a Windows RAW codec.
+  LightFrame reads a 92-byte header and only its authoritative JPEG offset/length range (up to
+  32 MiB), with the existing source-file limits (512 MiB for thumbnails/previews, 1 GiB for
+  metadata) and an 8 MiB JPEG header/metadata budget. Other embedded JPEG candidates are not
+  scanned. EXIF orientation is applied and embedded ICC bytes are retained in generated JPEGs,
+  without colour conversion. Profiled CMYK/YCCK previews are unsupported. JPEG decoder failures
+  may use labeled placeholders; container validation, resource admission, I/O, cancellation,
+  source-change, and unsupported-profile errors return recoverable failures. Rejected RAF files
+  never fall back to a whole-file Windows decoder. Resolution refers to the embedded preview, not sensor
+  dimensions; RAF sensor decoding, demosaic, editing, and full-detail tiles are unsupported.
+- Other RAW review files: DNG, CR2, CR3, NEF, NRW, ARW, SRF, SR2, ORF, RW2, PEF, and SRW appear in
   scanned folders and direct-open surfaces, including Windows file associations. On Windows,
   previews and thumbnails are attempted through native codecs; XMP sidecar metadata is shown in the
   info panel when available. `supported-image-extensions.json` is the canonical direct-open list.

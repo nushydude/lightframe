@@ -5,7 +5,7 @@ use crate::image_resource_policy::{self, OperationClass};
 use crate::native_codecs;
 use crate::path_normalization::normalize_path_for_key;
 use image::metadata::Orientation;
-use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader};
+use image::{DynamicImage, GenericImageView, ImageDecoder, ImageEncoder, ImageReader};
 use libjpeg_turbo_rs::{CropRegion, Subsampling};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -545,6 +545,13 @@ pub fn hash_cache_key(cache_key: &str) -> String {
 
 pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
     match normalized_extension(file_path).as_deref() {
+        Some("raf") => FormatSupport {
+            browser_renderable: false,
+            rust_decode_supported: true,
+            metadata_supported: true,
+            thumbnail_supported: true,
+            support_note: Some("RAF dimensions, thumbnails, and previews use the bounded embedded JPEG, without a Windows RAW codec. Resolution is the embedded preview, not the sensor. No demosaic or ICC colour conversion is performed. JPEG decoder failures may use placeholders; container validation, resource admission, I/O, cancellation, source-change, and unsupported-profile errors return recoverable failures."),
+        },
         Some("heic") => FormatSupport {
             browser_renderable: true,
             rust_decode_supported: false,
@@ -801,8 +808,14 @@ pub(crate) fn get_or_create_preview_with_generation(
     }
 
     generation.checkpoint()?;
-    let img = match decode_image_with_orientation_for_preview(file_path, max_dimension) {
-        Ok(img) => img,
+    let decoded = if crate::raw_preview::is_raf(file_path) {
+        load_raf_image(file_path, OperationClass::Preview, Some(max_dimension))
+    } else {
+        decode_image_with_orientation_for_preview(file_path, max_dimension)
+            .map(|image| (image, None))
+    };
+    let (img, icc_profile) = match decoded {
+        Ok(decoded) => decoded,
         Err(error) => {
             if let Some(placeholder_svg) = known_fallback_preview_svg(file_path, &error) {
                 remember_raw_native_decode_failure(file_path, &cache_hash);
@@ -864,9 +877,13 @@ pub(crate) fn get_or_create_preview_with_generation(
             .map_err(|e| format!("Failed to encode preview image: {}", e))?;
         GeneratedImageFormat::Png
     } else {
-        image::DynamicImage::ImageRgb8(preview.to_rgb8())
-            .write_to(&mut buffer, image::ImageFormat::Jpeg)
-            .map_err(|e| format!("Failed to encode preview image: {}", e))?;
+        (if crate::raw_preview::is_raf(file_path) {
+            encode_generated_jpeg(&preview, &mut buffer, icc_profile)
+        } else {
+            image::DynamicImage::ImageRgb8(preview.to_rgb8())
+                .write_to(&mut buffer, image::ImageFormat::Jpeg)
+        })
+        .map_err(|e| format!("Failed to encode preview image: {}", e))?;
         GeneratedImageFormat::Jpeg
     };
 
@@ -1036,6 +1053,10 @@ fn build_versioned_cache_key(
         metadata.size_bytes.to_string(),
     ];
 
+    if crate::raw_preview::is_raf(file_path) {
+        parts.push("raf-embedded-v1".into());
+    }
+
     if let Some(max_dimension) = max_dimension {
         parts.push(max_dimension.to_string());
     }
@@ -1048,11 +1069,18 @@ fn build_versioned_cache_key(
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
-    let img = decode_image_with_orientation_with_preview_limit(
-        file_path,
-        OperationClass::Thumbnail,
-        Some(THUMBNAIL_SIZE),
-    )?;
+    let (img, icc_profile) = if crate::raw_preview::is_raf(file_path) {
+        load_raf_image(file_path, OperationClass::Thumbnail, Some(THUMBNAIL_SIZE))?
+    } else {
+        (
+            decode_image_with_orientation_with_preview_limit(
+                file_path,
+                OperationClass::Thumbnail,
+                Some(THUMBNAIL_SIZE),
+            )?,
+            None,
+        )
+    };
     image_checkpoint()?;
     let thumb = img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
     image_checkpoint()?;
@@ -1064,7 +1092,11 @@ fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageErro
     .map_err(|error| reduced_jpeg_policy_error(OperationClass::Thumbnail, error))?;
 
     let mut buffer = std::io::Cursor::new(Vec::new());
-    thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
+    if crate::raw_preview::is_raf(file_path) {
+        encode_generated_jpeg(&thumb, &mut buffer, icc_profile)?;
+    } else {
+        thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
+    }
     Ok(buffer.into_inner())
 }
 
@@ -1189,6 +1221,21 @@ fn oriented_decoder_resource_for_operation(
     file_path: &Path,
     operation: OperationClass,
 ) -> Result<(u32, u32, u64), String> {
+    if crate::raw_preview::is_raf(file_path) {
+        let bytes = crate::raw_preview::embedded_jpeg(file_path, operation)?;
+        let mut decoder =
+            embedded_jpeg_decoder(&bytes, operation).map_err(|error| error.to_string())?;
+        let (width, height) = decoder.dimensions();
+        image_resource_policy::validate_dimensions(
+            width,
+            height,
+            &image_resource_policy::PolicyLimits::for_operation(operation),
+        )
+        .map_err(|error| policy_error(operation, error))?;
+        let orientation = decoder.orientation().map_err(|error| error.to_string())?;
+        let (width, height) = oriented_dimensions(width, height, orientation);
+        return Ok((width, height, decoder.total_bytes()));
+    }
     let source = image_resource_policy::ImageSource::open(file_path, operation)
         .map_err(|error| policy_error(operation, error))?;
     let mut decoder = image_resource_policy::decoder_for_source(&source, operation)
@@ -1249,14 +1296,23 @@ fn try_decode_reduced_jpeg(
         Ok(source) => source,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
     };
-    let encoded_len = source.encoded_len();
     let source_bytes = match source.read_bytes() {
         Ok(bytes) => bytes,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
     };
+    try_decode_reduced_jpeg_bytes(&source_bytes, operation, requested_max_dimension)
+}
+
+fn try_decode_reduced_jpeg_bytes(
+    source_bytes: &[u8],
+    operation: OperationClass,
+    requested_max_dimension: u32,
+) -> Result<ReducedJpegDecode, image::ImageError> {
+    image_checkpoint()?;
+    let encoded_len = source_bytes.len() as u64;
     image_resource_policy::validate_decoder_input_reservation(encoded_len, operation)
         .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
-    let (orientation_width, orientation_height, orientation) = match jpeg_orientation(&source_bytes)
+    let (orientation_width, orientation_height, orientation) = match jpeg_orientation(source_bytes)
     {
         Ok(value) => value,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
@@ -1267,7 +1323,7 @@ fn try_decode_reduced_jpeg(
         &image_resource_policy::PolicyLimits::for_operation(operation),
     )
     .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
-    let mut decoder = match libjpeg_turbo_rs::Decoder::new(&source_bytes) {
+    let mut decoder = match libjpeg_turbo_rs::Decoder::new(source_bytes) {
         Ok(decoder) => decoder,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
     };
@@ -1322,12 +1378,14 @@ fn try_decode_reduced_jpeg(
 
     decoder.set_scale(libjpeg_turbo_rs::ScalingFactor::new(1, factor));
     decoder.set_output_format(pixel_format);
+    image_checkpoint()?;
     let decoded = match decoder.decode_image() {
         Ok(decoded) => decoded,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
     };
-    // DynamicImage's JPEG encoder cannot carry an embedded ICC profile. Preserve the existing
-    // profile-aware full path rather than publishing a reduced asset with changed colour intent.
+    image_checkpoint()?;
+    // The regular JPEG generated-asset path does not carry ICC metadata; preserve its existing
+    // full fallback. RAF separately retains and republishes the profile using JpegEncoder.
     if decoded.icc_profile.is_some() {
         return Ok(ReducedJpegDecode::Fallback);
     }
@@ -1386,6 +1444,12 @@ fn decode_image_with_orientation_with_preview_limit(
     preview_max_dimension: Option<u32>,
 ) -> Result<DynamicImage, image::ImageError> {
     image_checkpoint()?;
+
+    if crate::raw_preview::is_raf(file_path) {
+        let bytes = crate::raw_preview::embedded_jpeg(file_path, operation)
+            .map_err(|error| image::ImageError::IoError(std::io::Error::other(error)))?;
+        return decode_embedded_jpeg(&bytes, operation, preview_max_dimension);
+    }
 
     if let Some(max_dimension) = preview_max_dimension {
         match try_decode_reduced_jpeg(file_path, operation, max_dimension)? {
@@ -1447,6 +1511,117 @@ fn decode_image_with_orientation_with_preview_limit(
     if is_jpeg_path(file_path) {
         record_jpeg_full_decode(image.width(), image.height());
     }
+    Ok(image)
+}
+
+fn embedded_jpeg_decoder(
+    bytes: &[u8],
+    operation: OperationClass,
+) -> Result<impl ImageDecoder + '_, image::ImageError> {
+    image_resource_policy::validate_decoder_input_reservation(bytes.len() as u64, operation)
+        .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+    let mut reader =
+        ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg);
+    let policy = image_resource_policy::PolicyLimits::for_operation(operation);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(policy.max_dimension);
+    limits.max_image_height = Some(policy.max_dimension);
+    limits.max_alloc = Some(policy.max_working_bytes);
+    reader.limits(limits);
+    reader.into_decoder()
+}
+
+fn load_raf_image(
+    path: &Path,
+    operation: OperationClass,
+    max_dimension: Option<u32>,
+) -> Result<(DynamicImage, Option<Vec<u8>>), image::ImageError> {
+    let bytes = crate::raw_preview::embedded_jpeg(path, operation)
+        .map_err(|error| image::ImageError::IoError(std::io::Error::other(error)))?;
+    let mut decoder = embedded_jpeg_decoder(&bytes, operation)?;
+    let profile = decoder.icc_profile()?;
+    if let Some(profile) = &profile {
+        image_resource_policy::validate_metadata_bytes(
+            profile.len() as u64,
+            &image_resource_policy::PolicyLimits::for_operation(operation),
+        )
+        .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+        let header = libjpeg_turbo_rs::Decoder::new(&bytes).map_err(|error| {
+            image::ImageError::IoError(std::io::Error::other(error.to_string()))
+        })?;
+        if matches!(
+            header.jpeg_color_space(),
+            libjpeg_turbo_rs::ColorSpace::Cmyk | libjpeg_turbo_rs::ColorSpace::Ycck
+        ) {
+            return Err(image::ImageError::IoError(std::io::Error::other(
+                "RAF CMYK/YCCK profile cannot be preserved after RGB decoding",
+            )));
+        }
+    }
+    drop(decoder);
+    let image = decode_embedded_jpeg(&bytes, operation, max_dimension)?;
+    Ok((image, profile))
+}
+
+fn encode_generated_jpeg(
+    image: &DynamicImage,
+    output: &mut std::io::Cursor<Vec<u8>>,
+    profile: Option<Vec<u8>>,
+) -> Result<(), image::ImageError> {
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new(output);
+    if let Some(profile) = profile {
+        encoder.set_icc_profile(profile).map_err(image::ImageError::Unsupported)?;
+    }
+    if let DynamicImage::ImageLuma8(gray) = image {
+        encoder.encode_image(gray)
+    } else {
+        encoder.encode_image(&image.to_rgb8())
+    }
+}
+
+fn decode_embedded_jpeg(
+    bytes: &[u8],
+    operation: OperationClass,
+    max_dimension: Option<u32>,
+) -> Result<DynamicImage, image::ImageError> {
+    if let Some(bound) = max_dimension {
+        match try_decode_reduced_jpeg_bytes(bytes, operation, bound)? {
+            ReducedJpegDecode::Reduced(image) => {
+                record_jpeg_reduced_decode(operation, image.width(), image.height());
+                return Ok(image);
+            }
+            ReducedJpegDecode::Fallback => record_jpeg_fallback(),
+            ReducedJpegDecode::NotApplicable => {}
+        }
+    }
+    let mut decoder = embedded_jpeg_decoder(bytes, operation)?;
+    let (width, height) = decoder.dimensions();
+    let decoder_bytes = decoder.total_bytes();
+    image_resource_policy::validate_decoder_memory_with_source(
+        width,
+        height,
+        decoder_bytes,
+        bytes.len() as u64,
+        operation,
+    )
+    .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+    let orientation = decoder.orientation()?;
+    if let Some(bound) = max_dimension {
+        let oriented = oriented_dimensions(width, height, orientation);
+        image_resource_policy::validate_preview_resize_memory(
+            oriented,
+            image_resource_policy::preview_resize_dimensions(oriented.0, oriented.1, bound),
+            u64::from(decoder.color_type().bytes_per_pixel()),
+            bytes.len() as u64,
+            decoder_bytes,
+        )
+        .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
+    }
+    image_checkpoint()?;
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    image_checkpoint()?;
+    image.apply_orientation(orientation);
+    record_jpeg_full_decode(image.width(), image.height());
     Ok(image)
 }
 
@@ -2340,6 +2515,153 @@ fn is_generated_cache_filename(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raf_bounded_native_fixture_generates_without_windows_raw_codec() {
+        let source = crate::raw_preview::tests::pinned_raf();
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+        assert_eq!(oriented_image_dimensions(&source).unwrap(), (1280, 960));
+        let thumbnail =
+            get_or_create_thumbnail(&source, &metadata, &dir.path().join("thumbs")).unwrap();
+        let preview =
+            get_or_create_preview(&source, &metadata, &dir.path().join("previews"), 320, None)
+                .unwrap();
+        assert_eq!((thumbnail.width, thumbnail.height), (Some(160), Some(120)));
+        assert_eq!((preview.width, preview.height), (Some(320), Some(240)));
+        assert_eq!(image::open(&preview.file_path).unwrap().dimensions(), (320, 240));
+        assert!(!tile_decode_supported_for_path(&source));
+    }
+
+    #[test]
+    fn raf_bounded_orientation_and_icc_survive_both_generated_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpeg = dir.path().join("oriented.jpg");
+        let source = dir.path().join("camera.raf");
+        let profile = fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-corpus/fixtures/srgb-v4-v1.icc"),
+        )
+        .unwrap();
+        assert_eq!(profile.len(), 480);
+        assert_eq!(
+            Sha256::digest(&profile).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            "c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353"
+        );
+        for profile in [None, Some(profile), Some(vec![1, 2, 3, 4])] {
+            let image = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                320,
+                160,
+                image::Rgb([80, 120, 160]),
+            ));
+            let mut output = std::io::Cursor::new(Vec::new());
+            encode_generated_jpeg(&image, &mut output, profile.clone()).unwrap();
+            fs::write(&jpeg, output.into_inner()).unwrap();
+            write_orientation(&jpeg, 6);
+            fs::write(&source, crate::raw_preview::tests::container(&fs::read(&jpeg).unwrap()))
+                .unwrap();
+            assert_eq!(oriented_image_dimensions(&source).unwrap(), (160, 320));
+            let metadata = resolve_source_metadata(&source, None, None).unwrap();
+            let thumbnail =
+                get_or_create_thumbnail(&source, &metadata, &dir.path().join("thumbs")).unwrap();
+            let preview =
+                get_or_create_preview(&source, &metadata, &dir.path().join("previews"), 160, None)
+                    .unwrap();
+            for asset in [thumbnail, preview] {
+                assert_eq!((asset.width, asset.height), (Some(80), Some(160)));
+                let mut decoder = ImageReader::open(asset.file_path)
+                    .unwrap()
+                    .with_guessed_format()
+                    .unwrap()
+                    .into_decoder()
+                    .unwrap();
+                // Profile bytes are preserved opaquely, including unknown/invalid ICC data.
+                // No validation or colour conversion is claimed.
+                assert_eq!(decoder.icc_profile().unwrap(), profile);
+                assert_eq!(decoder.orientation().unwrap(), Orientation::NoTransforms);
+            }
+        }
+    }
+
+    #[test]
+    fn raf_bounded_corrupt_jpeg_placeholder_and_stale_generation_never_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bad.raf");
+        fs::write(&source, crate::raw_preview::tests::container(&[0xff, 0xd8, 0xff, 0xd9]))
+            .unwrap();
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+        assert!(oriented_image_dimensions(&source).is_err());
+        let asset =
+            get_or_create_preview(&source, &metadata, &dir.path().join("fallback"), 160, None)
+                .unwrap();
+        assert!(asset.file_path.ends_with(".svg"));
+        let root = dir.path().join("stale");
+        let generation = CacheGeneration::capture(&root).unwrap();
+        clear_generated_cache_root(&root).unwrap();
+        assert!(get_or_create_preview_with_generation(
+            &source, &metadata, &root, 160, None, generation
+        )
+        .is_err());
+        assert!(!root.exists() || fs::read_dir(&root).unwrap().count() == 0);
+        let root = dir.path().join("changed");
+        let generation = CacheGeneration::capture(&root).unwrap();
+        fs::write(&source, b"changed source").unwrap();
+        assert!(get_or_create_preview_with_generation(
+            &source, &metadata, &root, 160, None, generation
+        )
+        .is_err());
+        assert!(!root.exists() || fs::read_dir(&root).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn raf_bounded_executor_cancel_and_cache_clear_reject_suspended_producer() {
+        use crate::media_executor::{MediaExecutor, MediaRequest, Priority};
+        for cancel in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = crate::raw_preview::tests::pinned_raf();
+            let metadata = resolve_source_metadata(&source, None, None).unwrap();
+            let root = dir.path().join("previews");
+            fs::create_dir_all(&root).unwrap();
+            let output_root = root.clone();
+            let executor = MediaExecutor::new(2);
+            let worker = executor.clone();
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let producer = std::thread::spawn(move || {
+                tokio::runtime::Runtime::new().unwrap().block_on(worker.execute(
+                    Some(MediaRequest {
+                        request_id: "raf-publication".into(),
+                        generation_token: None,
+                        priority: Priority::CurrentPreview,
+                    }),
+                    Priority::CurrentPreview,
+                    None,
+                    move || {
+                        let generation = CacheGeneration::capture(&output_root)?;
+                        ready_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                        get_or_create_preview_with_generation(
+                            &source,
+                            &metadata,
+                            &output_root,
+                            160,
+                            None,
+                            generation,
+                        )
+                    },
+                ))
+            });
+            ready_rx.recv().unwrap();
+            if cancel {
+                assert!(executor.cancel("raf-publication"));
+            } else {
+                clear_generated_cache_root(&root).unwrap();
+            }
+            resume_tx.send(()).unwrap();
+            assert!(producer.join().unwrap().is_err());
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+            executor.shutdown();
+        }
+    }
 
     #[test]
     fn reduced_decode_scale_uses_safe_power_of_two_boundaries() {
