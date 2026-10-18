@@ -10,6 +10,7 @@ pub mod image_resource_policy;
 mod media_executor;
 mod native_codecs;
 mod path_normalization;
+mod raw_preview;
 mod thumbnails;
 mod update_channels;
 mod windows_jump_list;
