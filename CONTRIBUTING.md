@@ -28,6 +28,19 @@ First off, thank you for considering contributing to LightFrame! It's people lik
   `pnpm run quality:health` intentionally report existing debt. Use them when planning cleanup work;
   they are not part of the merge-blocking local gate yet.
 
+## Pinned media test corpus
+
+`test-corpus/manifest.json` owns the shared codec, RAW, metadata and colour fixture IDs.
+Run `pnpm run quality:corpus` to validate hashes, provenance, licences and required files, then
+exercise the validator's failure cases. This offline check is included in `ci:frontend`,
+`ci:local` and GitHub CI; tests never fetch missing fixtures or skip them. Use
+`node scripts/validate-test-corpus.mjs --task 68` for deterministic fixture provenance output.
+
+Read [`test-corpus/README.md`](test-corpus/README.md) before adding fixtures or recording codec
+evidence. Native camera samples and authored rejection cases prove different things. Pin new
+bytes under new IDs and paths, review the individual asset licence, and retain attribution,
+source evidence and SHA-256. Do not infer image or ICC permissions from a repository's code licence.
+
 ## Generated cache cleanup
 
 Preview regenerable build caches in the current checkout:
