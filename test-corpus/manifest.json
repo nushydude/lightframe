@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "colour-srgb-v4-v1",
+      "path": "fixtures/srgb-v4-v1.icc",
+      "family": "colour",
+      "format": "ICC v4 sRGB matrix profile",
+      "evidence": "native",
+      "dimensions": null,
+      "purpose": "Real upstream compact sRGB ICC profile; profile metadata/matrix evidence, not monitor or Windows display parity.",
+      "bytes": 480,
+      "sha256": "c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "Clinton Ingram / saucecontrol, Compact ICC Profiles",
+        "review": "Pinned README explicitly dedicates ALL profiles in this repository to CC0-1.0; permissions checked for profiles themselves.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "upstream",
+        "url": "https://raw.githubusercontent.com/saucecontrol/Compact-ICC-Profiles/bdd84663061bc4ae95ca70decff54f581e27f702/profiles/sRGB-v4.icc",
+        "revision": "bdd84663061bc4ae95ca70decff54f581e27f702",
+        "evidencePath": "provenance/compact-icc-readme.txt",
+        "evidenceSha256": "1a844dff76783493d3b1b81e4ec8b43b79a3f17ff52e162c393df17fda554949"
+      }
+    },
+    {
+      "id": "cr3-canon-r6-crop-v1",
+      "path": "fixtures/canon-r6-crop-v1.cr3",
+      "family": "cr3",
+      "format": "Canon CR3 CRAW",
+      "evidence": "native",
+      "dimensions": {
+        "width": 3408,
+        "height": 2272,
+        "scope": "embedded-preview"
+      },
+      "purpose": "Native camera container and embedded JPEG preview; dimensions refer to preview, not sensor. Scene visually reviewed without people or branding assets.",
+      "bytes": 5273174,
+      "sha256": "74abb0a113d075ad9887a058082f40dd2a938c4813a08474d82356f11a027778",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "raw.pixls.us contributor, record 4659",
+        "review": "Per-file primary repository entry explicitly links CC0-1.0; saved entry includes provider SHA-256. License applies to sample photograph, not inferred from software.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "upstream",
+        "url": "https://raw.pixls.us/data/Canon/EOS%20R6/Canon_EOS_R6_CRAW_ISO_100_crop_nodual.CR3",
+        "revision": "74abb0a113d075ad9887a058082f40dd2a938c4813a08474d82356f11a027778",
+        "evidencePath": "provenance/raw-pixls-4659.json",
+        "evidenceSha256": "aa92efd67362cd33f73bd1a62f35035d16c4be5e9b33217f23211976653edbc2"
+      }
+    },
+    {
+      "id": "heif-truncated-v1",
+      "path": "fixtures/truncated-v1.heic",
+      "family": "heif",
+      "format": "HEIC truncated signature",
+      "evidence": "synthetic-negative",
+      "dimensions": null,
+      "purpose": "Deliberately incomplete header; rejection coverage only. No native decoding claim.",
+      "bytes": 24,
+      "sha256": "99fa2182f97726a156cf1b7b591a8988b928f7f8c6e1f32c9e0182bbcfce36fc",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "LightFrame contributors",
+        "review": "Authored geometry, metadata and rejection bytes; authors dedicate to CC0. No third-party image data.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "authored",
+        "url": "generators/geometry.py",
+        "revision": "18d5232b46a4bb3169b20dc4a701c8cd0cbb1593ca67f1e1496f7232ad6ea4e0",
+        "evidencePath": "provenance/authored-v1.txt",
+        "evidenceSha256": "111163726d3778359ba449f530f3ef562dafa113776eb2c74d22cf1218a7d1e7"
+      }
+    },
+    {
+      "id": "heif-wind-v1",
+      "path": "fixtures/wind-v1.heic",
+      "family": "heif",
+      "format": "HEIF HEVC SDR",
+      "evidence": "native",
+      "dimensions": {
+        "width": 8256,
+        "height": 5504,
+        "scope": "image"
+      },
+      "purpose": "Upstream photographed wind turbines; no people/branding. Dimensions independently checked with ffprobe; rendered scene visually reviewed.",
+      "bytes": 4479456,
+      "sha256": "0e366a983db397b1c1fbcb638e51ecbb6f2163f03f1e652f62ec8e192d96ce6e",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "aaron-rust/hdr-sample-images contributors",
+        "review": "Pinned README Intention and License explicitly dedicates all image files under CC0-1.0. Asset GitLFS SHA2560e366a983db397b1c1fbcb638e51ecbb6f2163f03f1e652f62ec8e192d96ce6e verified.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "upstream",
+        "url": "https://media.githubusercontent.com/media/aaron-rust/hdr-sample-images/df0d5df406ad0dbe2124d6f2a3700fe73dd3ead7/different_file_formats_in_sdr_and_hdr/3B_HEIC_SDR.heic",
+        "revision": "df0d5df406ad0dbe2124d6f2a3700fe73dd3ead7",
+        "evidencePath": "provenance/hdr-samples-readme.txt",
+        "evidenceSha256": "9a6442d7f2dec8603baf52643476375f8d366d3a62afcc4e9ee3e6a4b46de121"
+      }
+    },
+    {
+      "id": "jpeg-geometry-v1",
+      "path": "fixtures/geometry-v1.jpg",
+      "family": "jpeg",
+      "format": "JPEG baseline RGB",
+      "evidence": "synthetic-valid",
+      "dimensions": {
+        "width": 2,
+        "height": 2,
+        "scope": "image"
+      },
+      "purpose": "Authored 2x2 primary colour geometry; valid simple-format coverage only.",
+      "bytes": 760,
+      "sha256": "1bd8b829eee3160443ad3bada64f6ec0a0c76965c9b356421ba093db82947be8",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "LightFrame contributors",
+        "review": "Authored geometry, metadata and rejection bytes; authors dedicate to CC0. No third-party image data.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "authored",
+        "url": "generators/geometry.py",
+        "revision": "18d5232b46a4bb3169b20dc4a701c8cd0cbb1593ca67f1e1496f7232ad6ea4e0",
+        "evidencePath": "provenance/authored-v1.txt",
+        "evidenceSha256": "111163726d3778359ba449f530f3ef562dafa113776eb2c74d22cf1218a7d1e7"
+      }
+    },
+    {
+      "id": "jxl-square-v1",
+      "path": "fixtures/square-v1.jxl",
+      "family": "jxl",
+      "format": "JPEG XL extended-size container",
+      "evidence": "synthetic-valid",
+      "dimensions": {
+        "width": 8,
+        "height": 8,
+        "scope": "image"
+      },
+      "purpose": "Upstream generated square, extended-size box decoder fixture. Unmodified; visually reviewed8x8 geometry. ffprobe independently reports8x8.",
+      "bytes": 104,
+      "sha256": "c324d018c375f291230831fe27ba14e8ee39f3a1142d51b658a37227a6c1d850",
+      "license": {
+        "spdx": "CC-BY-4.0",
+        "attribution": "Moritz Firsching and libjxl testdata contributors; created in commit8a1dafb89c27ce0d31ab98b122bafa65869e129a; https://github.com/libjxl/testdata. Unmodified.",
+        "review": "This repository is specifically the JPEG XL test data corpus; its root LICENSE applies CC-BY-4.0 to corpus. Attribution, source URL and changes statement retained.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/libjxl-testdata.txt",
+        "textSha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"
+      },
+      "source": {
+        "kind": "upstream",
+        "url": "https://raw.githubusercontent.com/libjxl/testdata/73695d303670c90e4d506ea89d9901b081385089/jxl/boxes/square-extended-size-container.jxl",
+        "revision": "73695d303670c90e4d506ea89d9901b081385089",
+        "evidencePath": "licenses/libjxl-testdata.txt",
+        "evidenceSha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"
+      }
+    },
+    {
+      "id": "jxl-truncated-v1",
+      "path": "fixtures/truncated-v1.jxl",
+      "family": "jxl",
+      "format": "JXL truncated signature",
+      "evidence": "synthetic-negative",
+      "dimensions": null,
+      "purpose": "Deliberately incomplete header; rejection coverage only. No native decoding claim.",
+      "bytes": 12,
+      "sha256": "59debe8cbf310be0a0a66213bd0a82419eb21bbe68fe17cfc8da35ce883b2539",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "LightFrame contributors",
+        "review": "Authored geometry, metadata and rejection bytes; authors dedicate to CC0. No third-party image data.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "authored",
+        "url": "generators/geometry.py",
+        "revision": "18d5232b46a4bb3169b20dc4a701c8cd0cbb1593ca67f1e1496f7232ad6ea4e0",
+        "evidencePath": "provenance/authored-v1.txt",
+        "evidenceSha256": "111163726d3778359ba449f530f3ef562dafa113776eb2c74d22cf1218a7d1e7"
+      }
+    },
+    {
+      "id": "psd-geometry-v1",
+      "path": "fixtures/geometry-v1.psd",
+      "family": "psd",
+      "format": "PSD flattened RGB",
+      "evidence": "synthetic-valid",
+      "dimensions": {
+        "width": 2,
+        "height": 2,
+        "scope": "image"
+      },
+      "purpose": "Authored 2x2 primary colour geometry; valid simple-format coverage only.",
+      "bytes": 52,
+      "sha256": "42db5c8093fda4c08236e695e913fb3babce81f1816678b9a979b2c5f5690c85",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "LightFrame contributors",
+        "review": "Authored geometry, metadata and rejection bytes; authors dedicate to CC0. No third-party image data.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "authored",
+        "url": "generators/geometry.py",
+        "revision": "18d5232b46a4bb3169b20dc4a701c8cd0cbb1593ca67f1e1496f7232ad6ea4e0",
+        "evidencePath": "provenance/authored-v1.txt",
+        "evidenceSha256": "111163726d3778359ba449f530f3ef562dafa113776eb2c74d22cf1218a7d1e7"
+      }
+    },
+    {
+      "id": "raf-finepix-s5000-v1",
+      "path": "fixtures/finepix-s5000-v1.raf",
+      "family": "raf",
+      "format": "Fujifilm RAF",
+      "evidence": "native",
+      "dimensions": {
+        "width": 1280,
+        "height": 960,
+        "scope": "embedded-preview"
+      },
+      "purpose": "Native camera container and embedded JPEG preview; dimensions refer to preview, not sensor. Scene visually reviewed without people or branding assets.",
+      "bytes": 6851240,
+      "sha256": "dabd5e74521a6980156be9fd4b88d0c37b0fe4d0e0e6f5c12db8cffff1b76297",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "raw.pixls.us contributor, record 2726",
+        "review": "Per-file primary repository entry explicitly links CC0-1.0; saved entry includes provider SHA-256. License applies to sample photograph, not inferred from software.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "upstream",
+        "url": "https://raw.pixls.us/data/Fujifilm/FinePix%20S5000/2007_0912Image0022.RAF",
+        "revision": "dabd5e74521a6980156be9fd4b88d0c37b0fe4d0e0e6f5c12db8cffff1b76297",
+        "evidencePath": "provenance/raw-pixls-2726.json",
+        "evidenceSha256": "92714aeca9d677b5abb7b8fb8345df84b8ab5adc4852218836793e4a6521ee1b"
+      }
+    },
+    {
+      "id": "tiff-geometry-v1",
+      "path": "fixtures/geometry-v1.tiff",
+      "family": "tiff",
+      "format": "TIFF uncompressed RGB",
+      "evidence": "synthetic-valid",
+      "dimensions": {
+        "width": 2,
+        "height": 2,
+        "scope": "image"
+      },
+      "purpose": "Authored 2x2 primary colour geometry; valid simple-format coverage only.",
+      "bytes": 152,
+      "sha256": "7ed745b99f9cfe6dfbc2798115379e567972273da0131434aee2d25ba7ffc44f",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "LightFrame contributors",
+        "review": "Authored geometry, metadata and rejection bytes; authors dedicate to CC0. No third-party image data.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "authored",
+        "url": "generators/geometry.py",
+        "revision": "18d5232b46a4bb3169b20dc4a701c8cd0cbb1593ca67f1e1496f7232ad6ea4e0",
+        "evidencePath": "provenance/authored-v1.txt",
+        "evidenceSha256": "111163726d3778359ba449f530f3ef562dafa113776eb2c74d22cf1218a7d1e7"
+      }
+    },
+    {
+      "id": "tiff-nikon-d70s-v1",
+      "path": "fixtures/nikon-d70s-v1.nef",
+      "family": "tiff",
+      "format": "Nikon NEF (TIFF family)",
+      "evidence": "native",
+      "dimensions": {
+        "width": 3008,
+        "height": 2000,
+        "scope": "embedded-preview"
+      },
+      "purpose": "Native camera container and embedded JPEG preview; dimensions refer to preview, not sensor. Scene visually reviewed without people or branding assets.",
+      "bytes": 5193213,
+      "sha256": "6c46f9854033e7623ebbb5de8c951df6762ca44f05d45035ccc5cb7e9f4e5692",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "raw.pixls.us contributor, record 1117",
+        "review": "Per-file primary repository entry explicitly links CC0-1.0; saved entry includes provider SHA-256. License applies to sample photograph, not inferred from software.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "upstream",
+        "url": "https://raw.pixls.us/data/Nikon/D70s/RAW_NIKON_D70S.NEF",
+        "revision": "6c46f9854033e7623ebbb5de8c951df6762ca44f05d45035ccc5cb7e9f4e5692",
+        "evidencePath": "provenance/raw-pixls-1117.json",
+        "evidenceSha256": "fd66f1cd747bd0d8c9677f2d6733627cac35e0c2ff711ec63f779785b883ea33"
+      }
+    },
+    {
+      "id": "xmp-rating-v1",
+      "path": "fixtures/rating-v1.xmp",
+      "family": "xmp",
+      "format": "XMP RDF/XML",
+      "evidence": "synthetic-valid",
+      "dimensions": null,
+      "purpose": "Authored rating3 sidecar without personal metadata.",
+      "bytes": 258,
+      "sha256": "e047d802c8bdb125732852c98419067c7b4d494fe01f96fb715b8a3e173fdc57",
+      "license": {
+        "spdx": "CC0-1.0",
+        "attribution": "LightFrame contributors",
+        "review": "Authored geometry, metadata and rejection bytes; authors dedicate to CC0. No third-party image data.",
+        "allowedUses": ["redistribute", "modify", "test"],
+        "textPath": "licenses/CC0-1.0.txt",
+        "textSha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      "source": {
+        "kind": "authored",
+        "url": "generators/geometry.py",
+        "revision": "18d5232b46a4bb3169b20dc4a701c8cd0cbb1593ca67f1e1496f7232ad6ea4e0",
+        "evidencePath": "provenance/authored-v1.txt",
+        "evidenceSha256": "111163726d3778359ba449f530f3ef562dafa113776eb2c74d22cf1218a7d1e7"
+      }
+    }
+  ],
+  "tasks": {
+    "67": ["jpeg-geometry-v1"],
+    "68": ["raf-finepix-s5000-v1", "jpeg-geometry-v1"],
+    "84": [
+      "colour-srgb-v4-v1",
+      "cr3-canon-r6-crop-v1",
+      "heif-truncated-v1",
+      "heif-wind-v1",
+      "jpeg-geometry-v1",
+      "jxl-square-v1",
+      "jxl-truncated-v1",
+      "psd-geometry-v1",
+      "raf-finepix-s5000-v1",
+      "tiff-geometry-v1",
+      "tiff-nikon-d70s-v1",
+      "xmp-rating-v1"
+    ]
+  }
+}

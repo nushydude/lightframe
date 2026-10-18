@@ -1,0 +1,17 @@
+{
+  "indexUrl": "https://raw.pixls.us/json/getrepository.php?set=all",
+  "retrieved": "2026-10-18",
+  "indexSha256": "d69e157a1a7b7b2424d962a93f09629c16186bace42b26f451a741136bd583c1",
+  "recordId": 2726,
+  "entry": [
+    "Fujifilm",
+    "FinePix S5000",
+    "4:3",
+    11.06,
+    "",
+    "<a href='https://creativecommons.org/publicdomain/zero/1.0/' title='Creative Commons 0 - Public Domain' class='cc'>co</a>",
+    "2018-08-20",
+    "<a href='https://raw.pixls.us/getfile.php/2726/nice/Fujifilm - FinePix S5000 - 4:3.RAF'>Fujifilm - FinePix S5000 - 4:3.RAF</a><div class='checksumdata'><span title='sha256 Checksum'>dabd5e74521a6980156be9fd4b88d0c37b0fe4d0e0e6f5c12db8cffff1b76297</span>&nbsp;(6.53MB)</div>",
+    "<a target='_blank' href='https://raw.pixls.us/getfile.php/2726/exif/2007_0912Image0022.RAF.exif.txt'>exifdata</a>"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "indexUrl": "https://raw.pixls.us/json/getrepository.php?set=all",
+  "retrieved": "2026-10-18",
+  "indexSha256": "d69e157a1a7b7b2424d962a93f09629c16186bace42b26f451a741136bd583c1",
+  "recordId": 1117,
+  "entry": [
+    "Nikon",
+    "D70s",
+    "12bit 12bit compressed (Lossy (type 1)) (3:2)",
+    6.12,
+    "",
+    "<a href='https://creativecommons.org/publicdomain/zero/1.0/' title='Creative Commons 0 - Public Domain' class='cc'>co</a>",
+    "2017-02-19",
+    "<a href='https://raw.pixls.us/getfile.php/1117/nice/Nikon - D70s - 12bit 12bit compressed (Lossy (type 1)) (3:2).NEF'>Nikon - D70s - 12bit 12bit compressed (Lossy (type 1)) (3:2).NEF</a><div class='checksumdata'><span title='sha256 Checksum'>6c46f9854033e7623ebbb5de8c951df6762ca44f05d45035ccc5cb7e9f4e5692</span>&nbsp;(4.95MB)</div>",
+    "<a target='_blank' href='https://raw.pixls.us/getfile.php/1117/exif/RAW_NIKON_D70S.NEF.exif.txt'>exifdata</a>"
+  ]
+}

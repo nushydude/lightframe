@@ -54,6 +54,11 @@ Tasks 53 and 54, are merged:
 
 67. `tasks/67-reduced-resolution-jpeg-decode.md`
 
+Task 84 supplies the shared evidence corpus required before the next optimisation, Task 68
+(bounded RAF embedded previews). Task 67 remains the first optimisation in that sequence:
+
+84. `tasks/84-licensed-pinned-media-corpus.md`
+
 ## Execution Order
 
 Use this order unless the user explicitly reprioritizes work:

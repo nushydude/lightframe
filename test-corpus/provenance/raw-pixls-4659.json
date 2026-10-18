@@ -1,0 +1,17 @@
+{
+  "indexUrl": "https://raw.pixls.us/json/getrepository.php?set=all",
+  "retrieved": "2026-10-18",
+  "indexSha256": "d69e157a1a7b7b2424d962a93f09629c16186bace42b26f451a741136bd583c1",
+  "recordId": 4659,
+  "entry": [
+    "Canon",
+    "EOS R6",
+    "3:2",
+    7.74,
+    "CRAW 1.6x crop",
+    "<a href='https://creativecommons.org/publicdomain/zero/1.0/' title='Creative Commons 0 - Public Domain' class='cc'>co</a>",
+    "2021-05-14",
+    "<a href='https://raw.pixls.us/getfile.php/4659/nice/Canon - EOS R6 - 3:2.CR3'>Canon - EOS R6 - 3:2.CR3</a><div class='checksumdata'><span title='sha256 Checksum'>74abb0a113d075ad9887a058082f40dd2a938c4813a08474d82356f11a027778</span>&nbsp;(5.03MB)</div>",
+    ""
+  ]
+}
