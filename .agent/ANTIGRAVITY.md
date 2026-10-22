@@ -38,10 +38,24 @@ to fetch `origin/main`, verify the source checkout is clean, and create an isola
 `codex/<task-slug>` worktree. The command refuses to stash, reset, or overwrite existing changes
 and records the specification hash when `--spec-file` is provided.
 
-Use the same command's `transition`, `record-review`, `record-pr`, `show`, and `close` subcommands
+Use the same command's `transition`, `freeze`, `record-evidence`, `record-review`, `record-pr`, `show`, and `close` subcommands
 to persist the state-machine position and make interruption recovery explicit. The orchestrator remains
 responsible for spawning agents, running checks, and verifying GitHub status; the script provides
 the safe branch/worktree and state primitives.
+
+Freeze in `LOCAL_CHECKS` after writers finish, naming focused checks and the required scope gate
+with `--checks`, then record their results using the returned `--candidate-id`. Review and delivery
+must match that content, including untracked files, deletions, and Git mode changes. Refreeze after
+any remediation; previous approval and check evidence cannot authorize the new candidate.
+`pnpm run test:agent-task` exercises lifecycle and recovery behavior and runs in local and remote CI.
+The commit gate clears repository-local Git variables inherited from hooks before running checks,
+so real Git fixture tests operate on their disposable repositories and preserve the enclosing checkout.
+
+Version 1 state is migrated on read. Legacy delivery approvals are archived as stale and returned to
+`LOCAL_CHECKS`; PR metadata and history are retained. `close --merged` records `CLEANUP_PENDING`
+before removal and `CLOSED` only after the directory and Git registration are gone. If a Windows
+removal unregisters a checkout but leaves files behind, report its exact path and preserve the files.
+After manual preservation/resolution, retry `close`; recovery never recursively deletes leftovers.
 
 When authoring new constraints, prefer updating a focused workflow or skill and keeping the command
 it references available in `package.json`.
