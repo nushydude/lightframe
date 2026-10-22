@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: product design and large-folder review efficiency
+- Status: Partially implemented; extend
+- October boundary: Preserve existing grid density slider, filename search, selection, and bulk controls. Focus remaining work on tray/coherence, sticky bulk-review state, and task 61 decision integration; do not claim those controls are absent or create a second selection owner.
 - Dependencies: task 59; task 61 if Pick/Reject bulk controls are included
 - Expected branch: `codex/contact-sheet-density-bulk-review`
 - Required final gate: `pnpm run ci:frontend`
