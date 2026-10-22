@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: performance architecture and responsiveness
+- Status: Implemented foundation; revalidate extensions before new work
+- October amendments: The executor and cache generations are merged at `cb06f9c` (PR #221): physical workers, queue/consumer bounds, cancellation, cache-root epochs/retirement, and tile-source invalidation already exist. The context below is the historical implementation plan. Revalidate admission accounting and new consumer coverage instead of rebuilding the pool. Bound distinct queued jobs and admitted bytes as well as workers and physical running work; include cache epochs, root clear/replacement/retirement, disk publication, memory tile-source retirement, and barrier-controlled stale-job tests. Do not copy LightCraft's urgent bypass, oversized sole work, or uncapped queue. Keep truthful noninterruptible stages and task 53 admission for every consumer.
 - Dependencies: task 53
 - Expected branch: `codex/bounded-native-media-executor`
 - Required final gate: `pnpm run ci:local`
@@ -14,7 +16,7 @@ Replace independent, effectively uncancelable media `spawn_blocking` calls with 
 executor that preserves interactive work under load, limits physical concurrency, coalesces
 duplicate work, and supports meaningful cancellation.
 
-## Current Code Context
+## Historical Code Context
 
 - The frontend `imageWorkScheduler` prioritizes and limits requested work.
 - Once a Rust blocking command starts, aborting the frontend consumer does not stop the physical

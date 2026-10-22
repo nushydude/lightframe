@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: release correctness and CI infrastructure
+- Status: Planned revalidation
+- October boundary: The July version mismatch is historical, not a current confirmed defect. The October 12 research recorded four-manifest alignment at 8.7.16; October 22 reconciliation confirms alignment at 8.7.20; revalidate that fact, the lockfile root entry, release tags, and same-SHA gate behavior against `origin/main` without expanding this task into unrelated release supply-chain work.
 - Dependencies: none
 - Expected branch: `codex/version-release-gate-correctness`
 - Required final gate: `pnpm run ci:local`
@@ -14,13 +16,22 @@ Make version metadata reproducible across JavaScript, Cargo, Tauri, updater arti
 resolved lockfile. Prevent a release tag from producing artifacts unless the exact release commit
 has passed all required quality and advisory gates.
 
-## Confirmed Defect
+## Historical July example (not a current defect)
 
-- `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` report 8.7.5.
-- The committed root package record in `src-tauri/Cargo.lock` reports 8.7.4.
-- Running Cargo rewrites the lockfile, but `quality:version` still passes.
-- The release workflow builds on any `v*` tag and does not itself run or depend on the complete CI
-  gate for that exact commit.
+The July audit recorded `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` at
+8.7.5 while the committed lockfile root was 8.7.4. That example must not be reported as the
+October application's current mismatch.
+
+## October research and current revalidation scope
+
+- The October 12 research recorded `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and
+  the root `lightframe` entry in `src-tauri/Cargo.lock` aligned at 8.7.16.
+- At reconciliation revision `cb06f9c` (2026-10-22), all four are 8.7.20. `scripts/check-version-sync.mjs` still checks only package/Cargo TOML/Tauri configuration, and `.github/workflows/release.yml` builds on `v*` without the full same-SHA gate. These are remaining scope, not a present version mismatch.
+- Recheck all four manifests and the lockfile root entry on the selected `origin/main`; preserve the
+  current alignment as a regression assertion.
+- The remaining planned work is tag/version validation, lockfile-check coverage, updater metadata,
+  and a same-SHA release gate. The release workflow must not build an arbitrary `v*` tag before the
+  exact commit's required checks pass.
 
 ## Required Version Contract
 

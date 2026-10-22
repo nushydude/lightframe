@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: behavior-preserving frontend architecture
+- Status: Partially implemented; extend
+- October boundary: Extend the existing action registry and viewer seams in place. Tasks 60–64, 75, 90, and 91 consume this one descriptor owner; no second registry or transplanted Artcraft command engine.
 - Dependencies: none
 - Expected branch: `codex/unified-actions-viewer-decomposition`
 - Required final gate: `pnpm run ci:frontend`
@@ -46,7 +48,7 @@ type ViewerAction = {
   isEnabled: (context: ActionContext) => boolean;
   isChecked?: (context: ActionContext) => boolean;
   danger?: boolean;
-  pinPolicy: "allowed" | "default" | "never";
+  pinPolicy: 'allowed' | 'default' | 'never';
   run: (context: ActionExecutionContext) => void | Promise<void>;
 };
 ```

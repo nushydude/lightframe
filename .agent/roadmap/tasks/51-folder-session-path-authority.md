@@ -4,6 +4,8 @@
 
 - Priority: P0
 - Type: Tauri IPC security architecture
+- Status: Planned prerequisite
+- October boundary: This task remains the authority for backend-owned folder sessions, opaque resource grants, and user authorization. Tasks that add sidecar writes, transfers, drafts, or local control must depend on or reuse these grants; they must not add raw renderer-provided path authority.
 - Dependencies: task 50 may run independently; no code dependency
 - Expected branch: `codex/folder-session-path-authority`
 - Required final gate: `pnpm run ci:local`

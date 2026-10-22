@@ -4,6 +4,8 @@
 
 - Priority: P0
 - Type: Tauri configuration and window isolation
+- Status: Planned prerequisite
+- October boundary: Privileged additions (sidecar export, transfers, draft recovery, and authenticated local control) retain this task's main/projector capability and asset-isolation guarantees. Do not broaden a window capability as a shortcut.
 - Dependencies: task 51
 - Supersedes: unimplemented portions of task 40
 - Expected branch: `codex/tauri-capability-asset-isolation`

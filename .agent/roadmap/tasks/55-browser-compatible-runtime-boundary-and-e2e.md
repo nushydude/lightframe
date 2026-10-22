@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: developer experience, integration testing, regression prevention
+- Status: Partially implemented; reverify and extend
+- October boundary: Introduce a browser-safe runtime abstraction around the current service seams, then add authoritative Windows-shell E2E for native WIC/window/OS input/accessibility behavior. Direct render-time `getCurrentWindow` uses remain evidence gaps; browser/headless tests do not prove them.
 - Dependencies: none
 - Expected branch: `codex/runtime-boundary-e2e`
 - Required final gate: `pnpm run ci:local`

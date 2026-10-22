@@ -4,7 +4,10 @@
 
 - Priority: P0
 - Type: malicious-file resilience, memory safety, availability
-- Dependencies: none; coordinate command signatures with task 51 if both are active
+- Status: Implemented foundation; revalidate extensions before new work
+- October boundary: Merged guardrails are present at reconciliation revision `cb06f9c` (PR #218), including `image_resource_policy.rs`, bounded source handles, checked allocations, and command integration. The risk/context below is the historical specification, not a current absence claim. Revalidate additional format/ICC/XMP expansion coverage before extending it. Keep this task dependency-free. RAW preview, corpus, and codec tasks consume its policy but must not be added as dependencies, preventing a cycle. The policy covers input bytes, metadata expansion, dimensions, pixels, scratch memory, and total admitted work, including RAW/ICC/XMP.
+- Dependencies: none
+- Optional coordination: align command signatures with task 51 if both are active; this is not a prerequisite edge.
 - Expected branch: `codex/native-decode-guardrails`
 - Required final gate: `pnpm run ci:local`
 
@@ -14,7 +17,7 @@ Enforce consistent Rust-side resource limits for every image decode and edit ope
 checks remain useful UX, but the backend must independently reject work that exceeds safe pixel,
 dimension, file-size, allocation, or request-parameter budgets.
 
-## Current Risk
+## Historical Risk
 
 - Scaled export has explicit pixel and working-memory validation.
 - Preview, crop, rotate, clipboard, metadata, thumbnail, and some native-codec paths have different

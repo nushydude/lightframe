@@ -4,6 +4,8 @@
 
 - Priority: P0
 - Type: dependency security and malicious-file resilience
+- Status: Implemented; reverify
+- October evidence (rechecked 2026-10-22 at `cb06f9c`): PR #212 predates the October baseline; current `Cargo.lock` resolves `quick-xml 0.41.0`, `Cargo.toml` pins remediated `little_exif` revision `1ca486b`, and the named advisory ignores are absent. Verify these facts on selected `origin/main`; do not rewrite this historical specification as a current vulnerability.
 - Dependencies: none
 - Expected branch: `codex/remove-vulnerable-quick-xml`
 - Required final gate: `pnpm run ci:local`
