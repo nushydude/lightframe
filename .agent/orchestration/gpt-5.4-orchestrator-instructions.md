@@ -46,18 +46,19 @@ criteria before implementation.
 
 ## Required Local Gates
 
-Run these before reviewer handoff and again after final remediation if code changed:
+Freeze after writers finish in `LOCAL_CHECKS` with `freeze --slug <slug> --checks <focused>,<gate>`.
+Use the gate specified by `.agent/ANTIGRAVITY.md`: `ci:frontend`, `ci:rust`, or `ci:local`.
+Run the named checks against that frozen content before reviewer handoff and again after remediation:
 
 ```powershell
-pnpm build
-pnpm test -- --run
-Push-Location src-tauri; cargo fmt -- --check; Pop-Location
-Push-Location src-tauri; cargo clippy -- -D warnings; Pop-Location
-Push-Location src-tauri; cargo test; Pop-Location
+node scripts/agent-task.mjs freeze --slug <slug> --checks <focused>,ci:local
+pnpm run ci:local
+node scripts/agent-task.mjs record-evidence --slug <slug> --candidate-id <id> --check ci:local --command "pnpm run ci:local" --result passed
 ```
 
 If a command is unavailable or fails for environment reasons, capture the exact failure and ask the
-implementation agent to fix code-caused failures only. Do not hide skipped checks.
+implementation agent to fix code-caused failures only. Record failed, blocked, and skipped checks
+honestly; they do not satisfy delivery gates. Include evidence for every named check.
 
 ## Implementation Agent Prompt Template
 
@@ -104,6 +105,12 @@ Review the current branch against this task plan:
 Use the reviewer instructions in:
 .agent/orchestration/gpt-5.5-reviewer-instructions.md
 
+Frozen candidate: <CANDIDATE_ID>
+Base revision: <BASE_SHA>
+Changed files and complete relevant diff: <DIFF>
+Relevant surrounding source and test sources: <SOURCE_PACKET>
+Required checks and results for this candidate: <EVIDENCE>
+
 Return one of:
 - APPROVED
 - CHANGES_REQUESTED
@@ -118,9 +125,12 @@ Do not implement fixes yourself.
 2. Follow `.agent/orchestration/state-machine.md` exactly.
 3. If reviewer requests changes, pass only the remediation checklist and relevant task context to
    the GPT 6.1 Sol implementation agent with `medium` reasoning.
-4. After remediation, rerun affected checks. If code changed broadly, rerun all local gates.
+4. After remediation, return to `LOCAL_CHECKS`, refreeze, and rerun focused checks and the required
+   scope gate. A freeze clears evidence and current approval even if content is unchanged.
 5. Send the updated diff back to the GPT 6 Astra reviewer with `high` reasoning.
-6. Repeat until reviewer returns `APPROVED`.
+6. Record `APPROVED` or `CHANGES_REQUESTED` with the exact `--candidate-id`. Stop after three
+   unchanged review cycles and ask the user for direction. Changed content resets the unchanged
+   counter; total review history remains available. Do not reinterpret test success as approval.
 7. If reviewer approval and local gates pass but delivery is not authorized, transition to
    `AUTHORIZATION_REQUIRED` and report exactly what will be committed, pushed, and opened.
 8. After authorization, transition to `PR_READY`, create the commit, push the branch, and open the PR.
@@ -132,7 +142,12 @@ Do not implement fixes yourself.
 
 After a task PR is merged:
 
-- Remove the merged task worktree.
+- Plain user merge confirmation authorizes cleanup of that task worktree; no extra approval needed.
+- Run `close --slug <slug> --merged` using recorded state; verify the directory is gone.
+- If removal fails or leaves an unregistered directory, report `CLEANUP_PENDING` and its exact path.
+  Preserve leftovers and runtime metadata; never add a recursive deletion fallback. Retry `close`
+  only after the remaining files have been safely resolved.
+- Preserve local and remote branches unless branch deletion is separately requested.
 - Confirm the primary worktree is on `main`.
 - Pull `origin/main` fast-forward only before starting the next roadmap task.
 
