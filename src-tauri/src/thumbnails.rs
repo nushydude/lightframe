@@ -545,12 +545,12 @@ pub fn hash_cache_key(cache_key: &str) -> String {
 
 pub fn format_support_for_path(file_path: &Path) -> FormatSupport {
     match normalized_extension(file_path).as_deref() {
-        Some("raf") => FormatSupport {
+        Some("raf" | "nef") => FormatSupport {
             browser_renderable: false,
             rust_decode_supported: true,
             metadata_supported: true,
             thumbnail_supported: true,
-            support_note: Some("RAF dimensions, thumbnails, and previews use the bounded embedded JPEG, without a Windows RAW codec. Resolution is the embedded preview, not the sensor. No demosaic or ICC colour conversion is performed. JPEG decoder failures may use placeholders; container validation, resource admission, I/O, cancellation, source-change, and unsupported-profile errors return recoverable failures."),
+            support_note: Some("RAF and fixture-backed classic TIFF NEF dimensions, thumbnails, and previews use bounded embedded JPEGs, without a Windows RAW codec. NEF evidence is limited to Nikon D70s. Resolution is the embedded preview, not the sensor. No demosaic or ICC colour conversion is performed. JPEG decoder failures may use placeholders; container validation, resource admission, I/O, cancellation, source-change, and unsupported-profile errors return recoverable failures."),
         },
         Some("heic") => FormatSupport {
             browser_renderable: true,
@@ -808,8 +808,8 @@ pub(crate) fn get_or_create_preview_with_generation(
     }
 
     generation.checkpoint()?;
-    let decoded = if crate::raw_preview::is_raf(file_path) {
-        load_raf_image(file_path, OperationClass::Preview, Some(max_dimension))
+    let decoded = if crate::raw_preview::is_bounded_raw(file_path) {
+        load_embedded_raw_image(file_path, OperationClass::Preview, Some(max_dimension))
     } else {
         decode_image_with_orientation_for_preview(file_path, max_dimension)
             .map(|image| (image, None))
@@ -877,7 +877,7 @@ pub(crate) fn get_or_create_preview_with_generation(
             .map_err(|e| format!("Failed to encode preview image: {}", e))?;
         GeneratedImageFormat::Png
     } else {
-        (if crate::raw_preview::is_raf(file_path) {
+        (if crate::raw_preview::is_bounded_raw(file_path) {
             encode_generated_jpeg(&preview, &mut buffer, icc_profile)
         } else {
             image::DynamicImage::ImageRgb8(preview.to_rgb8())
@@ -1055,6 +1055,8 @@ fn build_versioned_cache_key(
 
     if crate::raw_preview::is_raf(file_path) {
         parts.push("raf-embedded-v1".into());
+    } else if crate::raw_preview::is_bounded_raw(file_path) {
+        parts.push("nef-tiff-embedded-v1".into());
     }
 
     if let Some(max_dimension) = max_dimension {
@@ -1069,8 +1071,8 @@ fn build_versioned_cache_key(
 }
 
 fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageError> {
-    let (img, icc_profile) = if crate::raw_preview::is_raf(file_path) {
-        load_raf_image(file_path, OperationClass::Thumbnail, Some(THUMBNAIL_SIZE))?
+    let (img, icc_profile) = if crate::raw_preview::is_bounded_raw(file_path) {
+        load_embedded_raw_image(file_path, OperationClass::Thumbnail, Some(THUMBNAIL_SIZE))?
     } else {
         (
             decode_image_with_orientation_with_preview_limit(
@@ -1092,7 +1094,7 @@ fn generate_thumbnail_jpeg(file_path: &Path) -> Result<Vec<u8>, image::ImageErro
     .map_err(|error| reduced_jpeg_policy_error(OperationClass::Thumbnail, error))?;
 
     let mut buffer = std::io::Cursor::new(Vec::new());
-    if crate::raw_preview::is_raf(file_path) {
+    if crate::raw_preview::is_bounded_raw(file_path) {
         encode_generated_jpeg(&thumb, &mut buffer, icc_profile)?;
     } else {
         thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
@@ -1221,8 +1223,9 @@ fn oriented_decoder_resource_for_operation(
     file_path: &Path,
     operation: OperationClass,
 ) -> Result<(u32, u32, u64), String> {
-    if crate::raw_preview::is_raf(file_path) {
-        let bytes = crate::raw_preview::embedded_jpeg(file_path, operation)?;
+    if crate::raw_preview::is_bounded_raw(file_path) {
+        let (bytes, container_orientation) =
+            crate::raw_preview::embedded_preview(file_path, operation)?;
         let mut decoder =
             embedded_jpeg_decoder(&bytes, operation).map_err(|error| error.to_string())?;
         let (width, height) = decoder.dimensions();
@@ -1232,7 +1235,8 @@ fn oriented_decoder_resource_for_operation(
             &image_resource_policy::PolicyLimits::for_operation(operation),
         )
         .map_err(|error| policy_error(operation, error))?;
-        let orientation = decoder.orientation().map_err(|error| error.to_string())?;
+        let orientation = container_orientation
+            .unwrap_or(decoder.orientation().map_err(|error| error.to_string())?);
         let (width, height) = oriented_dimensions(width, height, orientation);
         return Ok((width, height, decoder.total_bytes()));
     }
@@ -1300,13 +1304,14 @@ fn try_decode_reduced_jpeg(
         Ok(bytes) => bytes,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
     };
-    try_decode_reduced_jpeg_bytes(&source_bytes, operation, requested_max_dimension)
+    try_decode_reduced_jpeg_bytes(&source_bytes, operation, requested_max_dimension, None)
 }
 
 fn try_decode_reduced_jpeg_bytes(
     source_bytes: &[u8],
     operation: OperationClass,
     requested_max_dimension: u32,
+    container_orientation: Option<Orientation>,
 ) -> Result<ReducedJpegDecode, image::ImageError> {
     image_checkpoint()?;
     let encoded_len = source_bytes.len() as u64;
@@ -1317,6 +1322,7 @@ fn try_decode_reduced_jpeg_bytes(
         Ok(value) => value,
         Err(_) => return Ok(ReducedJpegDecode::Fallback),
     };
+    let orientation = container_orientation.unwrap_or(orientation);
     image_resource_policy::validate_dimensions(
         orientation_width,
         orientation_height,
@@ -1445,10 +1451,16 @@ fn decode_image_with_orientation_with_preview_limit(
 ) -> Result<DynamicImage, image::ImageError> {
     image_checkpoint()?;
 
-    if crate::raw_preview::is_raf(file_path) {
-        let bytes = crate::raw_preview::embedded_jpeg(file_path, operation)
-            .map_err(|error| image::ImageError::IoError(std::io::Error::other(error)))?;
-        return decode_embedded_jpeg(&bytes, operation, preview_max_dimension);
+    if crate::raw_preview::is_bounded_raw(file_path) {
+        let (bytes, container_orientation) =
+            crate::raw_preview::embedded_preview(file_path, operation)
+                .map_err(|error| image::ImageError::IoError(std::io::Error::other(error)))?;
+        return decode_embedded_jpeg(
+            &bytes,
+            operation,
+            preview_max_dimension,
+            container_orientation,
+        );
     }
 
     if let Some(max_dimension) = preview_max_dimension {
@@ -1531,12 +1543,12 @@ fn embedded_jpeg_decoder(
     reader.into_decoder()
 }
 
-fn load_raf_image(
+fn load_embedded_raw_image(
     path: &Path,
     operation: OperationClass,
     max_dimension: Option<u32>,
 ) -> Result<(DynamicImage, Option<Vec<u8>>), image::ImageError> {
-    let bytes = crate::raw_preview::embedded_jpeg(path, operation)
+    let (bytes, container_orientation) = crate::raw_preview::embedded_preview(path, operation)
         .map_err(|error| image::ImageError::IoError(std::io::Error::other(error)))?;
     let mut decoder = embedded_jpeg_decoder(&bytes, operation)?;
     let profile = decoder.icc_profile()?;
@@ -1554,12 +1566,12 @@ fn load_raf_image(
             libjpeg_turbo_rs::ColorSpace::Cmyk | libjpeg_turbo_rs::ColorSpace::Ycck
         ) {
             return Err(image::ImageError::IoError(std::io::Error::other(
-                "RAF CMYK/YCCK profile cannot be preserved after RGB decoding",
+                "Embedded RAW CMYK/YCCK profile cannot be preserved after RGB decoding",
             )));
         }
     }
     drop(decoder);
-    let image = decode_embedded_jpeg(&bytes, operation, max_dimension)?;
+    let image = decode_embedded_jpeg(&bytes, operation, max_dimension, container_orientation)?;
     Ok((image, profile))
 }
 
@@ -1583,9 +1595,10 @@ fn decode_embedded_jpeg(
     bytes: &[u8],
     operation: OperationClass,
     max_dimension: Option<u32>,
+    container_orientation: Option<Orientation>,
 ) -> Result<DynamicImage, image::ImageError> {
     if let Some(bound) = max_dimension {
-        match try_decode_reduced_jpeg_bytes(bytes, operation, bound)? {
+        match try_decode_reduced_jpeg_bytes(bytes, operation, bound, container_orientation)? {
             ReducedJpegDecode::Reduced(image) => {
                 record_jpeg_reduced_decode(operation, image.width(), image.height());
                 return Ok(image);
@@ -1605,7 +1618,7 @@ fn decode_embedded_jpeg(
         operation,
     )
     .map_err(|error| reduced_jpeg_policy_error(operation, error))?;
-    let orientation = decoder.orientation()?;
+    let orientation = container_orientation.unwrap_or(decoder.orientation()?);
     if let Some(bound) = max_dimension {
         let oriented = oriented_dimensions(width, height, orientation);
         image_resource_policy::validate_preview_resize_memory(
@@ -1913,11 +1926,6 @@ fn is_raw_native_preferred(file_path: &Path) -> bool {
     normalized_extension(file_path).as_deref().is_some_and(is_raw_extension)
         && (native_codecs::should_prefer_native_thumbnail(file_path)
             || native_codecs::should_prefer_native_preview(file_path))
-}
-
-#[cfg(test)]
-fn reset_raw_native_decode_failure_cache_for_test() {
-    clear_raw_native_decode_failure_cache();
 }
 
 fn known_fallback_thumbnail_svg(file_path: &Path, error: &image::ImageError) -> Option<String> {
@@ -2517,6 +2525,120 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tiff_family_bounded_native_fixture_operations_and_cache_identity() {
+        let source = crate::raw_preview::tests::pinned_nef();
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+        assert_eq!(oriented_image_dimensions(&source).unwrap(), (3008, 2000));
+        let thumbnail =
+            get_or_create_thumbnail(&source, &metadata, &dir.path().join("thumbs")).unwrap();
+        let preview =
+            get_or_create_preview(&source, &metadata, &dir.path().join("previews"), 320, None)
+                .unwrap();
+        assert_eq!((thumbnail.width, thumbnail.height), (Some(160), Some(106)));
+        assert_eq!((preview.width, preview.height), (Some(320), Some(213)));
+        assert!(build_versioned_cache_key("test", &source, &metadata, None, None)
+            .contains("nef-tiff-embedded-v1"));
+        assert!(!tile_decode_supported_for_path(&source));
+        assert!(!native_codecs::should_prefer_native_preview(&source));
+    }
+
+    #[test]
+    fn tiff_family_bounded_changed_and_malformed_sources_never_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("camera.nef");
+        fs::copy(crate::raw_preview::tests::pinned_nef(), &source).unwrap();
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+        let root = dir.path().join("changed");
+        let generation = CacheGeneration::capture(&root).unwrap();
+        fs::write(&source, b"changed source").unwrap();
+        assert!(get_or_create_preview_with_generation(
+            &source, &metadata, &root, 160, None, generation
+        )
+        .is_err());
+        assert!(!root.exists() || fs::read_dir(&root).unwrap().count() == 0);
+        let metadata = resolve_source_metadata(&source, None, None).unwrap();
+        let root = dir.path().join("malformed");
+        assert!(get_or_create_preview(&source, &metadata, &root, 160, None).is_err());
+        assert!(!root.exists() || fs::read_dir(&root).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn tiff_family_bounded_container_orientation_and_icc_preserved_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpeg = dir.path().join("oriented.jpg");
+        let source = dir.path().join("camera.nef");
+        let profile = fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-corpus/fixtures/srgb-v4-v1.icc"),
+        )
+        .unwrap();
+        // Container 0 denotes an absent IFD0 orientation tag.
+        for (embedded_orientation, container_orientation) in [(1, 6), (6, 6), (6, 1), (6, 0)] {
+            let image = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                640,
+                320,
+                image::Rgb([80, 120, 160]),
+            ));
+            let mut output = std::io::Cursor::new(Vec::new());
+            encode_generated_jpeg(&image, &mut output, Some(profile.clone())).unwrap();
+            fs::write(&jpeg, output.into_inner()).unwrap();
+            write_orientation(&jpeg, embedded_orientation);
+            let mut bytes =
+                crate::raw_preview::tests::tiff_container(&fs::read(&jpeg).unwrap(), true);
+            if container_orientation != 0 {
+                // Add IFD0 orientation and move the JPEG range past the new directory entry.
+                bytes[8..10].copy_from_slice(&4u16.to_le_bytes());
+                bytes[30..34].copy_from_slice(&62u32.to_le_bytes());
+                let mut entry = Vec::new();
+                entry.extend(274u16.to_le_bytes());
+                entry.extend(4u16.to_le_bytes());
+                entry.extend(1u32.to_le_bytes());
+                entry.extend((container_orientation as u32).to_le_bytes());
+                bytes.splice(46..46, entry);
+            }
+            fs::write(&source, &bytes).unwrap();
+            let effective_orientation = if container_orientation == 0 {
+                embedded_orientation
+            } else {
+                container_orientation
+            };
+            let expected = if effective_orientation == 6 { (320, 640) } else { (640, 320) };
+            assert_eq!(oriented_image_dimensions(&source).unwrap(), expected);
+            let metadata = resolve_source_metadata(&source, None, None).unwrap();
+            let thumbnail = get_or_create_thumbnail(
+                &source,
+                &metadata,
+                &dir.path().join(format!("thumbs{embedded_orientation}-{container_orientation}")),
+            )
+            .unwrap();
+            let preview = get_or_create_preview(
+                &source,
+                &metadata,
+                &dir.path().join(format!("previews{embedded_orientation}-{container_orientation}")),
+                160,
+                None,
+            )
+            .unwrap();
+            for asset in [thumbnail, preview] {
+                let expected = if effective_orientation == 6 {
+                    (Some(80), Some(160))
+                } else {
+                    (Some(160), Some(80))
+                };
+                assert_eq!((asset.width, asset.height), expected);
+                let mut decoder = ImageReader::open(asset.file_path)
+                    .unwrap()
+                    .with_guessed_format()
+                    .unwrap()
+                    .into_decoder()
+                    .unwrap();
+                assert_eq!(decoder.icc_profile().unwrap(), Some(profile.clone()));
+                assert_eq!(decoder.orientation().unwrap(), Orientation::NoTransforms);
+            }
+        }
+    }
+
+    #[test]
     fn raf_bounded_native_fixture_generates_without_windows_raw_codec() {
         let source = crate::raw_preview::tests::pinned_raf();
         let dir = tempfile::tempdir().unwrap();
@@ -2613,11 +2735,15 @@ mod tests {
     }
 
     #[test]
-    fn raf_bounded_executor_cancel_and_cache_clear_reject_suspended_producer() {
+    fn raf_bounded_tiff_family_bounded_executor_cancel_and_cache_clear_reject_suspended_producer() {
         use crate::media_executor::{MediaExecutor, MediaRequest, Priority};
-        for cancel in [false, true] {
+        for (cancel, nef) in [(false, false), (true, false), (false, true), (true, true)] {
             let dir = tempfile::tempdir().unwrap();
-            let source = crate::raw_preview::tests::pinned_raf();
+            let source = if nef {
+                crate::raw_preview::tests::pinned_nef()
+            } else {
+                crate::raw_preview::tests::pinned_raf()
+            };
             let metadata = resolve_source_metadata(&source, None, None).unwrap();
             let root = dir.path().join("previews");
             fs::create_dir_all(&root).unwrap();
@@ -3952,8 +4078,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cached_preview_lookup_skips_svg_fallbacks_for_native_raw_formats() {
-        reset_raw_native_decode_failure_cache_for_test();
-        let formats = cached_preview_formats(Path::new("sample.cr2"), "cache-key");
+        let formats =
+            cached_preview_formats(Path::new("sample.cr2"), "cached-preview-native-raw-empty-key");
 
         assert_eq!(formats, &[GeneratedImageFormat::Jpeg]);
     }
@@ -3961,20 +4087,20 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cached_raw_fallbacks_are_reused_after_native_failure() {
-        reset_raw_native_decode_failure_cache_for_test();
-
         let path = Path::new("sample.cr2");
-        remember_raw_native_decode_failure(path, "failed-cache-key");
+        let failed_key = "cached-raw-fallback-reuse-failed-key";
+        let other_key = "cached-raw-fallback-reuse-other-key";
+        remember_raw_native_decode_failure(path, failed_key);
 
         assert_eq!(
-            cached_thumbnail_formats(path, "failed-cache-key"),
+            cached_thumbnail_formats(path, failed_key),
             &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Svg]
         );
         assert_eq!(
-            cached_preview_formats(path, "failed-cache-key"),
+            cached_preview_formats(path, failed_key),
             &[GeneratedImageFormat::Jpeg, GeneratedImageFormat::Png, GeneratedImageFormat::Svg]
         );
-        assert_eq!(cached_preview_formats(path, "other-cache-key"), &[GeneratedImageFormat::Jpeg]);
+        assert_eq!(cached_preview_formats(path, other_key), &[GeneratedImageFormat::Jpeg]);
     }
 
     #[cfg(not(windows))]

@@ -3534,6 +3534,18 @@ mod tests {
     }
 
     #[test]
+    fn tiff_family_bounded_metadata_reports_embedded_resolution_and_rust_backend() {
+        let path = crate::raw_preview::tests::pinned_nef();
+        let metadata = get_image_metadata_blocking(path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!((metadata.width, metadata.height), (Some(3008), Some(2000)));
+        assert_eq!(metadata.codec_backend, "rust_image");
+        assert!(!metadata.native_decode_supported);
+        assert!(!metadata.detail_supported);
+        assert!(metadata.rust_decode_supported);
+        assert!(metadata.support_note.unwrap().contains("embedded preview"));
+    }
+
+    #[test]
     fn test_get_image_metadata_blocking_falls_back_for_heic_files() {
         let dir = tempdir().unwrap();
         let image_path = dir.path().join("sample.heic");

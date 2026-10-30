@@ -66,10 +66,29 @@ LightFrame scans and works with common image formats:
   source-change, and unsupported-profile errors return recoverable failures. Rejected RAF files
   never fall back to a whole-file Windows decoder. Resolution refers to the embedded preview, not sensor
   dimensions; RAF sensor decoding, demosaic, editing, and full-detail tiles are unsupported.
-- Other RAW review files: DNG, CR2, CR3, NEF, NRW, ARW, SRF, SR2, ORF, RW2, PEF, and SRW appear in
+- NEF: classic TIFF embedded JPEG thumbnails, previews, and dimensions work without a Windows RAW
+  codec. Evidence is the pinned Nikon D70s fixture; other cameras/layouts are not established.
+  Directory traversal is capped at 32 IFDs, depth 8, 4096 total entries, 128 metadata reads/seeks
+  and 8 MiB metadata; one JPEG range of at most 32 MiB is read. Candidates use actual JPEG pixel
+  dimensions, then encoded size. IFD0 orientation overrides embedded EXIF once; when absent,
+  JPEG EXIF applies. Embedded JPEG APP2 ICC bytes are preserved without colour conversion, as
+  for RAF; outer TIFF ICC and camera colour metadata are not consumed. Missing,
+  malformed, changed, cancelled, or over-budget containers fail recoverably without Windows
+  container fallback. Dimensions describe the JPEG, not sensor pixels. BigTIFF, sensor strips,
+  demosaic, RAW editing/export, and full-resolution RAW tiles are unsupported.
+- Other RAW review files: DNG, CR2, CR3, NRW, ARW, SRF, SR2, ORF, RW2, PEF, and SRW appear in
   scanned folders and direct-open surfaces, including Windows file associations. On Windows,
   previews and thumbnails are attempted through native codecs; XMP sidecar metadata is shown in the
   info panel when available. `supported-image-extensions.json` is the canonical direct-open list.
+
+The bounded TIFF-family route has this fixture-limited support matrix:
+
+| RAW family                        | Bounded embedded JPEG support                                  | Evidence                                                                 |
+| --------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| NEF                               | Classic TIFF JPEGInterchangeFormat/Length IFDs (compression 6) | Required `tiff-nikon-d70s-v1`, 3008 × 2000 embedded JPEG                 |
+| DNG, CR2, ARW                     | Unsupported by this bounded route                              | No pinned native family fixtures; existing Windows codec attempts remain |
+| NRW, SRF, SR2, ORF, RW2, PEF, SRW | Unsupported by this bounded route                              | No pinned native family fixtures; existing Windows codec attempts remain |
+| CR3                               | Outside TIFF route                                             | Separate container family; existing Windows codec attempts remain        |
 
 Full-detail rendering is intentionally conservative for formats that are expensive or unsafe to
 decode at original size. In those cases the app prefers generated previews, placeholders, or tiled
