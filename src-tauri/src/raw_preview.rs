@@ -246,7 +246,7 @@ fn read_tiff_preview_details<R: Read + Seek>(
         let mut jpeg_offset = None;
         let mut jpeg_length = None;
         let mut compression = None;
-        for entry in entries[..count * 12].chunks_exact(12) {
+        for entry in entries[..count * 12].as_chunks::<12>().0 {
             let tag = tiff.u16(entry);
             if !matches!(tag, 259 | 274 | 330 | 513 | 514) {
                 continue;
@@ -264,7 +264,7 @@ fn read_tiff_preview_details<R: Read + Seek>(
                     pending.push((u64::from(tiff.u32(&entry[8..])), depth + 1));
                 } else {
                     let links = tiff.read(u64::from(tiff.u32(&entry[8..])), values as usize * 4)?;
-                    for link in links.chunks_exact(4) {
+                    for link in links.as_chunks::<4>().0 {
                         pending.push((u64::from(tiff.u32(link)), depth + 1));
                     }
                 }
