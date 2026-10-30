@@ -8,7 +8,8 @@ to validate everything and print the selected IDs, evidence classes, SHA-256, so
 Consumers must validate before using a selected file and fail if it is absent; never catch an
 integrity error to skip a required test. Selectors return records sorted by ID without mutating
 the manifest. Task 84 selects every fixture; task 67 selects authored JPEG geometry, and task 68
-selects the native RAF plus JPEG geometry. New feature tasks add their own bounded ID lists here.
+selects the native RAF plus JPEG geometry. Task 69 selects the required native NEF, sRGB ICC,
+and RAF regression fixture. New feature tasks add their own bounded ID lists here.
 
 ## Evidence and scope
 
@@ -32,6 +33,17 @@ were checked with local ffprobe/ffmpeg and their rendered images viewed. Camera 
 were visually reviewed; the RAF preview uses the container's offset/length fields at bytes 84/88.
 No identifiable people or imported branding assets were selected. The NEF harbor scene includes
 incidental vessel/café lettering. These tools are acquisition evidence, not CI dependencies.
+
+Task 69's NEF evidence is specifically Nikon D70s classic big-endian TIFF: SubIFD at 91680,
+JPEG offset 131072, length 717588, decoded preview 3008 × 2000. The exact required file is
+5,193,213 bytes with SHA-256 `6c46f9854033e7623ebbb5de8c951df6762ca44f05d45035ccc5cb7e9f4e5692`.
+Tests also wrap that JPEG in authored little-endian TIFF metadata. This establishes the bounded
+NEF layout, not camera-wide support, sensor decoding, or successful DNG/CR2/ARW handling.
+No native DNG, CR2, ARW, NRW, SRF, SR2, ORF, RW2, PEF, or SRW fixture is pinned; all are explicitly
+unsupported by the bounded TIFF route. Existing Windows codec behavior for those families is
+separate. TIFF geometry proves an ordinary RGB TIFF fixture, not a RAW preview route.
+Colour tests preserve the selected JPEG's APP2 ICC bytes; outer TIFF ICC/camera colour metadata
+is not transferred or converted.
 
 Dimensions carry a `scope`: camera dimensions are the **embedded JPEG preview**, not raw sensor
 dimensions; other valid images use `image`. XMP, ICC and negative inputs use null dimensions.

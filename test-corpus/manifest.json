@@ -349,6 +349,7 @@
   "tasks": {
     "67": ["jpeg-geometry-v1"],
     "68": ["raf-finepix-s5000-v1", "jpeg-geometry-v1"],
+    "69": ["tiff-nikon-d70s-v1", "colour-srgb-v4-v1", "raf-finepix-s5000-v1"],
     "84": [
       "colour-srgb-v4-v1",
       "cr3-canon-r6-crop-v1",

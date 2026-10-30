@@ -129,19 +129,20 @@ pub fn codec_capability_for_extension(extension: &str) -> CodecCapability {
             thumbnail: CodecBackend::BrowserRenderable,
             detail: CodecBackend::Unsupported,
         },
-        "raf" => CodecCapability {
+        "raf" | "nef" => CodecCapability {
             metadata: CodecBackend::RustImage,
             metadata_fallback: None,
             thumbnail: CodecBackend::RustImage,
             detail: CodecBackend::Unsupported,
         },
-        "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "orf" | "rw2" | "pef"
-        | "srw" => CodecCapability {
-            metadata: raw_native_backend(),
-            metadata_fallback: None,
-            thumbnail: raw_native_backend(),
-            detail: CodecBackend::Unsupported,
-        },
+        "dng" | "cr2" | "cr3" | "nrw" | "arw" | "srf" | "sr2" | "orf" | "rw2" | "pef" | "srw" => {
+            CodecCapability {
+                metadata: raw_native_backend(),
+                metadata_fallback: None,
+                thumbnail: raw_native_backend(),
+                detail: CodecBackend::Unsupported,
+            }
+        }
         _ => CodecCapability {
             metadata: CodecBackend::Unsupported,
             metadata_fallback: None,
@@ -223,9 +224,9 @@ pub fn generate_region_jpeg(
 }
 
 fn reject_raf_container(path: &Path) -> Result<(), NativeError> {
-    if crate::raw_preview::is_raf(path) {
+    if crate::raw_preview::is_bounded_raw(path) {
         return Err(NativeError::Codec(
-            "RAF requires the bounded embedded JPEG path; native container decoding is disabled"
+            "RAF/NEF require the bounded embedded JPEG path; native container decoding is disabled"
                 .into(),
         ));
     }
@@ -1093,7 +1094,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn codec_capability_uses_windows_native_for_raw_previews_on_windows() {
-        for extension in ["dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "pef", "srw"] {
+        for extension in ["dng", "cr2", "cr3", "arw", "orf", "rw2", "pef", "srw"] {
             let capability = codec_capability_for_extension(extension);
 
             assert_eq!(capability.metadata, CodecBackend::WindowsNative);
@@ -1106,7 +1107,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn codec_capability_keeps_raw_formats_on_placeholder_paths_without_windows_native() {
-        for extension in ["dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "pef", "srw"] {
+        for extension in ["dng", "cr2", "cr3", "arw", "orf", "rw2", "pef", "srw"] {
             let capability = codec_capability_for_extension(extension);
 
             assert_eq!(capability.metadata, CodecBackend::Unsupported);
@@ -1172,6 +1173,31 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("native container decoding is disabled"));
+    }
+
+    #[test]
+    fn tiff_family_bounded_never_uses_native_container_decoder() {
+        let path = Path::new("camera.NEF");
+        let capability = codec_capability_for_path(path);
+        assert_eq!(capability.metadata, CodecBackend::RustImage);
+        assert_eq!(capability.thumbnail, CodecBackend::RustImage);
+        assert_eq!(capability.detail, CodecBackend::Unsupported);
+        assert!(!should_prefer_native_thumbnail(path));
+        assert!(!should_prefer_native_preview(path));
+        for result in [
+            metadata_from_path(path).map(|_| ()),
+            generate_preview_jpeg(path, 160).map(|_| ()),
+            generate_thumbnail_jpeg(path, 160).map(|_| ()),
+        ] {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("native container decoding is disabled"));
+        }
+        assert!(generate_region_jpeg(path, NativeImageRegion { x: 0, y: 0, width: 1, height: 1 })
+            .unwrap_err()
+            .to_string()
+            .contains("native container decoding is disabled"));
     }
 
     #[cfg(windows)]
