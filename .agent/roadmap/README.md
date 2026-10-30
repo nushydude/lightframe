@@ -33,6 +33,10 @@ Additional scoped media work: [Task 68 - Bounded RAF embedded previews](tasks/68
 using the resource policy (53), media executor/cache generations (54), reduced JPEG decoder (67),
 and pinned corpus (84). This task supports embedded preview resolution only.
 
+[Task 69 - TIFF/RAW embedded previews](tasks/69-tiff-raw-embedded-previews.md) extends those seams
+to fixture-backed classic TIFF NEF. DNG/CR2/ARW and other TIFF RAW families remain explicitly
+unsupported by the bounded route pending pinned native evidence. Sensor development is deferred.
+
 Tasks 50-66 were created by the July 26, 2026 product and architecture audit:
 
 50. `tasks/50-remove-vulnerable-quick-xml.md`
