@@ -117,12 +117,11 @@ Entry criteria:
 Actions:
 
 - Run task-specific checks.
-- Run full local gates:
-  - `pnpm build`
-  - `pnpm test -- --run`
-  - `cargo fmt -- --check` in `src-tauri`
-  - `cargo clippy -- -D warnings` in `src-tauri`
-  - `cargo test` in `src-tauri`
+- Freeze finished content with `freeze --slug <slug> --checks <focused>,<scope-gate>`.
+- Run focused checks and the required final gate from `.agent/ANTIGRAVITY.md` (`ci:frontend`,
+  `ci:rust`, or `ci:local`). Record each result with `record-evidence --candidate-id <id>`.
+- Every required check must pass for this candidate before entering review. Changed content requires
+  another freeze, which clears evidence and current approval.
 
 Exit to:
 
@@ -157,8 +156,9 @@ Actions:
 - Send the task plan, diff summary, and check results to the GPT 6 Astra reviewer with `high`
   reasoning.
 - Record the independent reviewer result with
-  `node scripts/agent-task.mjs record-review --slug <task-slug> --status APPROVED|CHANGES_REQUESTED`.
+  `node scripts/agent-task.mjs record-review --slug <task-slug> --candidate-id <id> --status APPROVED|CHANGES_REQUESTED`.
 - Reviewer returns `APPROVED` or `CHANGES_REQUESTED`.
+- Supply candidate identity, complete relevant diff/source/test packet, and candidate check evidence.
 
 Exit to:
 
@@ -176,11 +176,13 @@ Actions:
 
 - Send the reviewer checklist to the GPT 6.1 Sol implementation agent with `medium` reasoning.
 - Implementation agent fixes requested items only.
-- Run checks named by reviewer and local gates as needed.
+- Return to `LOCAL_CHECKS`, freeze the result, and run checks named by reviewer and required scope
+  gate. Stop after three unchanged review cycles and ask the user for direction. Changed content
+  resets the unchanged counter without discarding total review history.
 
 Exit to:
 
-- `REVIEWING`.
+- `LOCAL_CHECKS`.
 
 ### AUTHORIZATION_REQUIRED
 
@@ -197,6 +199,7 @@ Actions:
 Exit to:
 
 - `PR_READY` after authorization is received.
+- `LOCAL_CHECKS` if content changes and requires fresh evidence/review.
 - `ABANDONED` if the user stops the task.
 
 ### PR_READY
@@ -206,6 +209,7 @@ Entry criteria:
 - Reviewer approved.
 - Local gates pass.
 - Worktree contains only intended task changes.
+- Approval and required checks match the frozen content. The script checks again before recording PR.
 
 Actions:
 
@@ -217,6 +221,7 @@ Actions:
 Exit to:
 
 - `PIPELINE_WAIT`.
+- `LOCAL_CHECKS` if content changes before delivery.
 
 ### PIPELINE_WAIT
 
@@ -244,12 +249,12 @@ Actions:
 
 - Fetch failed job logs.
 - Send the failure summary to the GPT 6.1 Sol implementation agent with `medium` reasoning.
-- Fix, run local gates, commit, push.
-- Send the changed diff to the GPT 6 Astra reviewer with `high` reasoning if behavior changed.
+- Fix, return through `LOCAL_CHECKS`, refreeze, run required gates and independent review, then
+  commit and push only the approved candidate. Record the new PR head before waiting on CI.
 
 Exit to:
 
-- `PIPELINE_WAIT`.
+- `LOCAL_CHECKS`.
 
 ### DONE
 
@@ -264,8 +269,26 @@ Actions:
 
 - Report PR URL, branch, checks, and any follow-up.
 - Wait for the user to merge the PR.
-- Remove the merged task worktree once the merge is confirmed.
-- Confirm the primary worktree is back on `main`.
+- Plain user merge confirmation authorizes scoped cleanup without another permission request.
+- Run `close --slug <slug> --merged` for the recorded task. Preserve branches.
+- Verify the task directory and Git registration are gone, then fast-forward the clean primary
+  checkout on `main` to `origin/main`.
+
+### CLEANUP_PENDING / CLOSED
+
+`close` persists `CLEANUP_PENDING` before asking Git to remove the exact registered task worktree.
+It refuses dirty, redirected, or mismatched paths and preserves runtime state outside the target.
+On Windows, Git may unregister a checkout but fail with `Directory not empty`; remaining source
+and dependencies must be preserved. Report the precise remaining path. Do not recursively delete
+leftovers. Retry `close --merged` after the remaining files have been safely resolved. `CLOSED` is
+recorded only when both directory and Git registration are absent. These states are controlled by
+`close`, not arbitrary transitions.
+
+### Recovery
+
+`show` migrates version 1 state while preserving PR metadata, specification, and history. Legacy
+review/delivery checkpoints return to `LOCAL_CHECKS` with old approval archived as stale. Legacy
+`DONE` remains eligible for safe merge cleanup; it cannot be used to authorize a new delivery.
 
 ### ABANDONED
 
@@ -297,13 +320,15 @@ REMEDIATING_LOCAL_FAILURES -> LOCAL_CHECKS
 REVIEWING -> REMEDIATING_REVIEW
 REVIEWING -> PR_READY
 REVIEWING -> AUTHORIZATION_REQUIRED
-REMEDIATING_REVIEW -> REVIEWING
+REMEDIATING_REVIEW -> LOCAL_CHECKS
 AUTHORIZATION_REQUIRED -> PR_READY
+AUTHORIZATION_REQUIRED -> LOCAL_CHECKS
 AUTHORIZATION_REQUIRED -> ABANDONED
 PR_READY -> PIPELINE_WAIT
+PR_READY -> LOCAL_CHECKS
 PIPELINE_WAIT -> PIPELINE_REMEDIATION
 PIPELINE_WAIT -> DONE
-PIPELINE_REMEDIATION -> PIPELINE_WAIT
+PIPELINE_REMEDIATION -> LOCAL_CHECKS
 ```
 
 Any other transition requires a user decision.
