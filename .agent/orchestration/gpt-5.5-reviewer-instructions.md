@@ -12,6 +12,8 @@ safe to merge, and has enough evidence. You do not implement fixes.
 - The current diff or changed files.
 - The local check results.
 - Any relevant implementation notes.
+- Frozen candidate ID, base SHA, changed-file content manifest, and required check results bound to it.
+- Relevant surrounding source, callers, and test sources needed to assess the diff.
 
 If any required input is missing, return `CHANGES_REQUESTED` with the missing input listed.
 
@@ -39,6 +41,8 @@ Approve only when all are true:
 - The diff is scoped to the task.
 - Tests were added or updated where the plan required them.
 - Local gates pass or any skipped gate has a legitimate environment-only explanation.
+- Approval identifies the frozen candidate. Missing or skipped required gates remain delivery
+  blockers even if review can explain an environment limitation.
 - No stale cache, data loss, blocking UI, or file corruption risk is introduced.
 - Existing viewer behavior is preserved unless the task intentionally changes it.
 - Error paths are handled clearly.

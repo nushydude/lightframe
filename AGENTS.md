@@ -29,7 +29,9 @@ When the user asks to implement, fix, refactor, or build a task:
    implementation agent and review to a separate reviewer agent. The implementation agent must not
    approve, commit, push, or open the PR for its own work.
 4. Run the task-specific checks, then the required final gate from `.agent/ANTIGRAVITY.md` before
-   review and after any remediation that changes code.
+   review and after any remediation that changes code. Freeze the finished candidate with
+   `agent-task.mjs freeze --slug <slug> --checks <focused-check>,ci:local` (choose the appropriate
+   scope gate), then record every required check against its candidate ID. Review the same candidate.
 5. If review returns `CHANGES_REQUESTED`, pass the exact remediation checklist back to the
    implementation agent, rerun the named checks, and rereview. Stop after three unchanged review
    cycles and ask the user for direction instead of looping indefinitely.
@@ -41,9 +43,12 @@ When the user asks to implement, fix, refactor, or build a task:
 8. After authorization, the orchestrator—not a worker—creates the scoped Conventional Commit,
    pushes `codex/<task-slug>`, opens the PR against `main`, records the PR URL and head SHA, and
    waits for the actual GitHub checks for that SHA. CI failures return to implementation and review.
-9. Do not merge the PR unless the user explicitly asks. After the user confirms merge, use the
-   recorded task state to remove the task worktree and fast-forward the primary checkout to
-   `origin/main`.
+9. Do not merge the PR unless the user explicitly asks. A plain user confirmation that the PR was
+   merged authorizes scoped post-merge cleanup without another permission request. Identify the
+   exact worktree from recorded task state, run `close --slug <slug> --merged`, verify its removal,
+   then fast-forward the clean primary checkout on `main` to `origin/main`. Preserve branches.
+   If Git leaves a directory behind, retain `CLEANUP_PENDING`, report the exact path, and preserve
+   remaining files; never recursively delete leftovers as a recovery shortcut.
 
 ## Repository context
 

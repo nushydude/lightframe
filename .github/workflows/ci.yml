@@ -78,6 +78,9 @@ jobs:
       - name: Run Vitest suite
         run: pnpm run test:run
 
+      - name: Test agent task lifecycle
+        run: pnpm run test:agent-task
+
       - name: Build frontend
         run: pnpm run build
 
