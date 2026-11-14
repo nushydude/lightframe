@@ -2493,21 +2493,20 @@ fn is_redirected_cache_root(cache_root: &Path) -> bool {
         Err(_) => return true,
     };
     let file_type = root_metadata.file_type();
-    if file_type.is_symlink() {
-        return true;
-    }
 
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
 
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        if root_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return true;
-        }
+        file_type.is_symlink()
+            || root_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
 
-    false
+    #[cfg(not(windows))]
+    {
+        file_type.is_symlink()
+    }
 }
 
 fn is_generated_cache_filename(file_name: &str) -> bool {
