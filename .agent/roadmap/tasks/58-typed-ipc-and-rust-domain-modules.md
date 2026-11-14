@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: maintainability and contract correctness
+- Status: Partially implemented; extend
+- October boundary: This remains the owner for typed IPC, Rust domain ownership, and enforced module boundaries. LightFrame is a single Rust crate: add a deliberate-violation check/fixture appropriate to that layout rather than copying LightCraft's many-crate Cargo layering or creating crates solely for the checker.
 - Dependencies: tasks 51 and 53, because their command contracts should stabilize first
 - Expected branch: `codex/typed-ipc-rust-domains`
 - Required final gate: `pnpm run ci:local`

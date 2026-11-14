@@ -4,6 +4,8 @@
 
 - Priority: P2
 - Type: user trust, supportability, recovery
+- Status: Planned/partial; October ownership clarification
+- October boundary: Task 66 owns queued edit-job intent, recovery, diagnostics privacy, update trust, crash recovery, and support surfaces. Task 82 owns only unqueued crop/rotation draft recovery and must not replay queued jobs or create a competing recovery owner.
 - Dependencies: task 63; task 57 for attestation/signing status
 - Expected branch: `codex/support-privacy-crash-recovery`
 - Required final gate: `pnpm run ci:local`

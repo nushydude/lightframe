@@ -2,7 +2,8 @@
 
 ## Status, priority, and type
 
-- Status: planned
+- Status: Implemented scoped delivery — PR #228, merged as `cb06f9c`; rechecked at `431f9f5` on 2026-11-14
+- Current boundary: bounded RAF embedded JPEGs only; task 69 separately supplies classic TIFF NEF and task 70 remains planned for CR3. The remaining plan/context is retained preimplementation history.
 - Priority: P1
 - Type: RAW preview container support
 - Dependencies: tasks 53, 54, 67, 84

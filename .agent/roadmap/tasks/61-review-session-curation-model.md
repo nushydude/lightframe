@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: product-domain model and persistence
+- Status: Planned/partial; October ownership clarification
+- October boundary: This task owns Unreviewed/Pick/Reject decisions, filters, and progress. Task 73 owns namespace-aware label/caption/rating import and provenance-aware local-zero presence; do not persist LightCraft-specific metadata semantics in this decision model.
 - Dependencies: task 50 if curation migration touches image metadata; otherwise none
 - Expected branch: `codex/review-session-curation-model`
 - Required final gate: `pnpm run ci:local`
@@ -13,15 +15,14 @@
 Extend LightFrame's favorite/rating model with an explicit review decision and reliable review
 progress, without changing the viewer UI beyond minimal compatibility controls.
 
-This task provides the domain and persistence foundation for the guided Review Session UI in task
-62.
+This task provides the domain and persistence foundation for the guided Review Session UI in task 62.
 
 ## Required Data Model
 
 Add:
 
 ```ts
-type ReviewDecision = "unreviewed" | "pick" | "reject";
+type ReviewDecision = 'unreviewed' | 'pick' | 'reject';
 ```
 
 Each image's curation record must represent:
