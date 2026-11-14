@@ -2,7 +2,8 @@
 
 ## Status, priority, and type
 
-- Status: planned
+- Status: Implemented scoped delivery — PR #223, merged as `fb422b9`; rechecked at `431f9f5` on 2026-11-14
+- Current boundary: reduced JPEG decode; no universal speed or JPEG-class guarantee. The remaining plan/context is retained preimplementation history; revalidate extensions rather than restarting this delivery.
 - Priority: P1
 - Type: media pipeline / JPEG performance
 - Dependencies: tasks 53, 54

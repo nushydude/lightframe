@@ -2,7 +2,8 @@
 
 ## Status, priority, and type
 
-- Status: implementation candidate; independent review and final gate required
+- Status: Implemented scoped delivery — PR #234, merged as `8ec5356`; rechecked at `431f9f5` on 2026-11-14
+- Current boundary: classic TIFF NEF only, backed by required `tiff-nikon-d70s-v1`; the candidate/acceptance wording below is the shipped specification retained as history. Additional families require pinned native evidence and a separately reviewed extension.
 - Priority: P1
 - Type: RAW preview container support
 - Dependencies: tasks 53, 54, 84

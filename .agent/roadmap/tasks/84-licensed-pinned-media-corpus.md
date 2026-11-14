@@ -2,7 +2,8 @@
 
 ## Status, priority, and type
 
-- Status: planned
+- Status: Implemented shared infrastructure — PR #226, merged as `bcd0656`; rechecked at `431f9f5` on 2026-11-14
+- Current boundary: pinned manifest, fixtures, validator/tests and CI corpus gate; fixture presence alone establishes no decoder support. The remaining plan/context is retained preimplementation history; consumers still need their own coverage.
 - Delivery classification: shared evidence infrastructure
 - Priority: P0
 - Type: test evidence and provenance infrastructure

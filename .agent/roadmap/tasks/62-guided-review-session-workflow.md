@@ -4,6 +4,8 @@
 
 - Priority: P1
 - Type: flagship product workflow
+- Status: Planned/partial; October ownership clarification
+- October boundary: Task 62 owns the discoverable Undo Last Decision and complete curation-snapshot restoration. Task 76 explicitly extends this foundation to multi-step history, redo, bulk transactions, and persistence acknowledgements; neither task promises filesystem or external-editor undo.
 - Dependencies: tasks 60 and 61
 - Expected branch: `codex/guided-review-session`
 - Required final gate: `pnpm run ci:frontend`
